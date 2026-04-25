@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Defensive Security Auditor"
+  short_description: "Audit BotBoy security surfaces defensively."
+  default_prompt: "Use $botboy-defensive-security-auditor to inspect a BotBoy change for auth, sandbox, approval, secret, or rate-limit risk."
+
+policy:
+  allow_implicit_invocation: true

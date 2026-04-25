@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Crypto Protocol Lab"
+  short_description: "Design and harden BotBoy trust flows."
+  default_prompt: "Use $botboy-crypto-protocol-lab to review or design a BotBoy cryptographic trust flow, token boundary, or replay-safe protocol."
+
+policy:
+  allow_implicit_invocation: true

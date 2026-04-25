@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Trace Investigator"
+  short_description: "Correlate traces, history, metrics, and principals."
+  default_prompt: "Use $botboy-trace-investigator to explain a BotBoy run from request ID, principal, trace, and history evidence."
+
+policy:
+  allow_implicit_invocation: true

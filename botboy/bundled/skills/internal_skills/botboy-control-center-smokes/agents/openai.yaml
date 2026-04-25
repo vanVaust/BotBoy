@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Control Center Smokes"
+  short_description: "Guard the Control Center against payload drift."
+  default_prompt: "Use $botboy-control-center-smokes to verify that BotBoy's Control Center still matches the dashboard payload and core UI markers."
+
+policy:
+  allow_implicit_invocation: true

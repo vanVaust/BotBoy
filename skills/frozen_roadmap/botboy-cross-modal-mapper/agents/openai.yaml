@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Cross-Modal Mapper"
+  short_description: "Translate structure across media."
+  default_prompt: "Use $botboy-cross-modal-mapper to map a BotBoy idea or artifact across text, sound, image, layout, or symbols."
+
+policy:
+  allow_implicit_invocation: true

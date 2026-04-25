@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Dense Coding Composer"
+  short_description: "Shape compact, high-leverage code changes."
+  default_prompt: "Use $botboy-dense-coding-composer to compress a large BotBoy engineering ask into a few high-impact changes and verifications."
+
+policy:
+  allow_implicit_invocation: true

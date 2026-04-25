@@ -1,0 +1,759 @@
+{
+  "generated_on": "2026-03-30",
+  "registry_version": 1,
+  "skills": [
+    {
+      "category": "coding-engineering",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-adversarial-defense-lab",
+      "path": "skills/internal_skills/botboy-adversarial-defense-lab/SKILL.md",
+      "phase": "next",
+      "routing_keywords": [
+        "adversarial",
+        "botboy",
+        "cases",
+        "defense",
+        "edge",
+        "hardening",
+        "hostile",
+        "offense",
+        "resilience",
+        "simulate"
+      ],
+      "summary": "Simulate hostile edge cases for defense and resilience, not offense.",
+      "tags": [
+        "adversarial",
+        "defense",
+        "hardening"
+      ],
+      "portfolio_bucket": "internal_skills",
+      "portfolio_tier": "essential",
+      "implementation_rank": 1
+    },
+    {
+      "category": "logic-math-structures",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-automata-compiler-lab",
+      "path": "skills/frozen_roadmap/botboy-automata-compiler-lab/SKILL.md",
+      "phase": "after-task-lifecycle",
+      "routing_keywords": [
+        "automata",
+        "botboy",
+        "compiler",
+        "compilers",
+        "machine",
+        "machines",
+        "parser",
+        "state",
+        "support",
+        "workflows"
+      ],
+      "summary": "Support automata, parser, state-machine, and compiler workflows.",
+      "tags": [
+        "automata",
+        "compilers",
+        "state-machines"
+      ],
+      "portfolio_bucket": "frozen_roadmap",
+      "portfolio_tier": "nice-to-have",
+      "implementation_rank": 2
+    },
+    {
+      "category": "infra-systems",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-cloud-topology-planner",
+      "path": "skills/public_skills/botboy-cloud-topology-planner/SKILL.md",
+      "phase": "next",
+      "routing_keywords": [
+        "botboy",
+        "cloud",
+        "layout",
+        "plan",
+        "planner",
+        "reliability",
+        "rollout",
+        "scaling",
+        "shape",
+        "topology",
+        "tradeoffs"
+      ],
+      "summary": "Plan cloud layout, rollout shape, and reliability tradeoffs.",
+      "tags": [
+        "cloud",
+        "topology",
+        "scaling"
+      ],
+      "portfolio_bucket": "public_skills",
+      "portfolio_tier": "essential",
+      "implementation_rank": 3
+    },
+    {
+      "category": "human-creative-interface",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-communication-doctrine",
+      "path": "skills/public_skills/botboy-communication-doctrine/SKILL.md",
+      "phase": "next",
+      "routing_keywords": [
+        "botboy",
+        "communication",
+        "create",
+        "discipline",
+        "doctrine",
+        "fidelity",
+        "handoff",
+        "handoffs",
+        "high",
+        "language",
+        "strategies"
+      ],
+      "summary": "Create high-fidelity communication strategies and handoff language.",
+      "tags": [
+        "communication",
+        "handoffs",
+        "discipline"
+      ],
+      "portfolio_bucket": "public_skills",
+      "portfolio_tier": "essential",
+      "implementation_rank": 4
+    },
+    {
+      "category": "operational-core",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-control-center-smokes",
+      "path": "skills/internal_skills/botboy-control-center-smokes/SKILL.md",
+      "phase": "now",
+      "routing_keywords": [
+        "against",
+        "botboy",
+        "breakage",
+        "center",
+        "control",
+        "dashboard",
+        "drift",
+        "guard",
+        "payload",
+        "smokes"
+      ],
+      "summary": "Guard the Control Center against payload drift and UI breakage.",
+      "tags": [
+        "control-center",
+        "dashboard",
+        "smokes"
+      ],
+      "portfolio_bucket": "internal_skills",
+      "portfolio_tier": "must-have",
+      "implementation_rank": 5
+    },
+    {
+      "category": "human-creative-interface",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-cross-modal-mapper",
+      "path": "skills/frozen_roadmap/botboy-cross-modal-mapper/SKILL.md",
+      "phase": "frontier",
+      "routing_keywords": [
+        "across",
+        "botboy",
+        "creativity",
+        "cross",
+        "image",
+        "mapper",
+        "modal",
+        "modalities",
+        "sound",
+        "structure",
+        "synesthesia",
+        "text"
+      ],
+      "summary": "Map text, sound, image, and structure across modalities.",
+      "tags": [
+        "synesthesia",
+        "cross-modal",
+        "creativity"
+      ],
+      "portfolio_bucket": "frozen_roadmap",
+      "portfolio_tier": "nice-to-have",
+      "implementation_rank": 6
+    },
+    {
+      "category": "security-isolation",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-crypto-protocol-lab",
+      "path": "skills/frozen_roadmap/botboy-crypto-protocol-lab/SKILL.md",
+      "phase": "next",
+      "routing_keywords": [
+        "botboy",
+        "crypto",
+        "cryptographic",
+        "design",
+        "protocol",
+        "protocols",
+        "review",
+        "trust"
+      ],
+      "summary": "Design and review cryptographic and trust protocols.",
+      "tags": [
+        "crypto",
+        "protocols",
+        "trust"
+      ],
+      "portfolio_bucket": "frozen_roadmap",
+      "portfolio_tier": "nice-to-have",
+      "implementation_rank": 7
+    },
+    {
+      "category": "security-isolation",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-defensive-security-auditor",
+      "path": "skills/public_skills/botboy-defensive-security-auditor/SKILL.md",
+      "phase": "now",
+      "routing_keywords": [
+        "audit",
+        "auditor",
+        "botboy",
+        "defense",
+        "defensive",
+        "misuse",
+        "resistance",
+        "review",
+        "security"
+      ],
+      "summary": "Run defensive security review and misuse resistance.",
+      "tags": [
+        "security",
+        "defense",
+        "audit"
+      ],
+      "portfolio_bucket": "public_skills",
+      "portfolio_tier": "must-have",
+      "implementation_rank": 8
+    },
+    {
+      "category": "coding-engineering",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-dense-coding-composer",
+      "path": "skills/public_skills/botboy-dense-coding-composer/SKILL.md",
+      "phase": "now",
+      "routing_keywords": [
+        "botboy",
+        "changes",
+        "code",
+        "coding",
+        "composer",
+        "compress",
+        "dense",
+        "goals",
+        "implementation",
+        "into",
+        "large",
+        "powerful",
+        "small",
+        "speed",
+        "technical"
+      ],
+      "summary": "Compress large technical goals into small powerful code changes.",
+      "tags": [
+        "dense-coding",
+        "implementation",
+        "speed"
+      ],
+      "portfolio_bucket": "public_skills",
+      "portfolio_tier": "must-have",
+      "implementation_rank": 9
+    },
+    {
+      "category": "operational-core",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-eval-flywheel",
+      "path": "skills/internal_skills/botboy-eval-flywheel/SKILL.md",
+      "phase": "now",
+      "routing_keywords": [
+        "botboy",
+        "bugs",
+        "coverage",
+        "durable",
+        "eval",
+        "evals",
+        "features",
+        "flywheel",
+        "into",
+        "quality",
+        "replay",
+        "turn"
+      ],
+      "summary": "Turn bugs and features into durable eval and replay coverage.",
+      "tags": [
+        "evals",
+        "replay",
+        "quality"
+      ],
+      "portfolio_bucket": "internal_skills",
+      "portfolio_tier": "must-have",
+      "implementation_rank": 10
+    },
+    {
+      "category": "foundation-governance",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-event-signal-orchestrator",
+      "path": "skills/internal_skills/botboy-event-signal-orchestrator/SKILL.md",
+      "phase": "next",
+      "routing_keywords": [
+        "activation",
+        "automation",
+        "botboy",
+        "event",
+        "events",
+        "orchestrator",
+        "signal",
+        "signals",
+        "skills",
+        "triggers"
+      ],
+      "summary": "Map events, triggers, and activation signals to skills.",
+      "tags": [
+        "signals",
+        "events",
+        "automation"
+      ],
+      "portfolio_bucket": "internal_skills",
+      "portfolio_tier": "essential",
+      "implementation_rank": 11
+    },
+    {
+      "category": "logic-math-structures",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-formal-logic-engine",
+      "path": "skills/public_skills/botboy-formal-logic-engine/SKILL.md",
+      "phase": "next",
+      "routing_keywords": [
+        "botboy",
+        "checks",
+        "contradictions",
+        "engine",
+        "formal",
+        "handle",
+        "hyperlogic",
+        "invariants",
+        "like",
+        "logic",
+        "proof",
+        "proofs",
+        "reasoning",
+        "rule"
+      ],
+      "summary": "Handle rule reasoning, proof-like checks, invariants, and contradictions.",
+      "tags": [
+        "logic",
+        "hyperlogic",
+        "proofs"
+      ],
+      "portfolio_bucket": "public_skills",
+      "portfolio_tier": "essential",
+      "implementation_rank": 12
+    },
+    {
+      "category": "operational-core",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-gateway-hardening",
+      "path": "skills/internal_skills/botboy-gateway-hardening/SKILL.md",
+      "phase": "now",
+      "routing_keywords": [
+        "across",
+        "auth",
+        "behavior",
+        "botboy",
+        "gateway",
+        "harden",
+        "hardening",
+        "modes",
+        "parity",
+        "route"
+      ],
+      "summary": "Harden auth, parity, and route behavior across gateway modes.",
+      "tags": [
+        "gateway",
+        "auth",
+        "parity"
+      ],
+      "portfolio_bucket": "internal_skills",
+      "portfolio_tier": "must-have",
+      "implementation_rank": 13
+    },
+    {
+      "category": "security-isolation",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-isolation-cage-designer",
+      "path": "skills/internal_skills/botboy-isolation-cage-designer/SKILL.md",
+      "phase": "next",
+      "routing_keywords": [
+        "botboy",
+        "cage",
+        "containment",
+        "design",
+        "designer",
+        "envelopes",
+        "isolation",
+        "paths",
+        "sandbox",
+        "sandboxes",
+        "stronger"
+      ],
+      "summary": "Design stronger sandboxes, isolation envelopes, and containment paths.",
+      "tags": [
+        "isolation",
+        "sandbox",
+        "containment"
+      ],
+      "portfolio_bucket": "internal_skills",
+      "portfolio_tier": "essential",
+      "implementation_rank": 14
+    },
+    {
+      "category": "logic-math-structures",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-isomorphism-invariance-mapper",
+      "path": "skills/frozen_roadmap/botboy-isomorphism-invariance-mapper/SKILL.md",
+      "phase": "frontier",
+      "routing_keywords": [
+        "botboy",
+        "invariance",
+        "isomorphism",
+        "mapper",
+        "preserving",
+        "structure",
+        "study",
+        "topology",
+        "transforms"
+      ],
+      "summary": "Study isomorphism, invariance, and structure-preserving transforms.",
+      "tags": [
+        "isomorphism",
+        "invariance",
+        "topology"
+      ],
+      "portfolio_bucket": "frozen_roadmap",
+      "portfolio_tier": "nice-to-have",
+      "implementation_rank": 15
+    },
+    {
+      "category": "cognition-memory-reflection",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-memory-architecture-engine",
+      "path": "skills/public_skills/botboy-memory-architecture-engine/SKILL.md",
+      "phase": "now",
+      "routing_keywords": [
+        "architecture",
+        "botboy",
+        "design",
+        "engine",
+        "long",
+        "memory",
+        "retrieval",
+        "short",
+        "strategy",
+        "term"
+      ],
+      "summary": "Design short and long-term memory and retrieval strategy.",
+      "tags": [
+        "memory",
+        "retrieval",
+        "architecture"
+      ],
+      "portfolio_bucket": "public_skills",
+      "portfolio_tier": "must-have",
+      "implementation_rank": 16
+    },
+    {
+      "category": "simulation-signals",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-multi-domain-simulator",
+      "path": "skills/frozen_roadmap/botboy-multi-domain-simulator/SKILL.md",
+      "phase": "after-task-lifecycle",
+      "routing_keywords": [
+        "across",
+        "agents",
+        "botboy",
+        "broad",
+        "domain",
+        "multi",
+        "processes",
+        "simulation",
+        "simulations",
+        "simulator",
+        "systems",
+        "virtual"
+      ],
+      "summary": "Run broad simulations across systems, agents, and processes.",
+      "tags": [
+        "simulation",
+        "systems",
+        "virtual"
+      ],
+      "portfolio_bucket": "frozen_roadmap",
+      "portfolio_tier": "nice-to-have",
+      "implementation_rank": 17
+    },
+    {
+      "category": "foundation-governance",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-omni-skill-architect",
+      "path": "skills/internal_skills/botboy-omni-skill-architect/SKILL.md",
+      "phase": "now",
+      "routing_keywords": [
+        "abstraction",
+        "architect",
+        "botboy",
+        "catalog",
+        "evolution",
+        "govern",
+        "library",
+        "omni",
+        "rollout",
+        "skill",
+        "taxonomy",
+        "whole"
+      ],
+      "summary": "Govern the whole library, taxonomy, and rollout.",
+      "tags": [
+        "catalog",
+        "abstraction",
+        "skill-evolution"
+      ],
+      "portfolio_bucket": "internal_skills",
+      "portfolio_tier": "essential",
+      "implementation_rank": 18
+    },
+    {
+      "category": "cognition-memory-reflection",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-reflection-loop-director",
+      "path": "skills/public_skills/botboy-reflection-loop-director/SKILL.md",
+      "phase": "now",
+      "routing_keywords": [
+        "botboy",
+        "critique",
+        "director",
+        "improvement",
+        "loop",
+        "loops",
+        "plan",
+        "reasoning",
+        "reflection",
+        "review",
+        "self"
+      ],
+      "summary": "Run self-critique, plan-review, and improvement loops.",
+      "tags": [
+        "reflection",
+        "reasoning",
+        "improvement"
+      ],
+      "portfolio_bucket": "public_skills",
+      "portfolio_tier": "must-have",
+      "implementation_rank": 19
+    },
+    {
+      "category": "operational-core",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-runtime-policy-auditor",
+      "path": "skills/internal_skills/botboy-runtime-policy-auditor/SKILL.md",
+      "phase": "now",
+      "routing_keywords": [
+        "approval",
+        "audit",
+        "auditor",
+        "behavior",
+        "botboy",
+        "closed",
+        "defaults",
+        "fail",
+        "policy",
+        "runtime"
+      ],
+      "summary": "Audit runtime policy, approval behavior, and fail-closed defaults.",
+      "tags": [
+        "runtime",
+        "policy",
+        "approval"
+      ],
+      "portfolio_bucket": "internal_skills",
+      "portfolio_tier": "must-have",
+      "implementation_rank": 20
+    },
+    {
+      "category": "infra-systems",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-server-fabric-engine",
+      "path": "skills/public_skills/botboy-server-fabric-engine/SKILL.md",
+      "phase": "now",
+      "routing_keywords": [
+        "botboy",
+        "engine",
+        "fabric",
+        "gateway",
+        "handle",
+        "server",
+        "servers",
+        "service",
+        "systems",
+        "topology",
+        "work"
+      ],
+      "summary": "Handle server, gateway, and service topology work.",
+      "tags": [
+        "servers",
+        "systems",
+        "gateway"
+      ],
+      "portfolio_bucket": "public_skills",
+      "portfolio_tier": "must-have",
+      "implementation_rank": 21
+    },
+    {
+      "category": "operational-core",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-skill-contract-author",
+      "path": "skills/internal_skills/botboy-skill-contract-author/SKILL.md",
+      "phase": "now",
+      "routing_keywords": [
+        "author",
+        "authoring",
+        "botboy",
+        "contract",
+        "contracts",
+        "create",
+        "folders",
+        "metadata",
+        "review",
+        "skill",
+        "update",
+        "validate"
+      ],
+      "summary": "Create, update, review, and validate BotBoy skill folders and metadata.",
+      "tags": [
+        "contracts",
+        "authoring",
+        "metadata"
+      ],
+      "portfolio_bucket": "internal_skills",
+      "portfolio_tier": "must-have",
+      "implementation_rank": 22
+    },
+    {
+      "category": "foundation-governance",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-skill-evolution-forge",
+      "path": "skills/internal_skills/botboy-skill-evolution-forge/SKILL.md",
+      "phase": "now",
+      "routing_keywords": [
+        "botboy",
+        "evolution",
+        "forge",
+        "grows",
+        "library",
+        "merge",
+        "refactor",
+        "refine",
+        "skill",
+        "skills",
+        "taxonomy",
+        "version"
+      ],
+      "summary": "Version, merge, and refine skills as the library grows.",
+      "tags": [
+        "evolution",
+        "refactor",
+        "taxonomy"
+      ],
+      "portfolio_bucket": "internal_skills",
+      "portfolio_tier": "essential",
+      "implementation_rank": 23
+    },
+    {
+      "category": "operational-core",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-trace-investigator",
+      "path": "skills/internal_skills/botboy-trace-investigator/SKILL.md",
+      "phase": "now",
+      "routing_keywords": [
+        "audit",
+        "botboy",
+        "correlate",
+        "execution",
+        "history",
+        "into",
+        "investigator",
+        "metrics",
+        "narratives",
+        "observability",
+        "principals",
+        "trace",
+        "traces"
+      ],
+      "summary": "Correlate traces, history, metrics, and principals into execution narratives.",
+      "tags": [
+        "traces",
+        "audit",
+        "observability"
+      ],
+      "portfolio_bucket": "internal_skills",
+      "portfolio_tier": "must-have",
+      "implementation_rank": 24
+    },
+    {
+      "category": "coding-engineering",
+      "has_references": true,
+      "has_scripts": true,
+      "name": "botboy-virtual-dev-range",
+      "path": "skills/internal_skills/botboy-virtual-dev-range/SKILL.md",
+      "phase": "after-task-lifecycle",
+      "routing_keywords": [
+        "botboy",
+        "controlled",
+        "create",
+        "development",
+        "digital",
+        "features",
+        "grounds",
+        "proving",
+        "range",
+        "risky",
+        "simulation",
+        "testing",
+        "virtual"
+      ],
+      "summary": "Create controlled digital proving grounds for risky features.",
+      "tags": [
+        "virtual-development",
+        "testing-range",
+        "simulation"
+      ],
+      "portfolio_bucket": "internal_skills",
+      "portfolio_tier": "nice-to-have",
+      "implementation_rank": 25
+    }
+  ]
+}

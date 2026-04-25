@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Skill Contract Author"
+  short_description: "Scaffold and normalize BotBoy skill folders."
+  default_prompt: "Use $botboy-skill-contract-author to create or tighten a BotBoy skill folder with strong metadata and lean reusable resources."
+
+policy:
+  allow_implicit_invocation: true

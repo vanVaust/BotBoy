@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Omni Skill Architect"
+  short_description: "Design and phase large skill libraries."
+  default_prompt: "Use $botboy-omni-skill-architect to extend the BotBoy skill catalog, organize categories, and decide which skills should be built now or later."
+
+policy:
+  allow_implicit_invocation: true

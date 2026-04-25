@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Skill Evolution Forge"
+  short_description: "Evolve, merge, and split skill families."
+  default_prompt: "Use $botboy-skill-evolution-forge to refine a growing BotBoy skill library without drift, overlap, or taxonomy chaos."
+
+policy:
+  allow_implicit_invocation: true

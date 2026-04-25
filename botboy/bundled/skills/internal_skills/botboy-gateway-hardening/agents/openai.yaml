@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Gateway Hardening"
+  short_description: "Harden auth, parity, and route behavior."
+  default_prompt: "Use $botboy-gateway-hardening to inspect or tighten a BotBoy gateway flow across stdlib and FastAPI paths."
+
+policy:
+  allow_implicit_invocation: true

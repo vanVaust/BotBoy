@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Memory Architecture Engine"
+  short_description: "Design memory, recall, and reflection layers."
+  default_prompt: "Use $botboy-memory-architecture-engine to improve BotBoy's memory architecture, retrieval behavior, or reflection-aware recall."
+
+policy:
+  allow_implicit_invocation: true

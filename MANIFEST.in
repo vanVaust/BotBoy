@@ -1,0 +1,27 @@
+include README.md
+include requirements.txt
+include .env.example
+include botboy_mcp_server.py
+prune .botboy-mcp-runtime
+prune .botboy-runtime
+prune .codex_eval_runtime
+prune .deps-build
+prune .release-build-venv
+prune .venv-build
+prune .pytest_cache
+prune .mypy_cache
+prune .ruff_cache
+prune botboy.egg-info
+prune build
+prune dist
+recursive-include botboy/data *.json
+recursive-include botboy/data/evals *.json
+recursive-include botboy/data/evals/replays *.jsonl
+recursive-include botboy/web *
+recursive-include botboy/bundled *
+recursive-include skills *
+recursive-include examples/skills *
+recursive-include tests *.py
+global-exclude __pycache__
+global-exclude .DS_Store
+global-exclude *.py[cod]

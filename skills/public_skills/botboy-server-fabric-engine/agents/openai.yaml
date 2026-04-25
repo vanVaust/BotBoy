@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Server Fabric Engine"
+  short_description: "Plan and analyze BotBoy server topology."
+  default_prompt: "Use $botboy-server-fabric-engine to map or reshape a BotBoy server or gateway surface across CLI, stdlib, FastAPI, MCP, and UI boundaries."
+
+policy:
+  allow_implicit_invocation: true

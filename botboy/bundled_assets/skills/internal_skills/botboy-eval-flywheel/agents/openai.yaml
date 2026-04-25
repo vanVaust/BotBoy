@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Eval Flywheel"
+  short_description: "Turn bugs and features into durable evals."
+  default_prompt: "Use $botboy-eval-flywheel to add or refine a BotBoy eval case, replay seed, and report path around a real regression or feature."
+
+policy:
+  allow_implicit_invocation: true

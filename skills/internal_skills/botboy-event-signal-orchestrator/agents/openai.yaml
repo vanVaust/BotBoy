@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Event Signal Orchestrator"
+  short_description: "Map signals and triggers to BotBoy behavior."
+  default_prompt: "Use $botboy-event-signal-orchestrator to design or tighten an event-driven trigger path in BotBoy."
+
+policy:
+  allow_implicit_invocation: true

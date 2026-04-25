@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Reflection Loop Director"
+  short_description: "Shape safe, auditable reflection loops."
+  default_prompt: "Use $botboy-reflection-loop-director to improve a BotBoy reflection loop with clear insertion points, validation, and auditability."
+
+policy:
+  allow_implicit_invocation: true

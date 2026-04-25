@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Cloud Topology Planner"
+  short_description: "Plan cloud rollout without losing BotBoy's core."
+  default_prompt: "Use $botboy-cloud-topology-planner to design a BotBoy cloud topology that preserves local-first control, observability, and service clarity."
+
+policy:
+  allow_implicit_invocation: true

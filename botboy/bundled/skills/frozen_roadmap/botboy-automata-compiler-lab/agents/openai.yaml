@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Automata Compiler Lab"
+  short_description: "Build state machines and parser transforms."
+  default_prompt: "Use $botboy-automata-compiler-lab to design a BotBoy state machine, parser, or compiler-style transformation."
+
+policy:
+  allow_implicit_invocation: true

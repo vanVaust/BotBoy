@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Isolation Cage Designer"
+  short_description: "Design safe BotBoy containment tiers."
+  default_prompt: "Use $botboy-isolation-cage-designer to design or review a BotBoy isolation boundary, sandbox tier, or fail-closed runtime cage."
+
+policy:
+  allow_implicit_invocation: true

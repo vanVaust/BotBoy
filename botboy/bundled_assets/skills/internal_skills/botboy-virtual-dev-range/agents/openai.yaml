@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Virtual Dev Range"
+  short_description: "Stage risky ideas in a controlled proving ground."
+  default_prompt: "Use $botboy-virtual-dev-range to design a safe experiment harness for a risky BotBoy feature before it touches the main product path."
+
+policy:
+  allow_implicit_invocation: true

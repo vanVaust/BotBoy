@@ -1,0 +1,6 @@
+{"id":"release-seed-status","case_id":"release_status_smoke","kind":"command","principal":"release.test","request_id":"release-status-1","input":"status","expected_contains":["Status"]}
+{"id":"release-seed-skills","case_id":"release_skills_smoke","kind":"command","principal":"release.test","request_id":"release-skills-1","input":"skills","expected_contains":["Skills:"]}
+{"id":"release-seed-help","case_id":"release_help_smoke","kind":"command","principal":"release.test","request_id":"release-help-1","input":"help","expected_contains":["Available Commands"]}
+{"id":"release-seed-http-status","case_id":"release_http_status_smoke","kind":"http","principal":"127.0.0.1","request_id":"release-http-status-1","input":"GET /api/status","expected_status":200,"expected_contains":["Status"]}
+{"id":"release-seed-workflow-ir","case_id":"release_workflow_ir_replay_smoke","kind":"workflow","principal":"release.test","request_id":"release-workflow-ir-1","input":"status","expected_contains":["Status"]}
+{"id":"release-seed-remote-readiness","case_id":"release_remote_readiness_smoke","kind":"command","principal":"release.test","request_id":"release-remote-readiness-1","input":"security remote-readiness 127.0.0.1","expected_contains":["Remote readiness","Overall: local-only"]}

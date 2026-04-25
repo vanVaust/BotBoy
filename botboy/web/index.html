@@ -1,0 +1,2039 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BotBoy v0.6 â€” AI Agent Console</title>
+<style>
+  :root {
+    --bg:       #0d1117;
+    --surface:  #161b22;
+    --border:   #21262d;
+    --accent:   #58a6ff;
+    --accent2:  #3fb950;
+    --warn:     #f0883e;
+    --err:      #f85149;
+    --text:     #c9d1d9;
+    --dim:      #6e7681;
+    --code-bg:  #0d1117;
+    --radius:   8px;
+    --font:     'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13.5px;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* â”€â”€ Header â”€â”€ */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 20px;
+    height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    user-select: none;
+  }
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+  }
+  .logo-icon {
+    width: 30px; height: 30px;
+    background: linear-gradient(135deg, var(--accent) 0%, #a371f7 100%);
+    border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+  }
+  .status-bar {
+    display: flex;
+    gap: 14px;
+    font-size: 11.5px;
+    color: var(--dim);
+  }
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--dim);
+    display: inline-block;
+    margin-right: 5px;
+    transition: background 0.3s;
+  }
+  .status-dot.ok { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
+  .status-dot.err { background: var(--err); }
+
+  /* â”€â”€ Layout â”€â”€ */
+  .layout {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* â”€â”€ Sidebar â”€â”€ */
+  .sidebar {
+    width: 210px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    flex-shrink: 0;
+  }
+  .sidebar-section {
+    padding: 14px 14px 6px;
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--dim);
+  }
+  .sidebar-item {
+    padding: 7px 14px;
+    cursor: pointer;
+    border-radius: 0;
+    color: var(--dim);
+    font-size: 12.5px;
+    transition: background 0.15s, color 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .sidebar-item:hover { background: rgba(255,255,255,0.04); color: var(--text); }
+  .sidebar-item.active { background: rgba(88,166,255,0.1); color: var(--accent); }
+  .sidebar-item .icon { width: 16px; text-align: center; opacity: 0.7; }
+
+  /* â”€â”€ Chat area â”€â”€ */
+  .chat-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    scroll-behavior: smooth;
+  }
+
+  /* â”€â”€ Message bubbles â”€â”€ */
+  .message {
+    display: flex;
+    gap: 12px;
+    max-width: 860px;
+    animation: fadeIn 0.15s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; } }
+
+  .message.user { flex-direction: row-reverse; align-self: flex-end; }
+  .message.bot  { align-self: flex-start; }
+
+  .avatar {
+    width: 32px; height: 32px;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+    flex-shrink: 0;
+    font-weight: bold;
+  }
+  .user .avatar { background: linear-gradient(135deg, #58a6ff, #a371f7); }
+  .bot  .avatar { background: linear-gradient(135deg, #3fb950, #1f6feb); }
+
+  .bubble {
+    padding: 10px 14px;
+    border-radius: var(--radius);
+    line-height: 1.6;
+    max-width: 680px;
+    word-break: break-word;
+    white-space: pre-wrap;
+  }
+  .user .bubble {
+    background: rgba(88,166,255,0.12);
+    border: 1px solid rgba(88,166,255,0.2);
+    color: var(--text);
+  }
+  .bot .bubble {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  .bot.error .bubble {
+    border-color: rgba(248,81,73,0.3);
+    background: rgba(248,81,73,0.06);
+  }
+  .bot.success .bubble {
+    border-color: rgba(63,185,80,0.2);
+  }
+
+  /* Code blocks inside bubbles */
+  .bubble code {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 5px;
+    font-family: var(--font);
+    font-size: 12.5px;
+    color: #e3b341;
+  }
+  .bubble pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    overflow-x: auto;
+    margin: 8px 0;
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+
+  /* Meta info */
+  .meta {
+    font-size: 10.5px;
+    color: var(--dim);
+    margin-top: 4px;
+    padding: 0 2px;
+  }
+  .user .meta { text-align: right; }
+
+  /* Type badge */
+  .type-badge {
+    display: inline-block;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    margin-right: 5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .badge-memory     { background: rgba(88,166,255,0.15); color: #79c0ff; }
+  .badge-calculate  { background: rgba(63,185,80,0.15);  color: #7ee787; }
+  .badge-skill      { background: rgba(163,113,247,0.15); color: #d2a8ff; }
+  .badge-llm        { background: rgba(240,136,62,0.15); color: #ffa657; }
+  .badge-error      { background: rgba(248,81,73,0.15);  color: #ff7b72; }
+  .badge-system     { background: rgba(110,118,129,0.15); color: #8b949e; }
+
+  /* â”€â”€ Input area â”€â”€ */
+  .input-area {
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 14px 20px;
+    flex-shrink: 0;
+  }
+  .input-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+  }
+  #cmd-input {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13.5px;
+    padding: 10px 14px;
+    outline: none;
+    resize: none;
+    min-height: 42px;
+    max-height: 140px;
+    transition: border-color 0.2s;
+    line-height: 1.5;
+  }
+  #cmd-input:focus { border-color: var(--accent); }
+  #cmd-input::placeholder { color: var(--dim); }
+
+  #send-btn {
+    background: var(--accent);
+    color: #0d1117;
+    border: none;
+    border-radius: var(--radius);
+    padding: 0 18px;
+    height: 42px;
+    cursor: pointer;
+    font-family: var(--font);
+    font-weight: 700;
+    font-size: 13px;
+    transition: background 0.2s, transform 0.1s;
+    flex-shrink: 0;
+  }
+  #send-btn:hover  { background: #79c0ff; }
+  #send-btn:active { transform: scale(0.97); }
+  #send-btn:disabled { background: var(--dim); cursor: not-allowed; }
+
+  /* Suggestion chips */
+  .suggestions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+  }
+  .chip {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 3px 10px;
+    font-size: 11.5px;
+    color: var(--dim);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    user-select: none;
+  }
+  .chip:hover { background: rgba(88,166,255,0.1); color: var(--accent); border-color: rgba(88,166,255,0.3); }
+
+  /* â”€â”€ Right panel â”€â”€ */
+  .right-panel {
+    width: 260px;
+    border-left: 1px solid var(--border);
+    background: var(--surface);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .panel-header {
+    padding: 12px 16px;
+    font-size: 11.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--dim);
+    border-bottom: 1px solid var(--border);
+  }
+  .panel-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+  }
+
+  /* Metric cards */
+  .metric-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+  }
+  .metric-label {
+    font-size: 10.5px;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .metric-value {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--accent);
+    margin-top: 2px;
+  }
+  .metric-sub {
+    font-size: 10.5px;
+    color: var(--dim);
+    margin-top: 1px;
+  }
+
+  /* Operations Control Center */
+  .control-center {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .control-banner {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    background: linear-gradient(135deg, rgba(88,166,255,0.10), rgba(63,185,80,0.04));
+  }
+  .control-banner-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: flex-start;
+  }
+  .control-title {
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--accent);
+  }
+  .control-subtitle {
+    font-size: 10.5px;
+    color: var(--dim);
+    margin-top: 4px;
+    line-height: 1.45;
+  }
+  .control-status {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.05;
+    text-align: right;
+    flex-shrink: 0;
+  }
+  .control-status small {
+    display: block;
+    margin-top: 4px;
+    font-size: 9.5px;
+    font-weight: 500;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .control-pill-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .control-pill {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(255,255,255,0.03);
+    color: var(--dim);
+    font-size: 10px;
+  }
+  .control-pill strong {
+    color: var(--text);
+    font-size: 11px;
+    line-height: 1.2;
+  }
+  .control-pill.good {
+    border-color: rgba(63,185,80,0.30);
+    background: rgba(63,185,80,0.08);
+  }
+  .control-pill.warn {
+    border-color: rgba(240,136,62,0.35);
+    background: rgba(240,136,62,0.08);
+  }
+  .control-pill.bad {
+    border-color: rgba(248,81,73,0.35);
+    background: rgba(248,81,73,0.08);
+  }
+  .control-pill.muted {
+    border-color: var(--border);
+  }
+  .control-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .control-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 11px;
+  }
+  .control-card-title {
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--dim);
+    margin-bottom: 8px;
+  }
+  .control-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .control-line {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 11px;
+    line-height: 1.4;
+  }
+  .control-line span {
+    color: var(--dim);
+  }
+  .control-line strong {
+    color: var(--text);
+    text-align: right;
+    word-break: break-word;
+  }
+  .control-chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .control-chip {
+    padding: 2px 6px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,0.03);
+    color: var(--dim);
+    font-size: 10px;
+  }
+  .control-chip.good {
+    border-color: rgba(63,185,80,0.30);
+    color: #7ee787;
+    background: rgba(63,185,80,0.08);
+  }
+  .control-chip.warn {
+    border-color: rgba(240,136,62,0.30);
+    color: #ffa657;
+    background: rgba(240,136,62,0.08);
+  }
+  .control-chip.bad {
+    border-color: rgba(248,81,73,0.30);
+    color: #ff7b72;
+    background: rgba(248,81,73,0.08);
+  }
+  .remote-signal-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  .remote-signal {
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: rgba(255,255,255,0.025);
+    padding: 7px 8px;
+    min-width: 0;
+  }
+  .remote-signal.good {
+    border-color: rgba(63,185,80,0.30);
+    background: rgba(63,185,80,0.07);
+  }
+  .remote-signal.warn {
+    border-color: rgba(240,136,62,0.32);
+    background: rgba(240,136,62,0.07);
+  }
+  .remote-signal.bad {
+    border-color: rgba(248,81,73,0.32);
+    background: rgba(248,81,73,0.07);
+  }
+  .remote-signal.muted {
+    border-color: var(--border);
+  }
+  .remote-signal-label {
+    color: var(--dim);
+    font-size: 9.5px;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+  }
+  .remote-signal-value {
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.25;
+    margin-top: 3px;
+  }
+  .remote-signal-detail {
+    color: var(--dim);
+    font-size: 9.5px;
+    line-height: 1.35;
+    margin-top: 3px;
+  }
+  .control-event-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .control-event {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: rgba(255,255,255,0.02);
+    padding: 6px 8px;
+    font-size: 10.5px;
+    line-height: 1.35;
+  }
+  .worker-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .worker-card {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: rgba(255,255,255,0.02);
+    padding: 8px;
+  }
+  .worker-card strong {
+    display: block;
+    color: var(--text);
+    font-size: 11px;
+    margin-bottom: 2px;
+  }
+  .worker-card .worker-meta {
+    color: var(--dim);
+    font-size: 10.5px;
+    line-height: 1.35;
+  }
+  .control-event strong {
+    color: var(--text);
+    font-size: 10.5px;
+  }
+  .control-event small {
+    display: block;
+    margin-top: 2px;
+    color: var(--dim);
+    font-size: 9.5px;
+  }
+  .control-empty {
+    color: var(--dim);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  /* â”€â”€ Scrollbar â”€â”€ */
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--dim); }
+
+  /* â”€â”€ Typing indicator â”€â”€ */
+  .typing {
+    display: flex; gap: 5px; align-items: center;
+    padding: 10px 14px;
+  }
+  .typing span {
+    width: 6px; height: 6px;
+    background: var(--dim);
+    border-radius: 50%;
+    animation: bounce 1.2s infinite;
+  }
+  .typing span:nth-child(2) { animation-delay: 0.2s; }
+  .typing span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes bounce {
+    0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+    40% { transform: translateY(-5px); opacity: 1; }
+  }
+
+  /* â”€â”€ Toast notifications â”€â”€ */
+  #toast {
+    position: fixed;
+    bottom: 80px;
+    right: 20px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 12.5px;
+    color: var(--text);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s;
+    z-index: 100;
+    max-width: 300px;
+  }
+  #toast.show { opacity: 1; }
+
+  /* â”€â”€ History list â”€â”€ */
+  .history-item {
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-size: 11.5px;
+    cursor: pointer;
+    color: var(--dim);
+    transition: color 0.15s;
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+  }
+  .history-item:hover { color: var(--text); }
+  .history-item .h-status { font-size: 10px; }
+  .history-item .h-cmd { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .history-item .h-time { font-size: 10px; flex-shrink: 0; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">ðŸ¤–</div>
+    BotBoy <span style="color:var(--dim);font-weight:400;font-size:12px;margin-left:6px">v0.6.0-dev</span>
+  </div>
+  <div class="status-bar">
+    <span><span class="status-dot" id="dot-api"></span>API</span>
+    <span><span class="status-dot" id="dot-memory"></span>Memory</span>
+    <span><span class="status-dot" id="dot-trace"></span>Trace</span>
+    <span><span class="status-dot" id="dot-llm"></span>LLM</span>
+    <span style="color:var(--accent)" id="latency-display">â€”ms</span>
+  </div>
+</header>
+
+<div class="layout">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-section">Commands</div>
+    <div class="sidebar-item active" onclick="setInput('help')"><span class="icon">â“</span>Help</div>
+    <div class="sidebar-item" onclick="setInput('status')"><span class="icon">ðŸ“Š</span>Status</div>
+    <div class="sidebar-item" onclick="setInput('skills')"><span class="icon">ðŸ”§</span>Skills</div>
+    <div class="sidebar-item" onclick="setInput('performance')"><span class="icon">âš¡</span>Performance</div>
+
+    <div class="sidebar-section">Memory</div>
+    <div class="sidebar-item" onclick="setInput('memories')"><span class="icon">ðŸ§ </span>All Memories</div>
+    <div class="sidebar-item" onclick="setInput('memstats')"><span class="icon">ðŸ“ˆ</span>Mem Stats</div>
+    <div class="sidebar-item" onclick="setInput('search ')"><span class="icon">ðŸ”</span>Search</div>
+
+    <div class="sidebar-section">Skills</div>
+    <div class="sidebar-item" onclick="setInput('calculate ')"><span class="icon">ðŸ”¢</span>Calculator</div>
+    <div class="sidebar-item" onclick="setInput('hash sha256 ')"><span class="icon">#</span>Hash</div>
+    <div class="sidebar-item" onclick="setInput('base64 encode ')"><span class="icon">ðŸ”’</span>Base64</div>
+    <div class="sidebar-item" onclick="setInput('convert ')"><span class="icon">â†”ï¸</span>Convert</div>
+    <div class="sidebar-item" onclick="setInput('weather ')"><span class="icon">ðŸŒ¤</span>Weather</div>
+    <div class="sidebar-item" onclick="setInput('web search ')"><span class="icon">ðŸŒ</span>Web Search</div>
+
+    <div class="sidebar-section">System</div>
+    <div class="sidebar-item" onclick="setInput('history')"><span class="icon">ðŸ“œ</span>History</div>
+    <div class="sidebar-item" onclick="setInput('schedule list')"><span class="icon">ðŸ“…</span>Scheduler</div>
+    <div class="sidebar-item" onclick="setInput('archetypes stats')"><span class="icon">ðŸ§©</span>Archetypes</div>
+    <div class="sidebar-item" onclick="clearChat()"><span class="icon">ðŸ—‘</span>Clear Chat</div>
+  </aside>
+
+  <!-- Chat area -->
+  <main class="chat-area">
+    <div id="messages"></div>
+
+    <div class="input-area">
+      <div class="suggestions" id="suggestions">
+        <div class="chip" onclick="setInput('help')">help</div>
+        <div class="chip" onclick="setInput('calculate pi * 2')">calculate pi * 2</div>
+        <div class="chip" onclick="setInput('remember ')">rememberâ€¦</div>
+        <div class="chip" onclick="setInput('weather Berlin')">weather Berlin</div>
+        <div class="chip" onclick="setInput('web search ')">web searchâ€¦</div>
+        <div class="chip" onclick="setInput('status')">status</div>
+      </div>
+      <div class="input-row">
+        <textarea id="cmd-input" placeholder="Enter a commandâ€¦ (Enter to send, Shift+Enter for newline)" rows="1"></textarea>
+        <button id="send-btn" onclick="sendCommand()">Send â†µ</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- Right panel -->
+  <aside class="right-panel">
+    <div class="panel-header">Live Metrics</div>
+    <div class="panel-body">
+      <div class="metric-card">
+        <div class="metric-label">Commands</div>
+        <div class="metric-value" id="m-commands">â€”</div>
+        <div class="metric-sub">this session</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Cache Hit Rate</div>
+        <div class="metric-value" id="m-cache">â€”</div>
+        <div class="metric-sub">of requests served from cache</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Memory Items</div>
+        <div class="metric-value" id="m-memory">â€”</div>
+        <div class="metric-sub">stored memories</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Avg Latency</div>
+        <div class="metric-value" id="m-latency">â€”</div>
+        <div class="metric-sub">milliseconds per command</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Trace Runs</div>
+        <div class="metric-value" id="m-traces">â€”</div>
+        <div class="metric-sub">recorded command runs</div>
+      </div>
+
+      <div class="panel-header" style="margin: 12px -12px 0; padding-left:12px;">Recent Activity</div>
+      <div id="history-list" style="margin-top:8px"></div>
+      <div class="panel-header" style="margin: 12px -12px 0; padding-left:12px;">Operations Control Center</div>
+      <div id="control-center" class="control-center" style="margin-top:8px" data-testid="control-center"></div>
+    </div>
+  </aside>
+
+</div>
+
+<div id="toast"></div>
+
+<script>
+const API = '';  // relative URL â€” same origin
+
+// â”€â”€ State â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+let cmdCount = 0;
+let latencies = [];
+let sessionHistory = [];
+
+// â”€â”€ Init â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+window.addEventListener('load', () => {
+  checkHealth();
+  refreshDashboard();
+  setInterval(refreshMetrics, 8000);
+  setInterval(checkHealth, 15000);
+  setInterval(refreshDashboard, 10000);
+
+  // Auto-resize textarea
+  const inp = document.getElementById('cmd-input');
+  inp.addEventListener('input', () => {
+    inp.style.height = 'auto';
+    inp.style.height = Math.min(inp.scrollHeight, 140) + 'px';
+  });
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendCommand();
+    }
+  });
+
+  addBotMessage('BotBoy v0.6.0-dev ready. Type a command or click a shortcut.', 'system');
+});
+
+// â”€â”€ Health check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+async function checkHealth() {
+  try {
+    const r = await fetch(`${API}/health`);
+    const d = await r.json();
+    setDot('dot-api', r.ok);
+    setDot('dot-memory', d.components?.memory);
+    setDot('dot-trace', d.components?.trace_store);
+    setDot('dot-llm', d.components?.llm);
+  } catch {
+    setDot('dot-api', false);
+  }
+}
+
+function setDot(id, ok) {
+  const dot = document.getElementById(id);
+  if (dot) { dot.className = 'status-dot ' + (ok ? 'ok' : 'err'); }
+}
+
+// â”€â”€ Metrics refresh â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+async function refreshMetrics() {
+  try {
+    const r = await fetch(`${API}/api/metrics`);
+    if (!r.ok) return;
+    const d = await r.json();
+    el('m-commands').textContent = d.total_commands ?? 'â€”';
+    el('m-cache').textContent    = d.cache_hit_rate != null
+      ? Math.round(d.cache_hit_rate * 100) + '%' : 'â€”';
+
+    // Memory count
+    const mr = await fetch(`${API}/health`);
+    if (mr.ok) {
+      // Memory count from memories endpoint
+      const hr = await fetch(`${API}/api/memories?limit=1`);
+      if (hr.ok) {
+        const hd = await hr.json();
+        el('m-memory').textContent = hd.total ?? 'â€”';
+      }
+    }
+
+    // Avg latency from session
+    if (latencies.length > 0) {
+      const avg = latencies.reduce((a,b)=>a+b,0) / latencies.length;
+      el('m-latency').textContent = Math.round(avg) + 'ms';
+    }
+
+    // History
+    refreshHistoryPanel();
+  } catch { /* ignore */ }
+}
+
+async function refreshDashboard() {
+  try {
+    const r = await fetch(`${API}/api/dashboard`);
+    if (!r.ok) return;
+    const d = await r.json();
+    el('m-traces').textContent = d.traces?.total_runs ?? 'â€”';
+    el('control-center').innerHTML = renderControlCenter(d);
+  } catch { /* ignore */ }
+}
+
+async function refreshHistoryPanel() {
+  try {
+    const r = await fetch(`${API}/api/history?limit=8`);
+    if (!r.ok) return;
+    const d = await r.json();
+    const list = el('history-list');
+    list.innerHTML = '';
+    for (const rec of (d.records || [])) {
+      const item = document.createElement('div');
+      item.className = 'history-item';
+      item.title = rec.command;
+      item.onclick = () => setInput(rec.command);
+      const status = rec.success ? 'âœ“' : 'âœ—';
+      const color  = rec.success ? 'var(--accent2)' : 'var(--err)';
+      const ms     = Math.round(rec.latency_ms || 0);
+      item.innerHTML = `
+        <span class="h-status" style="color:${color}">${status}</span>
+        <span class="h-cmd">${escHtml(rec.command)}</span>
+        <span class="h-time">${ms}ms</span>
+      `;
+      list.appendChild(item);
+    }
+  } catch { /* ignore */ }
+}
+
+// â”€â”€ Send command â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+async function sendCommand() {
+  const inp = document.getElementById('cmd-input');
+  const cmd = inp.value.trim();
+  if (!cmd) return;
+
+  inp.value = '';
+  inp.style.height = 'auto';
+  document.getElementById('send-btn').disabled = true;
+
+  addUserMessage(cmd);
+  const typingEl = addTypingIndicator();
+  const t0 = performance.now();
+
+  try {
+    const r   = await fetch(`${API}/api/command`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: cmd }),
+    });
+    const d   = await r.json();
+    const lat = performance.now() - t0;
+
+    typingEl.remove();
+    latencies.push(lat);
+    el('latency-display').textContent = Math.round(lat) + 'ms';
+    cmdCount++;
+    el('m-commands').textContent = cmdCount;
+
+    sessionHistory.unshift({ cmd, success: d.success, lat });
+
+    addBotMessage(d.output || '(no output)', d.type || 'unknown', d.success !== false);
+    if (d.success !== false) refreshMetrics();
+
+  } catch (err) {
+    typingEl.remove();
+    addBotMessage('Connection error: ' + err.message, 'error', false);
+  }
+
+  document.getElementById('send-btn').disabled = false;
+  inp.focus();
+}
+
+// â”€â”€ Message rendering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function addUserMessage(text) {
+  const msgs = el('messages');
+  const div  = document.createElement('div');
+  div.className = 'message user';
+  div.innerHTML = `
+    <div>
+      <div class="bubble">${escHtml(text)}</div>
+      <div class="meta">${timeNow()}</div>
+    </div>
+    <div class="avatar">U</div>
+  `;
+  msgs.appendChild(div);
+  scrollBottom();
+}
+
+function addBotMessage(text, type, success = true) {
+  const msgs   = el('messages');
+  const div    = document.createElement('div');
+  const cls    = success ? 'success' : 'error';
+  div.className = `message bot ${cls}`;
+
+  const badge  = typeBadge(type);
+  const output = formatOutput(text);
+
+  div.innerHTML = `
+    <div class="avatar">ðŸ¤–</div>
+    <div>
+      <div class="bubble">${badge}${output}</div>
+      <div class="meta">${timeNow()}</div>
+    </div>
+  `;
+  msgs.appendChild(div);
+  scrollBottom();
+  return div;
+}
+
+function addTypingIndicator() {
+  const msgs = el('messages');
+  const div  = document.createElement('div');
+  div.className = 'message bot';
+  div.innerHTML = `
+    <div class="avatar">ðŸ¤–</div>
+    <div class="bubble"><div class="typing"><span></span><span></span><span></span></div></div>
+  `;
+  msgs.appendChild(div);
+  scrollBottom();
+  return div;
+}
+
+function typeBadge(type) {
+  const map = {
+    memory: 'badge-memory', calculate: 'badge-calculate', hash: 'badge-calculate',
+    base64: 'badge-calculate', convert: 'badge-calculate', skill: 'badge-skill',
+    llm: 'badge-llm', error: 'badge-error', unknown: 'badge-error',
+  };
+  if (!type || type === 'help') return '';
+  const cls = map[type] || 'badge-system';
+  return `<span class="type-badge ${cls}">${escHtml(type)}</span>`;
+}
+
+function formatOutput(text) {
+  if (!text) return '';
+  const blockPlaceholders = [];
+  let out = String(text).replace(/```([\s\S]*?)```/g, (_, code) => {
+    const marker = `\uE000BOTBOY_CODE_${blockPlaceholders.length}\uE000`;
+    blockPlaceholders.push(`<pre>${escHtml(code.trim())}</pre>`);
+    return marker;
+  });
+  out = escHtml(out)
+    .replace(/`([^`]+)`/g, (_, code) => `<code>${code}</code>`)
+    .replace(/  ([\w$_])/g, '  <code>$1</code>');
+  blockPlaceholders.forEach((html, index) => {
+    out = out.replace(`\uE000BOTBOY_CODE_${index}\uE000`, html);
+  });
+  return out;
+}
+
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function el(id) { return document.getElementById(id); }
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function normalizeControlValue(value, fallback = 'â€”') {
+  if (value === null || value === undefined || value === '') return fallback;
+  if (Array.isArray(value)) {
+    return value.length > 0
+      ? value.map(item => normalizeControlValue(item, fallback)).join(' | ')
+      : fallback;
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value);
+    if (entries.length === 0) return fallback;
+    return entries
+      .map(([key, val]) => `${key}: ${normalizeControlValue(val, fallback)}`)
+      .join(' | ');
+  }
+  return String(value);
+}
+
+function controlTone(value) {
+  if (typeof value === 'boolean') {
+    return value ? 'good' : 'bad';
+  }
+  const text = String(value ?? '').trim().toLowerCase();
+  if (!text || text === 'â€”' || text === 'unknown' || text === 'none' || text === 'n/a') return 'muted';
+  if (['verified', 'healthy', 'online', 'enabled', 'available', 'ready', 'ok', 'success', 'passed', 'operational', 'protected', 'restricted', 'fail-closed', 'local-only', 'token-gated', 'release-gated', 'test-gated'].includes(text)) return 'good';
+  if (['experimental', 'pending', 'partial', 'degraded', 'warn', 'warning', 'watch', 'attention', 'needs-review', 'review-required', 'override-required', 'actionable'].includes(text)) return 'warn';
+  if (['offline', 'failed', 'error', 'unavailable', 'disabled', 'blocked'].includes(text)) return 'bad';
+  return 'muted';
+}
+
+function renderControlLine(label, value) {
+  return `<div class="control-line"><span>${escHtml(label)}</span><strong>${escHtml(normalizeControlValue(value))}</strong></div>`;
+}
+
+function renderControlPill(label, value, tone = 'muted') {
+  return `<span class="control-pill ${tone}"><span>${escHtml(label)}</span><strong>${escHtml(normalizeControlValue(value))}</strong></span>`;
+}
+
+function renderControlChip(label, value, tone = 'muted') {
+  return `<span class="control-chip ${tone}">${escHtml(label)}${value !== undefined ? ': ' + escHtml(normalizeControlValue(value)) : ''}</span>`;
+}
+
+function hasCapability(capabilities, capability) {
+  return Array.isArray(capabilities) && capabilities.includes(capability);
+}
+
+function renderRemoteSignalBody(signal) {
+  return `
+    <div class="remote-signal-label">${escHtml(signal.label)}</div>
+    <div class="remote-signal-value">${escHtml(normalizeControlValue(signal.value))}</div>
+    <div class="remote-signal-detail">${escHtml(signal.detail)}</div>
+  `;
+}
+
+function deriveRemoteAuthSignals({ readiness, snapshot, authStatus, completedCapabilities, openPriorities, gatewayModes, uiStatus }) {
+  const authValue = readiness.auth || (authStatus.available === true ? 'enabled' : 'available');
+  const remoteFailClosed = hasCapability(completedCapabilities, 'remote_bind_auth_fail_closed');
+  const localhostDefault = hasCapability(completedCapabilities, 'localhost_default_bind');
+  const mcpCorsVerified = hasCapability(completedCapabilities, 'mcp_http_token_auth_and_cors');
+  const acceptance = snapshot.acceptance || {};
+  const lastAcceptance = snapshot.last_verified_acceptance || {};
+  const rollbackVerified = acceptance.status === 'verified' || Object.keys(lastAcceptance).length > 0;
+  const remoteRunbookOpen = Array.isArray(openPriorities) && openPriorities.includes('operator_runbook_for_remote_auth_rollout');
+  const gatewayVerified = Object.values(gatewayModes || {}).some(value => String(value).includes('verified'));
+  const canonicalUi = uiStatus.canonical_ui || 'web/index.html';
+  const prototypeUi = uiStatus.dashboard_prototype || 'web/dashboard.html';
+
+  const signals = [
+    {
+      id: 'auth',
+      label: 'Auth',
+      value: authValue,
+      tone: controlTone(authValue),
+      detail: authStatus.available === true || readiness.auth === 'verified'
+        ? 'gateway auth path reported by snapshot'
+        : 'local path allowed; remote bind guard covers exposure',
+    },
+    {
+      id: 'cors',
+      label: 'CORS',
+      value: mcpCorsVerified ? 'restricted' : (gatewayVerified ? 'gateway-checked' : 'restricted'),
+      tone: mcpCorsVerified || gatewayVerified ? 'good' : 'muted',
+      detail: mcpCorsVerified
+        ? 'MCP HTTP token and CORS contract verified'
+        : 'same-origin UI with explicit gateway origin policy',
+    },
+    {
+      id: 'mcp-token',
+      label: 'MCP Token',
+      value: mcpCorsVerified ? 'token-gated' : (readiness.mcp || 'available'),
+      tone: mcpCorsVerified ? 'good' : controlTone(readiness.mcp || 'available'),
+      detail: mcpCorsVerified
+        ? 'HTTP MCP access requires token authentication'
+        : 'MCP remains local unless HTTP transport is exposed',
+    },
+    {
+      id: 'bind',
+      label: 'Remote Bind',
+      value: remoteFailClosed ? 'fail-closed' : (localhostDefault ? 'local-only' : 'guarded'),
+      tone: remoteFailClosed || localhostDefault ? 'good' : 'warn',
+      detail: remoteFailClosed
+        ? 'non-loopback bind without auth is rejected'
+        : 'default bind stays on loopback scope',
+    },
+    {
+      id: 'rollback',
+      label: 'Rollback',
+      value: rollbackVerified ? 'release-gated' : 'test-gated',
+      tone: rollbackVerified ? 'good' : 'warn',
+      detail: rollbackVerified
+        ? `acceptance recorded; canonical ${canonicalUi}`
+        : `canonical ${canonicalUi}; prototype ${prototypeUi}`,
+    },
+  ];
+
+  return {
+    signals,
+    runbookStatus: remoteRunbookOpen ? 'operator_runbook_for_remote_auth_rollout' : 'no open remote rollout item',
+    rollbackAnchor: rollbackVerified ? summarizeObject(lastAcceptance, 2, 'release acceptance verified') : `${canonicalUi} / ${prototypeUi}`,
+  };
+}
+
+function renderRemoteAuthReadiness(remoteAuthReadiness) {
+  return `
+    <div class="control-card" data-smoke="remote-auth-readiness">
+      <div class="control-card-title">Remote/Auth Readiness Signals</div>
+      <div class="remote-signal-grid">
+        <div class="remote-signal ${remoteAuthReadiness.signals[0].tone}" data-smoke="remote-auth-auth">
+          ${renderRemoteSignalBody(remoteAuthReadiness.signals[0])}
+        </div>
+        <div class="remote-signal ${remoteAuthReadiness.signals[1].tone}" data-smoke="remote-auth-cors">
+          ${renderRemoteSignalBody(remoteAuthReadiness.signals[1])}
+        </div>
+        <div class="remote-signal ${remoteAuthReadiness.signals[2].tone}" data-smoke="remote-auth-mcp-token">
+          ${renderRemoteSignalBody(remoteAuthReadiness.signals[2])}
+        </div>
+        <div class="remote-signal ${remoteAuthReadiness.signals[3].tone}" data-smoke="remote-auth-bind">
+          ${renderRemoteSignalBody(remoteAuthReadiness.signals[3])}
+        </div>
+        <div class="remote-signal ${remoteAuthReadiness.signals[4].tone}" data-smoke="remote-auth-rollback">
+          ${renderRemoteSignalBody(remoteAuthReadiness.signals[4])}
+        </div>
+      </div>
+      <div class="control-lines">
+        ${renderControlLine('Remote rollout priority', remoteAuthReadiness.runbookStatus)}
+        ${renderControlLine('Rollback anchor', remoteAuthReadiness.rollbackAnchor)}
+      </div>
+    </div>
+  `;
+}
+
+function contractSegment(contract, segmentName) {
+  const segments = contract && typeof contract === 'object' ? (contract.segments || {}) : {};
+  const segment = segments && typeof segments === 'object' ? segments[segmentName] : {};
+  return segment && typeof segment === 'object' ? segment : {};
+}
+
+function segmentScope(segment, scopeName) {
+  const scope = segment && typeof segment === 'object' ? segment[scopeName] : {};
+  return scope && typeof scope === 'object' ? scope : {};
+}
+
+function summarizeList(list, limit = 3, fallback = 'none') {
+  if (!Array.isArray(list) || list.length === 0) return fallback;
+  return list.slice(0, limit).map(item => normalizeControlValue(item)).join(' | ');
+}
+
+function summarizeObject(obj, limit = 4, fallback = 'none') {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return fallback;
+  const entries = Object.entries(obj);
+  if (entries.length === 0) return fallback;
+  return entries.slice(0, limit).map(([key, val]) => `${key}: ${normalizeControlValue(val)}`).join(' | ');
+}
+
+function formatControlTimestamp(value) {
+  const ts = Number(value);
+  if (!Number.isFinite(ts)) return normalizeControlValue(value);
+  return new Date(ts * 1000).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function formatControlMoment(value) {
+  if (value === null || value === undefined || value === '') {
+    return 'â€”';
+  }
+
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && String(value).trim() !== '') {
+    const numericDate = new Date(numeric * 1000);
+    if (!Number.isNaN(numericDate.getTime())) {
+      return numericDate.toLocaleString([], {
+        month: 'short',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+    }
+  }
+
+  const parsed = new Date(String(value));
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toLocaleString([], {
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  }
+
+  return normalizeControlValue(value);
+}
+
+function renderObjectChips(obj, empty = 'none', limit = 4) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+    return `<span class="control-empty">${escHtml(empty)}</span>`;
+  }
+  const entries = Object.entries(obj);
+  if (entries.length === 0) {
+    return `<span class="control-empty">${escHtml(empty)}</span>`;
+  }
+  return entries
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .slice(0, limit)
+    .map(([key, value]) => renderControlChip(key, value, controlTone(value)))
+    .join('');
+}
+
+function renderRecentCommand(entry) {
+  if (!entry || typeof entry !== 'object') {
+    return `<div class="control-event">${escHtml(normalizeControlValue(entry))}</div>`;
+  }
+  const headline = [
+    entry.cmd_type || 'command',
+    entry.success === false ? 'failed' : 'ok',
+  ].filter(Boolean).join(' Â· ');
+  const details = [
+    entry.principal ? `principal: ${entry.principal}` : '',
+    entry.request_id ? `request: ${entry.request_id}` : '',
+    entry.duration_s != null ? `${Math.round(Number(entry.duration_s) * 1000)}ms` : '',
+    entry.timestamp != null ? formatControlTimestamp(entry.timestamp) : '',
+  ].filter(Boolean).join(' | ');
+  return `<div class="control-event"><strong>${escHtml(headline)}</strong><small>${escHtml(details || 'no additional context')}</small></div>`;
+}
+
+function renderRecentCommandList(entries, fallback = 'No recent commands recorded.') {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return `<div class="control-empty">${escHtml(fallback)}</div>`;
+  }
+  return `<div class="control-event-list">${entries.slice(-3).reverse().map(renderRecentCommand).join('')}</div>`;
+}
+
+function extractMergeReview(entry) {
+  if (!entry || typeof entry !== 'object') return {};
+  if (entry.merge && typeof entry.merge === 'object') return entry.merge;
+  const result = entry.result && typeof entry.result === 'object' ? entry.result : {};
+  if (result.merge && typeof result.merge === 'object') return result.merge;
+  const resultData = result.data && typeof result.data === 'object' ? result.data : {};
+  if (resultData.merge && typeof resultData.merge === 'object') return resultData.merge;
+  const payload = entry.payload && typeof entry.payload === 'object' ? entry.payload : {};
+  if (payload.merge && typeof payload.merge === 'object') return payload.merge;
+  return {};
+}
+
+function deriveMergeReviewSignals(mergeReview, mergeResolution = {}) {
+  const configuredPolicy = String(
+    mergeReview.configured_resolution_policy ||
+    mergeReview.configured_policy ||
+    mergeResolution.configured_resolution_policy ||
+    mergeResolution.configured_policy ||
+    ''
+  ).trim();
+  const effectivePolicy = String(
+    mergeReview.resolution_policy ||
+    mergeReview.effective_resolution_policy ||
+    mergeResolution.policy ||
+    ''
+  ).trim();
+  const conflictCount = Number(mergeResolution.conflict_count ?? mergeReview.conflict_count ?? 0) || 0;
+  const pendingChildren = Array.isArray(mergeReview.pending_child_ids) ? mergeReview.pending_child_ids.length : 0;
+  const activeChildren = Number(mergeReview.active_child_count ?? 0) || 0;
+  const overrideActive = Boolean(
+    mergeReview.override_active ??
+    mergeReview.merge_override_active ??
+    (configuredPolicy && effectivePolicy && configuredPolicy !== effectivePolicy)
+  );
+  const actionable = Boolean(
+    mergeReview.actionable ??
+    mergeReview.merge_review_actionable ??
+    (conflictCount > 0 || pendingChildren > 0 || activeChildren > 0 || overrideActive)
+  );
+  const reviewState = String(
+    mergeReview.review_state ||
+    mergeResolution.review_state ||
+    (actionable ? 'needs-review' : 'ready')
+  ).trim();
+  const policyDelta = String(
+    mergeReview.policy_delta ||
+    mergeReview.merge_policy_delta ||
+    (overrideActive && configuredPolicy && effectivePolicy ? `${configuredPolicy} -> ${effectivePolicy}` : '')
+  ).trim();
+  const overrideReason = String(
+    mergeReview.override_reason ||
+    mergeReview.merge_override_reason ||
+    (overrideActive && configuredPolicy && effectivePolicy
+      ? `configured ${configuredPolicy} -> effective ${effectivePolicy}`
+      : '')
+  ).trim();
+  const nextAction = String(
+    mergeReview.next_action ||
+    mergeReview.merge_next_action ||
+    (overrideActive
+      ? 'Confirm override policy'
+      : conflictCount > 0
+        ? 'Resolve conflicts'
+        : pendingChildren > 0 || activeChildren > 0
+          ? 'Wait for child completion'
+          : 'No action required')
+  ).trim();
+  return {
+    configuredPolicy,
+    effectivePolicy,
+    conflictCount,
+    pendingChildren,
+    activeChildren,
+    overrideActive,
+    actionable,
+    reviewState,
+    policyDelta,
+    overrideReason,
+    nextAction,
+  };
+}
+
+function renderValueChips(label, values, tone = 'muted', empty = 'none') {
+  if (!Array.isArray(values) || values.length === 0) {
+    return `<span class="control-empty">${escHtml(empty)}</span>`;
+  }
+  return values.slice(0, 5).map((value) => renderControlChip(label, value, tone)).join('');
+}
+
+function renderTaskEntry(entry) {
+  if (!entry || typeof entry !== 'object') {
+    return `<div class="control-event">${escHtml(normalizeControlValue(entry))}</div>`;
+  }
+  const merge = extractMergeReview(entry);
+  const mergeResolution = merge.merge_resolution && typeof merge.merge_resolution === 'object'
+    ? merge.merge_resolution
+    : {};
+  const mergeSignals = deriveMergeReviewSignals(merge, mergeResolution);
+  const headline = [
+    entry.status || 'task',
+    entry.kind || 'command',
+  ].filter(Boolean).join(' Â· ');
+  const details = [
+    entry.task_id ? `task: ${entry.task_id}` : '',
+    entry.principal ? `principal: ${entry.principal}` : '',
+    entry.request_id ? `request: ${entry.request_id}` : '',
+    entry.root_task_id && entry.root_task_id !== entry.task_id ? `root: ${entry.root_task_id}` : '',
+    entry.run_id ? `run: ${entry.run_id}` : '',
+  ].filter(Boolean).join(' | ');
+  const mergeDetails = merge.merge_policy
+    ? [
+        `merge: ${merge.merge_policy}`,
+        mergeSignals.configuredPolicy ? `configured: ${mergeSignals.configuredPolicy}` : '',
+        mergeSignals.effectivePolicy ? `resolve: ${mergeSignals.effectivePolicy}` : '',
+        `state: ${mergeSignals.reviewState}`,
+        `actionable: ${mergeSignals.actionable ? 'yes' : 'no'}`,
+        `override: ${mergeSignals.overrideActive ? 'yes' : 'no'}`,
+        mergeSignals.policyDelta ? `delta: ${mergeSignals.policyDelta}` : '',
+        mergeSignals.overrideReason ? `reason: ${mergeSignals.overrideReason}` : '',
+        mergeSignals.nextAction ? `next: ${mergeSignals.nextAction}` : '',
+        mergeSignals.conflictCount != null ? `conflicts: ${mergeSignals.conflictCount}` : '',
+      ].filter(Boolean).join(' | ')
+    : '';
+  return `<div class="control-event"><strong>${escHtml(headline)}</strong><small>${escHtml(details || 'no additional context')}</small>${mergeDetails ? `<small>${escHtml(mergeDetails)}</small>` : ''}</div>`;
+}
+
+function renderTaskList(entries, fallback = 'No task records yet.') {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return `<div class="control-empty">${escHtml(fallback)}</div>`;
+  }
+  return `<div class="control-event-list">${entries.slice(0, 4).map(renderTaskEntry).join('')}</div>`;
+}
+
+function renderWorkerGrid(entries, fallback = 'No workers available.') {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return `<div class="control-empty">${escHtml(fallback)}</div>`;
+  }
+  return `<div class="worker-grid">${entries.slice(0, 5).map((worker) => {
+    const summary = worker.summary || {};
+    const taskCount = summary.task_count ?? 0;
+    const activeCount = summary.active_count ?? 0;
+    const blockedCount = summary.blocked_count ?? 0;
+    const recentTask = (Array.isArray(worker.tasks) && worker.tasks.length > 0)
+      ? worker.tasks[0]
+      : null;
+    const recentLabel = recentTask ? `${recentTask.status || 'unknown'} Â· ${recentTask.task_id || 'task'}` : 'idle';
+    const capabilityText = worker.capability_text || summarizeList(worker.capabilities || [], 3);
+    return `
+      <div class="worker-card">
+        <strong>${escHtml(worker.display_name || worker.worker_id || 'worker')}</strong>
+        <div class="worker-meta">
+          ${escHtml(worker.worker_id || 'unknown')} Â· ${escHtml(worker.role || 'role')}
+          <br>Tasks: ${escHtml(String(taskCount))} | Active: ${escHtml(String(activeCount))} | Blocked: ${escHtml(String(blockedCount))}
+          <br>Latest: ${escHtml(recentLabel)}
+        </div>
+        <div class="control-chip-list" style="margin-top:6px">
+          ${renderControlChip(worker.approval_profile || 'profile', worker.max_concurrency != null ? `${worker.max_concurrency} slots` : 'n/a', 'muted')}
+        </div>
+        <div class="worker-meta" style="margin-top:4px">${escHtml(capabilityText)}</div>
+      </div>
+    `;  
+  }).join('')}</div>`;
+}
+
+function renderOperabilitySignals({
+  workerPanel,
+  workerCount,
+  delegatedCount,
+  queuedTaskCount,
+  runningTaskCount,
+  handoffQueueDepth,
+  latestTask,
+  latestTaskId,
+}) {
+  const latestWorker = latestTask?.delegated_to_worker || 'none';
+  const latestLeaseState = latestTask?.delegation_status || (latestWorker !== 'none' ? 'delegated' : 'idle');
+  const latestLeaseExpiry = latestTask?.lease_expires_at ? formatControlMoment(latestTask.lease_expires_at) : 'none reported';
+  const latestHeartbeat = latestTask?.heartbeat_at ? formatControlMoment(latestTask.heartbeat_at) : 'none reported';
+  const queueTone = handoffQueueDepth > 0 ? 'warn' : 'good';
+  const leaseTone = latestLeaseState === 'leased' ? 'good' : latestLeaseState === 'delegated' ? 'warn' : latestWorker !== 'none' ? 'warn' : 'muted';
+  const daemonTone = workerPanel.available === true ? 'good' : 'bad';
+  const workerTone = workerCount > 0 ? 'good' : 'bad';
+  return `
+    <div class="control-card" data-smoke="operability-signals">
+      <div class="control-card-title">Queue / Lease / Worker Daemon</div>
+      <div class="control-lines">
+        ${renderControlLine('Worker daemon', workerPanel.available === true ? 'available' : 'offline')}
+        ${renderControlLine('Worker registry', workerCount)}
+        ${renderControlLine('Delegated tasks', delegatedCount)}
+        ${renderControlLine('Queue depth', handoffQueueDepth)}
+        ${renderControlLine('Queued tasks', queuedTaskCount)}
+        ${renderControlLine('Running tasks', runningTaskCount)}
+        ${renderControlLine('Latest task', latestTaskId || 'none')}
+        ${renderControlLine('Latest worker', latestWorker)}
+        ${renderControlLine('Lease state', latestLeaseState)}
+        ${renderControlLine('Lease expiry', latestLeaseExpiry)}
+        ${renderControlLine('Heartbeat', latestHeartbeat)}
+      </div>
+      <div class="control-chip-list" style="margin-top:8px">
+        ${renderControlPill('Queue', handoffQueueDepth, queueTone)}
+        ${renderControlPill('Lease', latestLeaseState, leaseTone)}
+        ${renderControlPill('Daemon', workerPanel.available === true ? 'online' : 'offline', daemonTone)}
+        ${renderControlPill('Workers', workerCount, workerTone)}
+      </div>
+    </div>
+  `;
+}
+
+function renderControlCenter(d) {
+  const health = d.health || {};
+  const metrics = d.metrics || {};
+  const history = d.history || {};
+  const traces = d.traces || {};
+  const tasks = d.tasks || {};
+  const monitoring = d.monitoring || {};
+  const agentSkillLibrary = d.agent_skill_library || {};
+  const readiness = d.system_readiness || {};
+  const operationsSummary = d.operations_summary || {};
+  const snapshot = d.status_snapshot || {};
+  const verified = snapshot.verified_test_result || {};
+  const lastRun = snapshot.last_verified_run || {};
+  const gaps = Array.isArray(d.known_gaps) ? d.known_gaps : [];
+  const tracks = snapshot.tracks || {};
+  const gatewayModes = snapshot.gateway_modes || {};
+  const authStatus = snapshot.auth || {};
+  const traceStatus = snapshot.trace_status || {};
+  const uiStatus = snapshot.ui_status || {};
+  const evalReplay = snapshot.eval_replay || {};
+  const controlCenterContract = d.control_center_contract || {};
+  const contractVersion = controlCenterContract.contract_version || 'ops-legacy';
+  const contractWriteSet = controlCenterContract.write_set || {};
+  const queueLeaseSegment = contractSegment(controlCenterContract, 'queue_lease');
+  const queueLeaseSnapshot = segmentScope(queueLeaseSegment, 'snapshot');
+  const queueLeaseRuntime = segmentScope(queueLeaseSegment, 'runtime');
+  const queueLeaseSignals = Object.keys(queueLeaseRuntime).length > 0 && queueLeaseRuntime.available !== false
+    ? queueLeaseRuntime
+    : queueLeaseSnapshot;
+  const incidentSegment = contractSegment(controlCenterContract, 'incident');
+  const incidentSnapshot = segmentScope(incidentSegment, 'snapshot');
+  const incidentRuntime = segmentScope(incidentSegment, 'runtime');
+  const incidentSignals = {
+    ...incidentSnapshot,
+    ...(incidentRuntime.available === false ? {} : incidentRuntime),
+  };
+  const replaySignals = contractSegment(controlCenterContract, 'replay');
+  const openPriorities = Array.isArray(snapshot.open_priorities) ? snapshot.open_priorities : [];
+  const completedCapabilities = Array.isArray(snapshot.completed_capabilities) ? snapshot.completed_capabilities : [];
+  const deferredItems = Array.isArray(snapshot.deferred_items) ? snapshot.deferred_items : [];
+  const tests = snapshot.tests || {};
+  const traceCoverage = Array.isArray(traceStatus.coverage) ? traceStatus.coverage : [];
+  const traceStatuses = Object.entries(traces.by_status || {});
+  const recentCommands = Array.isArray(metrics.recent_commands) ? metrics.recent_commands : [];
+  const lastCommand = metrics.last_command || (recentCommands.length > 0 ? recentCommands[recentCommands.length - 1] : null);
+  const principalCounts = metrics.by_principal || history.by_principal || {};
+  const trackEntries = Object.entries(tracks);
+  const recentTasks = Array.isArray(tasks.recent) ? tasks.recent : [];
+  const latestTask = tasks.latest_task || tasks.latest || null;
+  const taskByStatus = tasks.by_status || {};
+  const workerPanel = d.workers || {};
+  const workerRegistry = Array.isArray(workerPanel.registry) ? workerPanel.registry : [];
+  const workerSummary = workerPanel.summary || {};
+  const handoffs = d.handoffs || {};
+  const handoffGraph = tasks.graph || handoffs.graph || {};
+  const handoffChildren = Array.isArray(tasks.children) ? tasks.children : Array.isArray(handoffs.children) ? handoffs.children : [];
+  const blockerEntries = Array.isArray(tasks.blockers) ? tasks.blockers : Array.isArray(handoffs.blockers) ? handoffs.blockers : [];
+  const recentBlockers = Array.isArray(tasks.recent_blockers) ? tasks.recent_blockers : blockerEntries.slice(0, 4);
+  const byWorker = tasks.by_worker || workerSummary.by_worker || {};
+  const byBlockedKind = tasks.by_blocked_kind || workerSummary.by_blocked_kind || {};
+  const workerCount = queueLeaseSignals.worker_count ?? operationsSummary.worker_count ?? tasks.worker_count ?? workerPanel.worker_count ?? workerRegistry.length;
+  const delegatedCount = queueLeaseSignals.delegated_count ?? operationsSummary.delegated_count ?? tasks.delegated_count ?? workerSummary.delegated_count ?? 0;
+  const runningTaskCount = queueLeaseSignals.running_count ?? operationsSummary.running_count ?? tasks.running_count ?? workerSummary.running_count ?? 0;
+  const queuedTaskCount = queueLeaseSignals.queued_count ?? operationsSummary.queued_count ?? tasks.queued_count ?? workerSummary.queued_count ?? 0;
+  const blockedTaskCount = incidentSignals.blocked_count ?? operationsSummary.blocked_count ?? tasks.blocked_count ?? workerSummary.blocked_count ?? blockerEntries.length;
+  const handoffQueueDepth = queueLeaseSignals.handoff_queue_depth ?? operationsSummary.handoff_queue_depth ?? tasks.handoff_queue_depth ?? workerSummary.handoff_queue_depth ?? 0;
+  const oldestBlockedAge = operationsSummary.oldest_blocked_age_s ?? tasks.oldest_blocked_age_s ?? workerSummary.oldest_blocked_age_s ?? 0;
+  const oldestRunningAge = operationsSummary.oldest_running_age_s ?? tasks.oldest_running_age_s ?? workerSummary.oldest_running_age_s ?? 0;
+  const summaryTone = controlTone(operationsSummary.overall_status || '');
+  const overallTone = summaryTone !== 'muted'
+    ? summaryTone
+    : Object.values(readiness).some(v => controlTone(v) === 'bad')
+    ? 'bad'
+    : Object.values(readiness).some(v => controlTone(v) === 'warn')
+      ? 'warn'
+      : 'good';
+  const overallLabel = operationsSummary.overall_status
+    ? normalizeControlValue(operationsSummary.overall_status)
+    : overallTone === 'good' ? 'Operational' : overallTone === 'warn' ? 'Watch' : 'Attention';
+  const overallDetail = overallTone === 'good'
+    ? 'Control center matches the current snapshot.'
+    : overallTone === 'warn'
+      ? 'The core path is up, but follow-up work remains.'
+      : 'At least one readiness signal needs attention.';
+  const traceRunCount = traces.total_runs ?? 'â€”';
+  const traceSpanCount = traces.total_spans ?? 'â€”';
+  const traceStatusText = traceStatuses.length > 0
+    ? traceStatuses.map(([key, value]) => `${key}:${value}`).join(' | ')
+    : 'none';
+  const traceCoverageCount = traceCoverage.length;
+  const lastVerifiedCommand = lastRun.command || snapshot.verified_test_command || 'unknown';
+  const successRate = history.success_rate != null ? Math.round(history.success_rate * 100) + '%' : 'â€”';
+  const avgLatency = history.avg_latency_ms != null ? Math.round(history.avg_latency_ms) + 'ms' : 'â€”';
+  const totalCommands = metrics.total_commands ?? history.total ?? 'â€”';
+  const errorRate = metrics.total_errors != null && metrics.total_commands
+    ? Math.round((metrics.total_errors / Math.max(1, metrics.total_commands)) * 100) + '%'
+    : 'â€”';
+  const monitoringSummary = summarizeObject(monitoring.summary);
+  const commandTrail = recentCommands.slice(-3).reverse();
+  const verifiedSignals = operationsSummary.verified_signals ?? Object.values(readiness).filter(v => v === 'verified').length;
+  const attentionSignals = Array.isArray(incidentSignals.attention_signals)
+    ? incidentSignals.attention_signals
+    : Array.isArray(operationsSummary.attention_signals)
+      ? operationsSummary.attention_signals
+      : [];
+  const suiteStatus = operationsSummary.suite_status || verified.status || 'â€”';
+  const suiteRunText = operationsSummary.suite_ran != null
+    ? `${operationsSummary.suite_ran} ran / ${operationsSummary.suite_skipped ?? 0} skipped`
+    : verified.ran != null
+      ? `${verified.ran} ran / ${verified.skipped ?? 0} skipped`
+      : 'â€”';
+  const currentWave = operationsSummary.current_wave || snapshot.current_wave || 'â€”';
+  const latestTraceStatus = operationsSummary.latest_trace_status || traceStatusText;
+  const latestTraceRunId = operationsSummary.latest_trace_run_id || 'â€”';
+  const metricsTotalCommands = operationsSummary.metrics_total_commands ?? totalCommands;
+  const historyTotal = operationsSummary.history_total ?? history.total ?? 'â€”';
+  const taskTotal = operationsSummary.task_total ?? tasks.total ?? 'â€”';
+  const agentSkillCount = operationsSummary.agent_skill_count ?? agentSkillLibrary.count ?? 'â€”';
+  const activeTaskCount = operationsSummary.active_task_count ?? tasks.active_count ?? 'â€”';
+  const waitingApprovalCount = operationsSummary.waiting_approval_count ?? tasks.waiting_approval_count ?? 'â€”';
+  const failedTaskCount = operationsSummary.failed_task_count ?? tasks.failed_count ?? 'â€”';
+  const mergeReviewReadyCount = operationsSummary.merge_review_ready_count ?? tasks.merge_review_ready_count ?? 0;
+  const mergeConflictTaskCount = operationsSummary.merge_conflict_task_count ?? tasks.merge_conflict_task_count ?? 0;
+  const mergeConflictTotal = operationsSummary.merge_conflict_total ?? tasks.merge_conflict_total ?? 0;
+  const mergeResolutionPolicies = operationsSummary.merge_resolution_policies ?? tasks.merge_resolution_policies ?? {};
+  const latestMergeTaskId = operationsSummary.latest_merge_task_id || tasks.latest_merge_task_id || 'â€”';
+  const latestMergeResolutionPolicy = operationsSummary.latest_merge_resolution_policy || tasks.latest_merge_resolution_policy || 'â€”';
+  const latestTaskId = operationsSummary.latest_task_id || tasks.latest_task_id || 'â€”';
+  const latestMergeReview = extractMergeReview(latestTask);
+  const latestMergeResolution = latestMergeReview.merge_resolution && typeof latestMergeReview.merge_resolution === 'object'
+    ? latestMergeReview.merge_resolution
+    : {};
+  const latestMergeSignals = deriveMergeReviewSignals(latestMergeReview, latestMergeResolution);
+  const latestMergeAvailable = Boolean(
+    latestMergeReview.merge_policy ||
+    latestMergeReview.resolution_policy ||
+    latestMergeResolution.policy
+  );
+  const latestMergeTaskLabel = latestTask?.task_id || latestMergeTaskId;
+  const latestMergeSource = latestMergeReview.merged_from_child_task_id || latestMergeReview.merged_from_task_id || 'â€”';
+  const latestMergeWorker = latestMergeReview.merged_from_worker || 'â€”';
+  const latestMergeConflictCount = latestMergeResolution.conflict_count ?? latestMergeReview.conflict_count ?? 0;
+  const latestMergeLinkedArtifacts = latestMergeReview.linked_artifact_count ?? 0;
+  const latestMergeCompletedChildren = latestMergeReview.completed_child_count ?? 0;
+  const latestMergeActiveChildren = latestMergeReview.active_child_count ?? 0;
+  const latestMergeWorkers = Array.isArray(latestMergeReview.workers_involved) ? latestMergeReview.workers_involved : [];
+  const latestMergePendingChildren = Array.isArray(latestMergeReview.pending_child_ids) ? latestMergeReview.pending_child_ids : [];
+  const latestMergeConfiguredPolicy = latestMergeSignals.configuredPolicy || 'Ã¢â‚¬â€';
+  const latestMergeEffectivePolicy = latestMergeSignals.effectivePolicy || latestMergeResolutionPolicy || 'Ã¢â‚¬â€';
+  const latestMergeActionable = latestMergeSignals.actionable;
+  const latestMergeOverrideActive = latestMergeSignals.overrideActive;
+  const latestMergeReviewState = latestMergeSignals.reviewState || 'Ã¢â‚¬â€';
+  const latestMergePolicyDelta = latestMergeSignals.policyDelta || 'Ã¢â‚¬â€';
+  const latestMergeNextAction = latestMergeSignals.nextAction || 'Ã¢â‚¬â€';
+  const latestMergeResolvedKeys = Array.isArray(latestMergeResolution.resolved_keys)
+    ? latestMergeResolution.resolved_keys
+    : Array.isArray(latestMergeReview.resolved_keys)
+      ? latestMergeReview.resolved_keys
+      : [];
+  const replayStatus = replaySignals.status || evalReplay.status || 'â€”';
+  const replayFocus = Array.isArray(replaySignals.focus) && replaySignals.focus.length > 0
+    ? replaySignals.focus
+    : evalReplay.focus;
+  const incidentOpenCount = incidentSignals.open_incident_count ?? (blockedTaskCount > 0 ? blockedTaskCount : attentionSignals.length);
+  const incidentStatus = incidentSignals.status || operationsSummary.overall_status || 'unknown';
+  const queueSegmentSource = queueLeaseRuntime.available === false
+    ? (queueLeaseSnapshot.source || 'dashboard_support')
+    : (queueLeaseRuntime.source || 'gateway_dashboard_payload');
+  const incidentSegmentSource = incidentRuntime.available === false
+    ? (incidentSnapshot.source || 'dashboard_support')
+    : (incidentRuntime.source || 'gateway_dashboard_payload');
+  const supportWriteSet = Array.isArray(contractWriteSet.dashboard_support) ? contractWriteSet.dashboard_support : [];
+  const gatewayWriteSet = Array.isArray(contractWriteSet.gateway_dashboard_payload) ? contractWriteSet.gateway_dashboard_payload : [];
+  const skillByPhase = agentSkillLibrary.by_phase || {};
+  const skillByCategory = agentSkillLibrary.by_category || {};
+  const latestLeaseExpiry = latestTask?.lease_expires_at || 'none reported';
+  const latestHeartbeat = latestTask?.heartbeat_at || 'none reported';
+  const latestWorker = latestTask?.delegated_to_worker || 'none';
+  const latestLeaseState = latestTask?.delegation_status || (latestWorker !== 'none' ? 'delegated' : 'idle');
+  const queueTone = handoffQueueDepth > 0 ? 'warn' : 'good';
+  const leaseTone = latestLeaseState === 'leased' ? 'good' : latestLeaseState === 'delegated' ? 'warn' : latestWorker !== 'none' ? 'warn' : 'muted';
+  const daemonTone = workerPanel.available === true ? 'good' : 'bad';
+  const workerTone = workerCount > 0 ? 'good' : 'bad';
+  const remoteAuthReadiness = deriveRemoteAuthSignals({
+    readiness,
+    snapshot,
+    authStatus,
+    completedCapabilities,
+    openPriorities,
+    gatewayModes,
+    uiStatus,
+  });
+
+  return `
+    <div class="control-banner" data-smoke="control-banner" data-segment="operator-surface">
+      <div class="control-banner-top">
+        <div>
+          <div class="control-title">Operations Control Center</div>
+          <div class="control-subtitle">
+            Canonical UI: ${escHtml(uiStatus.canonical_ui || 'web/index.html')} | Prototype: ${escHtml(uiStatus.dashboard_prototype || 'web/dashboard.html')}
+          </div>
+        </div>
+        <div class="control-status ${overallTone}">
+          ${escHtml(overallLabel)}
+          <small>${escHtml(overallDetail)}</small>
+        </div>
+      </div>
+      <div class="control-pill-row">
+        ${renderControlPill('Queue Depth', handoffQueueDepth, queueTone)}
+        ${renderControlPill('Lease State', latestLeaseState, leaseTone)}
+        ${renderControlPill('Worker Daemon', workerPanel.available === true ? 'online' : 'offline', daemonTone)}
+        ${renderControlPill('Contract', contractVersion, 'muted')}
+        ${renderControlPill('Mode', health.mode || 'â€”', controlTone(health.mode))}
+        ${renderControlPill('Readiness', overallLabel, overallTone)}
+        ${renderControlPill('Version', health.version || 'â€”', 'muted')}
+        ${renderControlPill('Trace Runs', traceRunCount, traceRunCount !== 'â€”' ? 'good' : 'muted')}
+        ${renderControlPill('Trace Coverage', traceCoverageCount, traceCoverageCount ? 'good' : 'muted')}
+        ${renderControlPill('Verified Signals', verifiedSignals, verifiedSignals ? 'good' : 'muted')}
+        ${renderControlPill('Attention Signals', attentionSignals.length, attentionSignals.length ? 'warn' : 'good')}
+        ${renderControlPill('Current Wave', currentWave, currentWave !== 'â€”' ? 'muted' : 'muted')}
+        ${renderControlPill('Last Verified', lastVerifiedCommand, 'muted')}
+        ${renderControlPill('Known Gaps', gaps.length, gaps.length ? 'warn' : 'good')}
+        ${renderControlPill('Completed', completedCapabilities.length, completedCapabilities.length ? 'good' : 'muted')}
+        ${renderControlPill('Recent Commands', recentCommands.length, recentCommands.length ? 'good' : 'muted')}
+        ${renderControlPill('Agent Skills', agentSkillCount, agentSkillCount !== 'â€”' ? 'good' : 'muted')}
+        ${renderControlPill('Task Total', taskTotal, taskTotal !== 'â€”' ? 'good' : 'muted')}
+        ${renderControlPill('Waiting Approval', waitingApprovalCount, waitingApprovalCount !== 'â€”' && Number(waitingApprovalCount) > 0 ? 'warn' : 'good')}
+      </div>
+    </div>
+
+    <div class="control-stack">
+      <div class="control-card" data-smoke="operations-summary">
+        <div class="control-card-title">Operations Summary</div>
+        <div class="control-lines">
+          ${renderControlLine('Overall status', overallLabel)}
+          ${renderControlLine('Suite status', suiteStatus)}
+          ${renderControlLine('Suite run', suiteRunText)}
+          ${renderControlLine('Current wave', currentWave)}
+          ${renderControlLine('Trace runs', operationsSummary.trace_runs ?? traceRunCount)}
+          ${renderControlLine('Latest trace status', latestTraceStatus)}
+          ${renderControlLine('Latest trace run', latestTraceRunId)}
+          ${renderControlLine('Metrics commands', metricsTotalCommands)}
+          ${renderControlLine('History total', historyTotal)}
+          ${renderControlLine('Agent skills', agentSkillCount)}
+          ${renderControlLine('Task total', taskTotal)}
+          ${renderControlLine('Active tasks', activeTaskCount)}
+          ${renderControlLine('Waiting approval', waitingApprovalCount)}
+          ${renderControlLine('Failed tasks', failedTaskCount)}
+          ${renderControlLine('Merge reviews', mergeReviewReadyCount)}
+          ${renderControlLine('Merge conflict tasks', mergeConflictTaskCount)}
+          ${renderControlLine('Merge conflict total', mergeConflictTotal)}
+          ${renderControlLine('Merge policies', summarizeObject(mergeResolutionPolicies))}
+          ${renderControlLine('Latest task', latestTaskId)}
+          ${renderControlLine('Attention signals', summarizeList(attentionSignals, 4))}
+        </div>
+      </div>
+
+      <div class="control-card" data-smoke="readiness-matrix">
+        <div class="control-card-title">Readiness Matrix</div>
+        <div class="control-lines">
+          ${Object.entries(readiness).length > 0
+            ? Object.entries(readiness).map(([key, value]) => renderControlLine(key, value)).join('')
+            : `<div class="control-empty">No readiness data available.</div>`}
+        </div>
+      </div>
+
+      ${renderRemoteAuthReadiness(remoteAuthReadiness)}
+
+      <div class="control-card" data-smoke="verification">
+        <div class="control-card-title">Verification</div>
+        <div class="control-lines">
+          ${renderControlLine('Tests available', tests.available === true ? 'yes' : tests.available === false ? 'no' : 'unknown')}
+          ${renderControlLine('Verified tests', verified.status || 'â€”')}
+          ${renderControlLine('Test run', verified.ran != null ? `${verified.ran} ran / ${verified.skipped ?? 0} skipped` : 'â€”')}
+          ${renderControlLine('Last verified', lastRun.command || snapshot.verified_test_command || 'unknown')}
+          ${renderControlLine('Result', lastRun.result || 'n/a')}
+        </div>
+      </div>
+
+      <div class="control-card" data-smoke="trace-monitoring">
+        <div class="control-card-title">Trace and Monitoring</div>
+        <div class="control-lines">
+          ${renderControlLine('Trace store', traceStatus.store || (traceStatus.available ? 'available' : 'offline'))}
+          ${renderControlLine('Trace coverage', summarizeList(traceCoverage, 4))}
+          ${renderControlLine('Trace status', traceStatusText)}
+          ${renderControlLine('Monitoring', monitoringSummary)}
+          ${renderControlLine('History success', successRate)}
+          ${renderControlLine('History latency', avgLatency)}
+          ${renderControlLine('Commands', totalCommands)}
+          ${renderControlLine('Error rate', errorRate)}
+        </div>
+      </div>
+
+      <div class="control-card" data-smoke="task-lifecycle">
+        <div class="control-card-title">Task Lifecycle</div>
+        <div class="control-lines">
+          ${renderControlLine('Task total', taskTotal)}
+          ${renderControlLine('Active tasks', activeTaskCount)}
+          ${renderControlLine('Waiting approval', waitingApprovalCount)}
+          ${renderControlLine('Failed tasks', failedTaskCount)}
+          ${renderControlLine('Latest task', latestTaskId)}
+          ${renderControlLine('Latest merge task', latestMergeTaskId)}
+          ${renderControlLine('Latest merge policy', latestMergeResolutionPolicy)}
+          ${renderControlLine('By status', summarizeObject(taskByStatus))}
+        </div>
+        <div class="control-event-list">
+          ${renderTaskList(recentTasks)}
+        </div>
+      </div>
+
+      <div class="control-card" data-smoke="latest-merge-review">
+        <div class="control-card-title">Latest Merge Review</div>
+        <div class="control-lines">
+          ${renderControlLine('Latest merge task', latestMergeTaskLabel)}
+          ${renderControlLine('Available', latestMergeAvailable ? 'yes' : 'no')}
+          ${renderControlLine('Merge policy', latestMergeReview.merge_policy || 'â€”')}
+          ${renderControlLine('Configured policy', latestMergeConfiguredPolicy)}
+          ${renderControlLine('Resolution policy', latestMergeEffectivePolicy)}
+          ${renderControlLine('Review state', latestMergeReviewState)}
+          ${renderControlLine('Actionable', latestMergeActionable ? 'yes' : 'no')}
+          ${renderControlLine('Override active', latestMergeOverrideActive ? 'yes' : 'no')}
+          ${renderControlLine('Policy delta', latestMergePolicyDelta)}
+          ${renderControlLine('Suggested next action', latestMergeNextAction)}
+          ${renderControlLine('Source child', latestMergeSource)}
+          ${renderControlLine('Merged by worker', latestMergeWorker)}
+          ${renderControlLine('Conflict count', latestMergeConflictCount)}
+          ${renderControlLine('Linked artifacts', latestMergeLinkedArtifacts)}
+          ${renderControlLine('Completed children', latestMergeCompletedChildren)}
+          ${renderControlLine('Active children', latestMergeActiveChildren)}
+          ${renderControlLine('Workers involved', latestMergeWorkers.length)}
+          ${renderControlLine('Resolved keys', latestMergeResolvedKeys.length)}
+          ${renderControlLine('Pending children', latestMergePendingChildren.length)}
+        </div>
+        <div class="control-chip-list" style="margin-top:8px">
+          ${renderValueChips('worker', latestMergeWorkers, 'good', 'No worker provenance reported.')}
+        </div>
+        <div class="control-chip-list" style="margin-top:6px">
+          ${renderControlPill('Actionable', latestMergeActionable ? 'yes' : 'no', latestMergeActionable ? 'warn' : 'good')}
+          ${renderControlPill('Override', latestMergeOverrideActive ? 'yes' : 'no', latestMergeOverrideActive ? 'warn' : 'good')}
+          ${renderControlPill('Review state', latestMergeReviewState, controlTone(latestMergeReviewState))}
+          ${renderControlPill('Policy delta', latestMergePolicyDelta, latestMergeOverrideActive ? 'warn' : 'good')}
+        </div>
+        <div class="control-chip-list" style="margin-top:6px">
+          ${renderValueChips('resolved', latestMergeResolvedKeys, 'muted', 'No resolved keys reported.')}
+        </div>
+        <div class="control-chip-list" style="margin-top:6px">
+          ${renderValueChips('pending', latestMergePendingChildren, 'warn', 'No pending children.')}
+        </div>
+      </div>
+
+      <div class="control-card" data-smoke="handoff-chain">
+        <div class="control-card-title">Handoff Chain</div>
+        <div class="control-lines">
+          ${renderControlLine('Root task', latestTask?.root_task_id || latestTaskId)}
+          ${renderControlLine('Child tasks', handoffGraph.summary?.child_count ?? handoffChildren.length)}
+          ${renderControlLine('Graph nodes', handoffGraph.summary?.node_count ?? 0)}
+          ${renderControlLine('Graph edges', handoffGraph.summary?.edge_count ?? 0)}
+          ${renderControlLine('Blocking child', latestTask?.blocked_by_task_id || 'none')}
+          ${renderControlLine('Merge reviews ready', mergeReviewReadyCount)}
+          ${renderControlLine('Merge policy mix', summarizeObject(mergeResolutionPolicies))}
+        </div>
+        <div class="control-chip-list" style="margin-top:8px">
+          ${renderObjectChips(byWorker, 'No worker assignment data yet.', 5)}
+        </div>
+        <div class="control-event-list">
+          ${renderTaskList(handoffChildren, 'No child tasks in the current handoff chain.')}
+        </div>
+      </div>
+
+      <div class="control-card" data-smoke="worker-inbox">
+        <div class="control-card-title">Worker Inbox</div>
+        <div class="control-lines">
+          ${renderControlLine('Workers', workerCount)}
+          ${renderControlLine('Delegated tasks', delegatedCount)}
+          ${renderControlLine('Running tasks', runningTaskCount)}
+          ${renderControlLine('Queued tasks', queuedTaskCount)}
+          ${renderControlLine('Blocked tasks', blockedTaskCount)}
+          ${renderControlLine('Handoff queue depth', handoffQueueDepth)}
+          ${renderControlLine('Oldest running age', runningTaskCount ? `${oldestRunningAge}s` : '0s')}
+        </div>
+        <div class="worker-grid" style="margin-top:8px">
+          ${renderWorkerGrid(workerRegistry, 'No workers available yet.')}
+        </div>
+      </div>
+
+      <div class="control-card" data-smoke="operability-signals" data-segment="queue-lease">
+        <div class="control-card-title">Queue / Lease / Worker Daemon</div>
+        <div class="control-lines">
+          ${renderControlLine('Worker daemon', workerPanel.available === true ? 'available' : 'offline')}
+          ${renderControlLine('Worker registry', workerCount)}
+          ${renderControlLine('Delegated tasks', delegatedCount)}
+          ${renderControlLine('Queue depth', handoffQueueDepth)}
+          ${renderControlLine('Queued tasks', queuedTaskCount)}
+          ${renderControlLine('Running tasks', runningTaskCount)}
+          ${renderControlLine('Latest task', latestTaskId || 'none')}
+          ${renderControlLine('Latest worker', latestWorker)}
+          ${renderControlLine('Lease state', latestLeaseState)}
+          ${renderControlLine('Lease expiry', latestLeaseExpiry)}
+          ${renderControlLine('Heartbeat', latestHeartbeat)}
+        </div>
+        <div class="control-chip-list" style="margin-top:8px">
+          ${renderControlPill('Queue', handoffQueueDepth, queueTone)}
+          ${renderControlPill('Lease', latestLeaseState, leaseTone)}
+          ${renderControlPill('Daemon', workerPanel.available === true ? 'online' : 'offline', daemonTone)}
+          ${renderControlPill('Workers', workerCount, workerTone)}
+        </div>
+      </div>
+      <div class="control-card" data-smoke="signal-segments">
+        <div class="control-card-title">Stable Signal Segments</div>
+        <div class="control-lines">
+          ${renderControlLine('Contract version', contractVersion)}
+          ${renderControlLine('Support write-set', supportWriteSet.length)}
+          ${renderControlLine('Gateway write-set', gatewayWriteSet.length)}
+        </div>
+        <div class="control-event-list">
+          <div class="control-event" data-smoke="signal-queue-lease">
+            <strong>Queue/Lease</strong>
+            <small>${escHtml(`source=${queueSegmentSource} depth=${handoffQueueDepth} queued=${queuedTaskCount} running=${runningTaskCount}`)}</small>
+          </div>
+          <div class="control-event" data-smoke="signal-replay">
+            <strong>Replay</strong>
+            <small>${escHtml(`source=${replaySignals.source || 'dashboard_support'} status=${normalizeControlValue(replayStatus)} focus=${summarizeList(replayFocus, 2)}`)}</small>
+          </div>
+          <div class="control-event" data-smoke="signal-incident">
+            <strong>Incident</strong>
+            <small>${escHtml(`source=${incidentSegmentSource} status=${incidentStatus} open=${incidentOpenCount}`)}</small>
+          </div>
+        </div>
+      </div>
+      <div class="control-card" data-smoke="blocker-workbench" data-segment="incident">
+        <div class="control-card-title">Blocker Workbench</div>
+        <div class="control-lines">
+          ${renderControlLine('Blocked tasks', blockedTaskCount)}
+          ${renderControlLine('Oldest blocked age', blockedTaskCount ? `${oldestBlockedAge}s` : '0s')}
+          ${renderControlLine('By blocked kind', summarizeObject(byBlockedKind))}
+        </div>
+        <div class="control-event-list">
+          ${renderTaskList(recentBlockers, 'No blockers currently active.')}
+        </div>
+      </div>
+
+      <div class="control-card" data-smoke="command-context" data-segment="replay">
+        <div class="control-card-title">Command Context</div>
+        <div class="control-lines">
+          ${renderControlLine('Gateway modes', summarizeObject(gatewayModes))}
+          ${renderControlLine('UI status', summarizeObject(uiStatus))}
+          ${renderControlLine('Eval replay', replayStatus)}
+          ${renderControlLine('Replay focus', summarizeList(replayFocus, 3))}
+          ${renderControlLine('Last command', lastCommand ? summarizeObject(lastCommand, 6) : 'none')}
+          ${renderControlLine('Recent commands', recentCommands.length)}
+        </div>
+        <div class="control-chip-list" style="margin-top:8px">
+          ${Object.entries(authStatus).length > 0
+            ? Object.entries(authStatus).map(([key, value]) => renderControlChip(key, value, controlTone(value))).join('')
+            : `<span class="control-empty">Auth contract not reported.</span>`}
+        </div>
+        <div class="control-event-list">
+          ${renderRecentCommandList(commandTrail)}
+        </div>
+        <div class="control-chip-list" style="margin-top:8px">
+          ${renderObjectChips(principalCounts, 'No principal data', 4)}
+        </div>
+      </div>
+
+      <div class="control-card" data-smoke="agent-skill-library">
+        <div class="control-card-title">Agent Skill Library</div>
+        <div class="control-lines">
+          ${renderControlLine('Available', agentSkillLibrary.available ? 'yes' : 'no')}
+          ${renderControlLine('Skill count', agentSkillCount)}
+          ${renderControlLine('By phase', summarizeObject(skillByPhase))}
+          ${renderControlLine('By category', summarizeObject(skillByCategory))}
+        </div>
+        <div class="control-chip-list" style="margin-top:8px">
+          ${renderObjectChips(skillByPhase, 'No phase data yet.', 6)}
+        </div>
+        <div class="control-chip-list" style="margin-top:6px">
+          ${renderObjectChips(skillByCategory, 'No category data yet.', 6)}
+        </div>
+      </div>
+
+      <div class="control-card" data-smoke="delivery-snapshot">
+        <div class="control-card-title">Delivery Snapshot</div>
+        <div class="control-lines">
+          ${renderControlLine('Current wave', snapshot.current_wave || 'â€”')}
+          ${renderControlLine('Open priorities', summarizeList(openPriorities, 3))}
+          ${renderControlLine('Known gaps', summarizeList(gaps, 4))}
+          ${renderControlLine('Deferred items', summarizeList(deferredItems, 3))}
+          ${renderControlLine('Completed capabilities', completedCapabilities.length ? `${completedCapabilities.length} done` : 'none')}
+        </div>
+        <div class="control-chip-list" style="margin-top:8px">
+          ${trackEntries.length > 0
+            ? trackEntries.map(([key, value]) => renderControlChip(key, value, controlTone(value))).join('')
+            : `<span class="control-empty">No track data available.</span>`}
+        </div>
+        <div class="control-chip-list" style="margin-top:6px">
+          ${completedCapabilities.length > 0
+            ? completedCapabilities.slice(0, 5).map(item => renderControlChip('done', item, 'good')).join('')
+            : `<span class="control-empty">No completed capabilities reported.</span>`}
+        </div>
+        <div class="control-chip-list" style="margin-top:6px">
+          ${deferredItems.length > 0
+            ? deferredItems.slice(0, 4).map(item => renderControlChip('deferred', item, 'warn')).join('')
+            : `<span class="control-empty">No deferred items reported.</span>`}
+        </div>
+        <div class="control-chip-list" style="margin-top:6px">
+          ${openPriorities.length > 0
+            ? openPriorities.slice(0, 4).map(item => renderControlChip('priority', item, 'muted')).join('')
+            : `<span class="control-empty">No open priorities reported.</span>`}
+        </div>
+        <div class="control-chip-list" style="margin-top:6px">
+          ${evalReplay.manifest ? renderControlChip('manifest', evalReplay.manifest, 'muted') : ''}
+          ${evalReplay.replay_seed ? renderControlChip('seed', evalReplay.replay_seed, 'muted') : ''}
+          ${traceSpanCount !== 'â€”' ? renderControlChip('spans', traceSpanCount, 'muted') : ''}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function timeNow() {
+  return new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+}
+
+function scrollBottom() {
+  const m = el('messages');
+  m.scrollTop = m.scrollHeight;
+}
+
+function setInput(text) {
+  const inp = el('cmd-input');
+  inp.value = text;
+  inp.focus();
+  inp.style.height = 'auto';
+  inp.style.height = Math.min(inp.scrollHeight, 140) + 'px';
+  // Move cursor to end
+  inp.selectionStart = inp.selectionEnd = inp.value.length;
+}
+
+function clearChat() {
+  el('messages').innerHTML = '';
+  addBotMessage('Chat cleared.', 'system');
+}
+
+function showToast(msg, dur = 2500) {
+  const t = el('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), dur);
+}
+</script>
+</body>
+</html>
+

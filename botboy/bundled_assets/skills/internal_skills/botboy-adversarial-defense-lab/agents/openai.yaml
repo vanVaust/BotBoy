@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Adversarial Defense Lab"
+  short_description: "Probe and harden BotBoy defensively."
+  default_prompt: "Use $botboy-adversarial-defense-lab to examine a BotBoy surface for safe defensive hardening and abuse-case regressions."
+
+policy:
+  allow_implicit_invocation: true

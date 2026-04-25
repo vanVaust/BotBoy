@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Communication Doctrine"
+  short_description: "Write crisp handoffs and status updates."
+  default_prompt: "Use $botboy-communication-doctrine to turn a BotBoy decision, update, or handoff into a concise operational brief."
+
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Runtime Policy Auditor"
+  short_description: "Audit BotBoy sandbox and approval behavior."
+  default_prompt: "Use $botboy-runtime-policy-auditor to inspect a BotBoy skill or command path and explain the expected runtime and approval decision."
+
+policy:
+  allow_implicit_invocation: true

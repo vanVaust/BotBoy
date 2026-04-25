@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Isomorphism Invariance Mapper"
+  short_description: "Map structural equivalence and invariants."
+  default_prompt: "Use $botboy-isomorphism-invariance-mapper to compare two BotBoy structures, flows, or contracts through invariants instead of superficial diffs."
+
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Formal Logic Engine"
+  short_description: "Check invariants, rules, and contradictions."
+  default_prompt: "Use $botboy-formal-logic-engine to turn a BotBoy problem into explicit facts, rules, implications, and contradictions."
+
+policy:
+  allow_implicit_invocation: true

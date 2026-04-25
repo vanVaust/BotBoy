@@ -1,0 +1,7 @@
+interface:
+  display_name: "BotBoy Multi Domain Simulator"
+  short_description: "Model bounded scenarios before implementation."
+  default_prompt: "Use $botboy-multi-domain-simulator to turn a BotBoy system question into a safe bounded simulation with explicit actors, state, and outcomes."
+
+policy:
+  allow_implicit_invocation: true
