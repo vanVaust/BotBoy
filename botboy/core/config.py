@@ -255,9 +255,11 @@ class BotBoyConfig:
         if v := os.getenv("OLLAMA_URL"):
             self.llm.api_url = v
         if v := os.getenv("OPENAI_API_KEY"):
-            self.llm.api_key = v
+            if self.llm.backend == "openai" or not self.llm.api_key:
+                self.llm.api_key = v
         if v := os.getenv("ANTHROPIC_API_KEY"):
-            self.llm.api_key = v
+            if self.llm.backend == "anthropic" or not self.llm.api_key:
+                self.llm.api_key = v
         if v := os.getenv("BOTBOY_JWT_SECRET"):
             self.security.jwt_secret = v
         if v := os.getenv("BOTBOY_JWT_SECRET_FILE"):

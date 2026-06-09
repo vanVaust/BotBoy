@@ -74,7 +74,7 @@ class JWTAuth:
     REFRESH_TTL = 604800     # 7 days
     MIN_SECRET_LEN = 32
 
-    def __init__(self, secret: str = "", *, allow_generate: bool = False) -> None:
+    def __init__(self, secret: str = "", *, allow_generate: bool = False, revocation_store: Any = None) -> None:
         if not secret:
             secret = os.getenv("BOTBOY_JWT_SECRET", "")
         if not secret and allow_generate:
@@ -84,6 +84,8 @@ class JWTAuth:
         if len(secret) < self.MIN_SECRET_LEN:
             raise ValueError(f"JWT secret must be at least {self.MIN_SECRET_LEN} characters")
         self._secret = secret.encode()
+        self._revocation_store = revocation_store
+        self._local_revoked_jtis = set()
 
     @staticmethod
     def _coerce_principal(
@@ -192,31 +194,46 @@ class JWTAuth:
             return header_value[7:].strip()
         return ""
 
+    def is_revoked(self, jti: str) -> bool:
+        if self._revocation_store and hasattr(self._revocation_store, "is_revoked"):
+            return self._revocation_store.is_revoked(jti)
+        return jti in self._local_revoked_jtis
+
+    def revoke_jti(self, jti: str, exp: int = 0) -> None:
+        if self._revocation_store and hasattr(self._revocation_store, "revoke"):
+            self._revocation_store.revoke(jti, exp)
+        else:
+            self._local_revoked_jtis.add(jti)
+
+    def revoke_token(self, token: str) -> bool:
+        """Revokes a specific token."""
+        payload = self._decode(token)
+        if not payload:
+            return False
+        jti = payload.get("jti")
+        if not jti:
+            return False
+        self.revoke_jti(jti, payload.get("exp", 0))
+        return True
+
     def verify(self, token: str, expected_type: str = "access") -> Optional[TokenInfo]:
         payload = self._decode(token)
         if not payload:
             return None
         now = int(time.time())
-        expires_at = payload.get("exp", 0)
-        issued_at = payload.get("iat", 0)
-        principal_id = payload.get("sub")
-        roles = payload.get("roles", [])
-        if not isinstance(expires_at, int) or not isinstance(issued_at, int):
-            return None
-        if not isinstance(principal_id, str) or not principal_id.strip():
-            return None
-        if not isinstance(roles, list):
-            return None
-        if expires_at < now:
+        if payload.get("exp", 0) < now:
             return None
         if payload.get("type") != expected_type:
             return None
+        jti = payload.get("jti", "")
+        if jti and self.is_revoked(jti):
+            return None
         return TokenInfo(
-            principal_id=principal_id,
-            roles=[str(role) for role in roles],
-            issued_at=issued_at,
-            expires_at=expires_at,
-            token_id=payload.get("jti", ""),
+            principal_id=payload["sub"],
+            roles=payload.get("roles", []),
+            issued_at=payload.get("iat", 0),
+            expires_at=payload.get("exp", 0),
+            token_id=jti,
             principal_type=payload.get("ptype", "user"),
             credential_source=payload.get("src", "jwt"),
         )
@@ -226,20 +243,21 @@ class JWTAuth:
         if not payload:
             return None
         now = int(time.time())
-        expires_at = payload.get("exp", 0)
-        principal_id = payload.get("sub")
-        roles = payload.get("roles", ["user"])
-        if not isinstance(expires_at, int) or expires_at < now:
-            return None
-        if not isinstance(principal_id, str) or not principal_id.strip():
-            return None
-        if not isinstance(roles, list):
+        if payload.get("exp", 0) < now:
             return None
         if payload.get("type") != "refresh":
             return None
+        jti = payload.get("jti", "")
+        if jti and self.is_revoked(jti):
+            return None
+        
+        # Optionally, revoke the used refresh token (refresh token rotation)
+        self.revoke_jti(jti, payload.get("exp", 0))
+
         return self.create_pair(
-            principal_id,
-            [str(role) for role in roles],
+            payload["sub"],
+            payload.get("roles", ["user"]),
             principal_type=payload.get("ptype", "user"),
             credential_source=payload.get("src", "jwt"),
         )
+

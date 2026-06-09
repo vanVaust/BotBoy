@@ -3,11 +3,6 @@ from __future__ import annotations
 import unittest
 
 from botboy.gateway.simple_task_write_handlers import (
-    handle_queue_lease_acquire,
-    handle_queue_lease_claim_next,
-    handle_queue_lease_report,
-    handle_queue_lease_release,
-    handle_queue_lease_renew,
     handle_task_cancel,
     handle_task_merge_action,
     handle_task_reassign,
@@ -57,15 +52,6 @@ class _FakeStore:
             "effective_status": "ready",
             "health": "unknown",
         }
-        self.lease = {
-            "lease_id": "lease-1",
-            "queue_name": "planner.node-1",
-            "node_id": "node-1",
-            "task_id": "task-1",
-            "lease_status": "active",
-            "is_active": True,
-            "metadata": {"fencing_token": "fence-1"},
-        }
 
     def get_task(self, task_id: str):
         if self.task and self.task.task_id == task_id:
@@ -107,61 +93,6 @@ class _FakeStore:
 
     def worker_node_summary(self):
         return {"node_count": 1, "healthy_count": 1, "draining_count": int(self.node["effective_status"] == "draining")}
-
-    def queue_summary(self):
-        return {"queue_count": 1, "active_lease_count": int(self.lease["lease_status"] == "active")}
-
-    def acquire_queue_lease(self, **kwargs):
-        self.lease = {
-            "lease_id": "lease-1",
-            "queue_name": kwargs["queue_name"],
-            "node_id": kwargs["node_id"],
-            "task_id": kwargs.get("task_id", ""),
-            "lease_status": "active",
-            "is_active": True,
-            "metadata": {"fencing_token": "fence-1"},
-        }
-        return dict(self.lease)
-
-    def claim_next_queue_lease(self, **kwargs):
-        self.lease = {
-            "lease_id": "lease-1",
-            "queue_name": kwargs["queue_name"],
-            "node_id": kwargs["node_id"],
-            "task_id": self.task.task_id,
-            "lease_status": "active",
-            "is_active": True,
-            "metadata": {"fencing_token": "fence-1"},
-        }
-        self.task.status = "running"
-        return {"lease": dict(self.lease), "task": self.task.to_dict(), "summary": self.queue_summary()}
-
-    def renew_queue_lease(self, lease_id: str, **kwargs):
-        if lease_id != self.lease["lease_id"]:
-            raise ValueError("Unknown queue lease")
-        self.lease["renewed"] = True
-        return dict(self.lease)
-
-    def release_queue_lease(self, lease_id: str, **kwargs):
-        if lease_id != self.lease["lease_id"]:
-            raise ValueError("Unknown queue lease")
-        self.lease["lease_status"] = "released"
-        self.lease["is_active"] = False
-        return dict(self.lease)
-
-    def report_queue_lease_result(self, lease_id: str, **kwargs):
-        if lease_id != self.lease["lease_id"]:
-            raise ValueError("Unknown queue lease")
-        self.task.status = "completed" if kwargs.get("success") else "queued" if kwargs.get("transient") else "failed"
-        self.lease["lease_status"] = "released"
-        self.lease["is_active"] = False
-        return {
-            "reported": True,
-            "retry_scheduled": bool(kwargs.get("transient")),
-            "task": self.task.to_dict(),
-            "lease": dict(self.lease),
-            "summary": self.queue_summary(),
-        }
 
 
 class _FakeBot:
@@ -262,73 +193,6 @@ class SimpleTaskWriteHandlersTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(payload["registered"])
         self.assertEqual(payload["node"]["node_id"], "node-2")
-
-    def test_handle_queue_lease_lifecycle(self) -> None:
-        handler = _FakeHandler()
-        handle_queue_lease_acquire(
-            handler,
-            {"queue_name": "planner.node-1", "node_id": "node-1", "task_id": "task-1", "lease_ttl_seconds": 120},
-        )
-        acquire_payload, acquire_status = handler.json_payloads[-1]
-        handle_queue_lease_claim_next(handler, {"queue_name": "planner.node-1", "node_id": "node-1"})
-        claim_payload, claim_status = handler.json_payloads[-1]
-        handle_queue_lease_renew(handler, "lease-1", {"lease_ttl_seconds": 120, "fencing_token": "fence-1"})
-        renew_payload, renew_status = handler.json_payloads[-1]
-        handle_queue_lease_report(
-            handler,
-            "lease-1",
-            {
-                "success": True,
-                "summary": "done",
-                "result": {"ok": True},
-                "node_id": "node-1",
-                "worker_id": "planner",
-                "fencing_token": "fence-1",
-            },
-        )
-        report_payload, report_status = handler.json_payloads[-1]
-        handle_queue_lease_release(
-            handler,
-            "lease-1",
-            {
-                "reason": "done",
-                "node_id": "node-1",
-                "worker_id": "planner",
-                "fencing_token": "fence-1",
-            },
-        )
-        release_payload, release_status = handler.json_payloads[-1]
-
-        self.assertEqual(acquire_status, 200)
-        self.assertTrue(acquire_payload["acquired"])
-        self.assertEqual(claim_status, 200)
-        self.assertTrue(claim_payload["claimed"])
-        self.assertEqual(renew_status, 200)
-        self.assertTrue(renew_payload["renewed"])
-        self.assertEqual(report_status, 200)
-        self.assertTrue(report_payload["reported"])
-        self.assertEqual(release_status, 200)
-        self.assertTrue(release_payload["released"])
-        self.assertEqual(release_payload["lease"]["lease_status"], "released")
-
-    def test_handle_queue_lease_mutations_require_binding_fields(self) -> None:
-        handler = _FakeHandler()
-
-        handle_queue_lease_renew(handler, "lease-1", {"lease_ttl_seconds": 120})
-        renew_payload, renew_status = handler.json_payloads[-1]
-
-        handle_queue_lease_report(handler, "lease-1", {"success": True, "summary": "done"})
-        report_payload, report_status = handler.json_payloads[-1]
-
-        handle_queue_lease_release(handler, "lease-1", {"reason": "done"})
-        release_payload, release_status = handler.json_payloads[-1]
-
-        self.assertEqual(renew_status, 400)
-        self.assertEqual(renew_payload["error"], "Missing fencing_token")
-        self.assertEqual(report_status, 400)
-        self.assertEqual(report_payload["error"], "Missing node_id")
-        self.assertEqual(release_status, 400)
-        self.assertEqual(release_payload["error"], "Missing node_id")
 
     def test_handle_worker_node_heartbeat(self) -> None:
         handler = _FakeHandler()

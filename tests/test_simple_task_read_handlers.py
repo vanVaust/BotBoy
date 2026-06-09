@@ -3,7 +3,6 @@ from __future__ import annotations
 import unittest
 
 from botboy.gateway.simple_task_read_handlers import (
-    handle_queue_leases_get,
     handle_task_artifacts,
     handle_task_blockers,
     handle_task_children,
@@ -16,7 +15,6 @@ from botboy.gateway.simple_task_read_handlers import (
     handle_traces_get,
     handle_worker_detail,
     handle_worker_nodes_get,
-    handle_worker_queues_get,
     handle_workers_get,
 )
 
@@ -98,14 +96,6 @@ class _FakeStore:
             status="queued",
         )
         self.records = [self.root, self.child]
-        self.lease = {
-            "lease_id": "lease-1",
-            "queue_name": "planner.node-1",
-            "node_id": "node-1",
-            "task_id": "task-root",
-            "lease_status": "active",
-            "metadata": {"fencing_token": "fence-secret", "claimed_at": "now"},
-        }
 
     def summary(self) -> dict:
         return {"total": len(self.records)}
@@ -127,12 +117,6 @@ class _FakeStore:
 
     def worker_node_summary(self):
         return {"node_count": 1, "healthy_count": 1, "draining_count": 0, "queue_count": 1}
-
-    def queue_summary(self):
-        return {"queue_count": 1, "active_lease_count": 1, "queue_depths": {"planner.node-1": 1}}
-
-    def list_queue_leases(self, **kwargs):
-        return [dict(self.lease)]
 
 
 class _FakeBot:
@@ -250,20 +234,12 @@ class SimpleTaskReadHandlersTest(unittest.TestCase):
         workers_payload, _ = handler.json_payloads[-1]
         handle_worker_nodes_get(handler, {})
         worker_nodes_payload, _ = handler.json_payloads[-1]
-        handle_worker_queues_get(handler, {})
-        queues_payload, _ = handler.json_payloads[-1]
-        handle_queue_leases_get(handler, {"queue_name": ["planner.node-1"], "include_expired": ["true"]})
-        leases_payload, _ = handler.json_payloads[-1]
         handle_worker_detail(handler, "planner")
         worker_payload, _ = handler.json_payloads[-1]
         self.assertTrue(merge_payload["merge"]["decorated"])
         self.assertEqual(blockers_payload["total"], 1)
         self.assertEqual(workers_payload["worker_count"], 1)
         self.assertEqual(worker_nodes_payload["summary"]["node_count"], 1)
-        self.assertEqual(queues_payload["summary"]["queue_count"], 1)
-        self.assertEqual(leases_payload["leases"][0]["lease_id"], "lease-1")
-        self.assertNotIn("fencing_token", leases_payload["leases"][0]["metadata"])
-        self.assertEqual(leases_payload["leases"][0]["metadata"]["claimed_at"], "now")
         self.assertEqual(worker_payload["worker"]["worker_id"], "planner")
         self.assertEqual(worker_payload["task_count"], 1)
 

@@ -70,12 +70,6 @@ def build_help_response(bot) -> dict:
     worker node register <node> <worker> [endpoint]  Register a worker node
     worker node heartbeat <node> [status]  Refresh a worker-node lease
     worker node drain <node> [reason]  Mark a worker node as draining
-    worker lease queues  Show execution queues and active lease depth
-    worker lease list [queue]  Show queue leases
-    worker lease acquire <queue> <node> [task]  Acquire a queue lease
-    worker lease renew <lease>  Renew a queue lease
-    worker lease release <lease> [reason]  Release a queue lease
-    worker-daemon         External poll-loop worker for the local task store
 
   ORCHESTRATION
     handoff <worker> <command>  Delegate to a worker inside the current task
@@ -98,7 +92,6 @@ def build_help_response(bot) -> dict:
     skillroute <query>    Suggest agent skills for a query
     contracts [name]      Inspect skill/tool contracts
     evals [wave] [json|text]  Run an eval/replay baseline
-    security remote-readiness [host]  Check remote/auth rollout readiness
     help                  This help message
     exit / quit           Exit interactive mode""".format(version=bot.VERSION)
     return {"success": True, "output": help_text, "type": "help"}

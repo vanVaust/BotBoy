@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import unittest
-import uuid
 from pathlib import Path
 
 from botboy.__main__ import BotBoy
@@ -78,37 +77,17 @@ class ReleaseRuntimeTest(unittest.TestCase):
 
     def test_worker_node_commands_work(self) -> None:
         bot = self._make_bot()
-        node_id = f"node-release-{uuid.uuid4().hex[:8]}"
-        queue_name = f"planner.{node_id}"
-        register = asyncio.run(bot.process_command(f"worker node register {node_id} planner", principal="release.test"))
+        register = asyncio.run(bot.process_command("worker node register node-release planner", principal="release.test"))
         listing = asyncio.run(bot.process_command("worker node list", principal="release.test"))
-        queues = asyncio.run(bot.process_command("worker lease queues", principal="release.test"))
-        lease = asyncio.run(
-            bot.process_command(f"worker lease acquire {queue_name} {node_id}", principal="release.test")
-        )
-        lease_id = lease["data"]["lease"]["lease_id"]
-        leases = asyncio.run(bot.process_command(f"worker lease list {queue_name}", principal="release.test"))
-        renew = asyncio.run(bot.process_command(f"worker lease renew {lease_id}", principal="release.test"))
-        release = asyncio.run(bot.process_command(f"worker lease release {lease_id} done", principal="release.test"))
         heartbeat = asyncio.run(
-            bot.process_command(f"worker node heartbeat {node_id} running", principal="release.test")
+            bot.process_command("worker node heartbeat node-release running", principal="release.test")
         )
-        drain = asyncio.run(bot.process_command(f"worker node drain {node_id} maintenance", principal="release.test"))
+        drain = asyncio.run(bot.process_command("worker node drain node-release maintenance", principal="release.test"))
         status = asyncio.run(bot.process_command("status", principal="release.test"))
         self.assertTrue(register["success"])
-        self.assertIn(node_id, register["output"])
+        self.assertIn("node-release", register["output"])
         self.assertTrue(listing["success"])
         self.assertIn("Worker nodes", listing["output"])
-        self.assertTrue(queues["success"])
-        self.assertIn("Execution queues", queues["output"])
-        self.assertTrue(lease["success"])
-        self.assertIn("Queue lease acquired", lease["output"])
-        self.assertTrue(leases["success"])
-        self.assertIn(lease_id, leases["output"])
-        self.assertTrue(renew["success"])
-        self.assertIn("renewed", renew["output"])
-        self.assertTrue(release["success"])
-        self.assertIn("released", release["output"])
         self.assertTrue(heartbeat["success"])
         self.assertIn("heartbeat", heartbeat["output"].lower())
         self.assertTrue(drain["success"])

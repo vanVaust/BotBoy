@@ -6,13 +6,6 @@ import time
 from typing import Optional
 
 from botboy.tasks import TASK_STATUS_COMPLETED, TASK_STATUS_FAILED, TaskContext
-from botboy.workflow_ir import (
-    WorkflowReplayRecorder,
-    build_policy_decision,
-    compile_workflow_ir,
-    workflow_step_from_spec,
-)
-from botboy.workflow_ir_persistence import persist_workflow_ir_snapshot
 
 OPTIONAL_ROUTE_ERRORS = (
     RuntimeError,
@@ -36,14 +29,6 @@ BEST_EFFORT_ARTIFACT_ERRORS = (
     json.JSONDecodeError,
 )
 OPTIONAL_REFLECTION_ERRORS = OPTIONAL_ROUTE_ERRORS + (sqlite3.Error,)
-BEST_EFFORT_WORKFLOW_ERRORS = (
-    OSError,
-    RuntimeError,
-    sqlite3.Error,
-    TypeError,
-    ValueError,
-    json.JSONDecodeError,
-)
 
 
 class CommandExecutionService:
@@ -327,98 +312,6 @@ class CommandExecutionService:
         except BEST_EFFORT_ARTIFACT_ERRORS:
             pass
 
-    def _persist_live_workflow_ir(
-        self,
-        *,
-        command: str,
-        result: dict,
-        task_ctx: Optional[TaskContext],
-        task_status: str,
-        principal_id: str,
-        request_id: str,
-        roles: list[str],
-        approval_context: dict,
-    ) -> None:
-        if not self.bot.task_store:
-            return
-        try:
-            workflow_id = f"wf-live-{task_ctx.task_id}" if task_ctx and task_ctx.task_id else ""
-            workflow = compile_workflow_ir(
-                goal=command,
-                step_specs=[
-                    {
-                        "step_id": "s1",
-                        "command": command,
-                        "request_id": request_id,
-                        "approval_context": dict(approval_context),
-                        "metadata": {"result_type": str(result.get("type", ""))},
-                    }
-                ],
-                principal=principal_id,
-                request_id=request_id,
-                workflow_id=workflow_id,
-                metadata={
-                    "runtime_hook": "command_execution_service",
-                    "task_id": task_ctx.task_id if task_ctx else "",
-                    "task_status": task_status,
-                },
-            )
-            step = workflow_step_from_spec(
-                {
-                    "step_id": workflow.steps[0].step_id if workflow.steps else "s1",
-                    "command": workflow.steps[0].command if workflow.steps else command,
-                    "request_id": request_id,
-                    "approval_context": dict(approval_context),
-                },
-                index=0,
-                default_request_id=request_id,
-            )
-            decision = build_policy_decision(
-                workflow_id=workflow.workflow_id,
-                step=step,
-                principal=principal_id,
-                roles=roles,
-                approval_context=approval_context,
-                surface="live_runtime_command",
-            )
-            workflow.policy_decisions = [decision]
-            replay = WorkflowReplayRecorder(workflow.workflow_id)
-            replay.record(
-                "workflow_started",
-                status="running",
-                payload={
-                    "task_id": task_ctx.task_id if task_ctx else "",
-                    "command": command,
-                },
-            )
-            replay.record(
-                "step_completed" if result.get("success", False) else "step_failed",
-                step_id=step.step_id,
-                status=task_status,
-                payload={
-                    "result_success": bool(result.get("success", False)),
-                    "result_type": str(result.get("type", "")),
-                },
-            )
-            replay.record(
-                "workflow_completed",
-                status=task_status,
-                payload={"task_status": task_status},
-            )
-            persist_workflow_ir_snapshot(
-                self.bot.task_store,
-                workflow_ir=workflow,
-                policy_decisions=[decision],
-                replay_events=replay.events,
-                task_id=task_ctx.task_id if task_ctx else "",
-                request_id=request_id,
-                principal=principal_id,
-                source="command_execution",
-                status=task_status,
-            )
-        except BEST_EFFORT_WORKFLOW_ERRORS:
-            pass
-
     async def process_command(
         self,
         raw_command: str,
@@ -529,16 +422,6 @@ class CommandExecutionService:
             result["data"].setdefault("trace", {"run_id": trace_ctx.run_id, "trace_id": trace_ctx.trace_id})
         result = self.bot._decorate_with_task(result, task_ctx, task_status)
         self._write_eval_artifact(result, task_ctx=task_ctx)
-        self._persist_live_workflow_ir(
-            command=command,
-            result=result,
-            task_ctx=task_ctx,
-            task_status=task_status,
-            principal_id=principal_id,
-            request_id=trace_request_id,
-            roles=roles,
-            approval_context=effective_approval_context,
-        )
 
         if self.bot.task_store and task_ctx:
             self.bot.task_store.update_status(

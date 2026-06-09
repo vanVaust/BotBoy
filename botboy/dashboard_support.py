@@ -8,116 +8,6 @@ from botboy.resources import status_snapshot_path
 from botboy.runtime import available_modules
 
 
-CONTROL_CENTER_CONTRACT_VERSION = "ops-2026-04-v1"
-
-
-def _as_int(value: Any, default: int = 0) -> int:
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return default
-
-
-def _as_list(value: Any) -> list[Any]:
-    return list(value) if isinstance(value, list) else []
-
-
-def _build_control_center_contract(
-    *,
-    status_snapshot: dict[str, Any],
-    operations_summary: dict[str, Any],
-    task_summary: dict[str, Any],
-    readiness: dict[str, Any],
-) -> dict[str, Any]:
-    ui_status = status_snapshot.get("ui_status", {}) if isinstance(status_snapshot.get("ui_status"), dict) else {}
-    eval_replay = status_snapshot.get("eval_replay", {}) if isinstance(status_snapshot.get("eval_replay"), dict) else {}
-    gateway_modes = status_snapshot.get("gateway_modes", {}) if isinstance(status_snapshot.get("gateway_modes"), dict) else {}
-    attention_signals = _as_list(operations_summary.get("attention_signals"))
-    known_gaps = _as_list(status_snapshot.get("known_gaps"))
-    blocked_count = _as_int(operations_summary.get("blocked_count"))
-    failed_task_count = _as_int(operations_summary.get("failed_task_count"))
-    waiting_approval_count = _as_int(operations_summary.get("waiting_approval_count"))
-
-    queue_snapshot = {
-        "handoff_queue_depth": _as_int(
-            operations_summary.get("handoff_queue_depth", task_summary.get("handoff_queue_depth"))
-        ),
-        "queued_count": _as_int(operations_summary.get("queued_count", task_summary.get("queued_count"))),
-        "running_count": _as_int(operations_summary.get("running_count", task_summary.get("running_count"))),
-        "delegated_count": _as_int(operations_summary.get("delegated_count", task_summary.get("delegated_count"))),
-        "worker_count": _as_int(operations_summary.get("worker_count", task_summary.get("worker_count"))),
-        "stale_lease_count": _as_int(
-            operations_summary.get("stale_lease_count", task_summary.get("stale_lease_count"))
-        ),
-        "recoverable_lease_count": _as_int(
-            operations_summary.get("recoverable_lease_count", task_summary.get("recoverable_lease_count"))
-        ),
-        "source": "dashboard_support",
-    }
-
-    incident_snapshot = {
-        "status": str(operations_summary.get("overall_status", "unknown") or "unknown"),
-        "attention_signals": attention_signals,
-        "known_gaps": known_gaps,
-        "known_gap_count": len(known_gaps),
-        "blocked_count": blocked_count,
-        "failed_task_count": failed_task_count,
-        "waiting_approval_count": waiting_approval_count,
-        "open_incident_count": int(bool(known_gaps)) + int(bool(attention_signals)) + int((blocked_count + failed_task_count) > 0),
-        "source": "dashboard_support",
-    }
-
-    replay_segment = {
-        "status": str(eval_replay.get("status", "unknown") or "unknown"),
-        "focus": _as_list(eval_replay.get("focus")),
-        "manifest": str(eval_replay.get("manifest", "") or ""),
-        "replay_seed": str(eval_replay.get("replay_seed", "") or ""),
-        "release_replay_cases": _as_int(eval_replay.get("release_replay_cases")),
-        "replay_events": bool(eval_replay.get("replay_events", False)),
-        "source": "dashboard_support",
-    }
-
-    operator_surface = {
-        "canonical_ui": str(ui_status.get("canonical_ui", "web/index.html") or "web/index.html"),
-        "control_center": str(ui_status.get("control_center", "web/index.html") or "web/index.html"),
-        "dashboard_prototype": str(ui_status.get("dashboard_prototype", "web/dashboard.html") or "web/dashboard.html"),
-        "overall_status": str(operations_summary.get("overall_status", "unknown") or "unknown"),
-        "current_wave": str(operations_summary.get("current_wave", status_snapshot.get("current_wave", "")) or ""),
-        "gateway_modes": gateway_modes,
-        "ui_readiness": str(readiness.get("ui", "unknown") or "unknown"),
-        "source": "dashboard_support",
-    }
-
-    return {
-        "contract_version": CONTROL_CENTER_CONTRACT_VERSION,
-        "segment_order": ["operator_surface", "queue_lease", "replay", "incident"],
-        "write_set": {
-            "dashboard_support": [
-                "segments.operator_surface",
-                "segments.queue_lease.snapshot",
-                "segments.replay",
-                "segments.incident.snapshot",
-            ],
-            "gateway_dashboard_payload": [
-                "segments.queue_lease.runtime",
-                "segments.incident.runtime",
-            ],
-        },
-        "segments": {
-            "operator_surface": operator_surface,
-            "queue_lease": {
-                "snapshot": queue_snapshot,
-                "runtime": {"available": False, "source": "gateway_dashboard_payload"},
-            },
-            "replay": replay_segment,
-            "incident": {
-                "snapshot": incident_snapshot,
-                "runtime": {"available": False, "source": "gateway_dashboard_payload"},
-            },
-        },
-    }
-
-
 def _default_status_snapshot(bot, *, unreadable: bool = False) -> dict[str, Any]:
     trace_status: dict[str, Any] = {"available": bool(getattr(bot, "trace_store", None))}
     known_gaps: list[str] = []
@@ -267,17 +157,10 @@ def get_dashboard_payload(bot, mode: str = "local") -> dict[str, Any]:
         "a2a_adapter_count": int(a2a_payload.get("total_adapters", 0) or 0),
         "agent_skill_count": int(agent_skill_stats.get("count", 0) or 0),
     }
-    control_center_contract = _build_control_center_contract(
-        status_snapshot=status_snapshot,
-        operations_summary=operations_summary,
-        task_summary=task_summary,
-        readiness=readiness,
-    )
     return {
         "health": health,
         "system_readiness": readiness,
         "operations_summary": operations_summary,
-        "control_center_contract": control_center_contract,
         "metrics": metrics_json,
         "monitoring": bot.get_monitoring_payload(),
         "history": history_stats,

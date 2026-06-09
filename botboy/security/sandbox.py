@@ -46,9 +46,9 @@ class SandboxExecutor:
     @staticmethod
     def _select_runtime(level: SecurityLevel):
         from botboy.skills.runtime import InProcessRuntime, SubprocessRuntime, IsolatedRuntime
-        if level in (SecurityLevel.PASSTHROUGH, SecurityLevel.BEGINNER):
+        if level == SecurityLevel.PASSTHROUGH:
             return InProcessRuntime()
-        if level == SecurityLevel.INTERMEDIATE:
+        if level in (SecurityLevel.BEGINNER, SecurityLevel.INTERMEDIATE):
             return SubprocessRuntime()
         return IsolatedRuntime()
 

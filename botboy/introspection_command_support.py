@@ -8,13 +8,6 @@ def _worker_node_usage() -> str:
     )
 
 
-def _worker_lease_usage() -> str:
-    return (
-        "Usage: worker lease "
-        "[list [queue_name]|queues|acquire <queue_name> <node_id> [task_id]|renew <lease_id>|release <lease_id> [reason]]"
-    )
-
-
 def _worker_node_list(bot) -> dict:
     store = getattr(bot, "task_store", None)
     if not store:
@@ -37,136 +30,6 @@ def _worker_node_list(bot) -> dict:
         "output": "\n".join(lines),
         "type": "worker",
         "data": {"nodes": nodes, "queues": queues, "summary": summary},
-    }
-
-
-def _worker_lease_queues(bot) -> dict:
-    store = getattr(bot, "task_store", None)
-    if not store:
-        return {"success": False, "output": "Task store not available.", "type": "worker"}
-    queues = store.list_execution_queues()
-    summary = store.queue_summary()
-    lines = [f"Execution queues ({summary.get('queue_count', len(queues))} total):"]
-    if not queues:
-        lines.append("  - none")
-    for queue in queues:
-        depth = summary.get("queue_depths", {}).get(queue["queue_name"], 0)
-        lines.append(
-            f"  [{queue['queue_name']}] worker={queue['worker_id']} "
-            f"status={queue['queue_status']} active_leases={depth}"
-        )
-    return {
-        "success": True,
-        "output": "\n".join(lines),
-        "type": "worker",
-        "data": {"queues": queues, "summary": summary},
-    }
-
-
-def _worker_lease_list(bot, command: str) -> dict:
-    store = getattr(bot, "task_store", None)
-    if not store:
-        return {"success": False, "output": "Task store not available.", "type": "worker"}
-    parts = command.split(None, 3)
-    queue_name = parts[3].strip() if len(parts) > 3 else ""
-    leases = store.list_queue_leases(queue_name=queue_name, include_released=True, include_expired=True)
-    summary = store.queue_summary()
-    lines = [
-        "Queue leases "
-        f"(active={summary.get('active_lease_count', 0)}, "
-        f"expired={summary.get('expired_lease_count', 0)}, "
-        f"released={summary.get('released_lease_count', 0)}):"
-    ]
-    if not leases:
-        lines.append("  - none")
-    for lease in leases:
-        lines.append(
-            f"  [{lease['lease_id']}] queue={lease['queue_name']} node={lease['node_id']} "
-            f"task={lease['task_id'] or '-'} status={lease['lease_status']}"
-        )
-    return {
-        "success": True,
-        "output": "\n".join(lines),
-        "type": "worker",
-        "data": {"leases": leases, "summary": summary},
-    }
-
-
-def _worker_lease_acquire(bot, command: str) -> dict:
-    store = getattr(bot, "task_store", None)
-    if not store:
-        return {"success": False, "output": "Task store not available.", "type": "worker"}
-    parts = command.split(None, 5)
-    if len(parts) < 5:
-        return {"success": False, "output": _worker_lease_usage(), "type": "worker"}
-    try:
-        lease = store.acquire_queue_lease(
-            queue_name=parts[3].strip(),
-            node_id=parts[4].strip(),
-            task_id=parts[5].strip() if len(parts) > 5 else "",
-            principal="local-cli",
-            request_id="cli-worker-lease-acquire",
-        )
-    except (TypeError, ValueError) as exc:
-        return {"success": False, "output": str(exc), "type": "worker"}
-    return {
-        "success": True,
-        "output": (
-            f"Queue lease acquired: {lease['lease_id']}\n"
-            f"  Queue: {lease['queue_name']}\n"
-            f"  Node: {lease['node_id']}\n"
-            f"  Task: {lease['task_id'] or '-'}\n"
-            f"  Expires: {lease['lease_expires_at']}"
-        ),
-        "type": "worker",
-        "data": {"lease": lease, "summary": store.queue_summary()},
-    }
-
-
-def _worker_lease_renew(bot, command: str) -> dict:
-    store = getattr(bot, "task_store", None)
-    if not store:
-        return {"success": False, "output": "Task store not available.", "type": "worker"}
-    parts = command.split(None, 3)
-    if len(parts) < 4:
-        return {"success": False, "output": _worker_lease_usage(), "type": "worker"}
-    try:
-        lease = store.renew_queue_lease(
-            parts[3].strip(),
-            principal="local-cli",
-            request_id="cli-worker-lease-renew",
-        )
-    except (TypeError, ValueError) as exc:
-        return {"success": False, "output": str(exc), "type": "worker"}
-    return {
-        "success": True,
-        "output": f"Queue lease renewed: {lease['lease_id']}\n  Expires: {lease['lease_expires_at']}",
-        "type": "worker",
-        "data": {"lease": lease, "summary": store.queue_summary()},
-    }
-
-
-def _worker_lease_release(bot, command: str) -> dict:
-    store = getattr(bot, "task_store", None)
-    if not store:
-        return {"success": False, "output": "Task store not available.", "type": "worker"}
-    parts = command.split(None, 4)
-    if len(parts) < 4:
-        return {"success": False, "output": _worker_lease_usage(), "type": "worker"}
-    try:
-        lease = store.release_queue_lease(
-            parts[3].strip(),
-            principal="local-cli",
-            request_id="cli-worker-lease-release",
-            reason=parts[4].strip() if len(parts) > 4 else "",
-        )
-    except (TypeError, ValueError) as exc:
-        return {"success": False, "output": str(exc), "type": "worker"}
-    return {
-        "success": True,
-        "output": f"Queue lease released: {lease['lease_id']}\n  Status: {lease['lease_status']}",
-        "type": "worker",
-        "data": {"lease": lease, "summary": store.queue_summary()},
     }
 
 
@@ -263,19 +126,6 @@ def handle_workers(bot, command: str) -> dict:
         if action == "drain":
             return _worker_node_drain(bot, command)
         return {"success": False, "output": _worker_node_usage(), "type": "worker"}
-    if sub in {"lease", "leases"}:
-        action = parts[2].split(None, 1)[0].lower() if len(parts) > 2 and parts[2].strip() else "list"
-        if action == "list":
-            return _worker_lease_list(bot, command)
-        if action == "queues":
-            return _worker_lease_queues(bot)
-        if action == "acquire":
-            return _worker_lease_acquire(bot, command)
-        if action == "renew":
-            return _worker_lease_renew(bot, command)
-        if action == "release":
-            return _worker_lease_release(bot, command)
-        return {"success": False, "output": _worker_lease_usage(), "type": "worker"}
     payload = bot.get_worker_payload()
     workers = payload["workers"]
     if sub == "list":

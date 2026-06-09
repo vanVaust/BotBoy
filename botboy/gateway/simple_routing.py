@@ -23,22 +23,17 @@ GET_EXACT_ROUTES: dict[str, str] = {
     "/api/tasks/blockers": "_handle_task_blockers",
     "/api/workers": "_handle_workers_get",
     "/api/v2/workers/nodes": "_handle_worker_nodes_get",
-    "/api/v2/workers/queues": "_handle_worker_queues_get",
-    "/api/v2/workers/leases": "_handle_queue_leases_get",
 }
 
 POST_EXACT_ROUTES: dict[str, str] = {
     "/api/command": "_handle_command",
     "/api/memories": "_handle_memories_post",
-    "/api/scheduler": "_handle_scheduler_post",
     "/api/auth/login": "_handle_auth_login",
     "/api/auth/refresh": "_handle_auth_refresh",
     "/api/auth/api-key": "_handle_auth_issue_api_key",
     "/api/principals": "_handle_principals_post",
     "/api/v2/workers/register": "_handle_worker_node_register",
     "/api/v2/workers/heartbeat": "_handle_worker_node_heartbeat",
-    "/api/v2/workers/leases/acquire": "_handle_queue_lease_acquire",
-    "/api/v2/workers/leases/claim-next": "_handle_queue_lease_claim_next",
 }
 
 
@@ -86,12 +81,6 @@ def resolve_post_route(path: str) -> tuple[Optional[str], Optional[str]]:
         return "_handle_task_reassign", normalized.split("/")[-2]
     if normalized.startswith("/api/tasks/") and normalized.endswith("/merge/actions"):
         return "_handle_task_merge_action", normalized.split("/")[-3]
-    if normalized.startswith("/api/v2/workers/leases/") and normalized.endswith("/renew"):
-        return "_handle_queue_lease_renew", normalized.split("/")[-2]
-    if normalized.startswith("/api/v2/workers/leases/") and normalized.endswith("/report"):
-        return "_handle_queue_lease_report", normalized.split("/")[-2]
-    if normalized.startswith("/api/v2/workers/leases/") and normalized.endswith("/release"):
-        return "_handle_queue_lease_release", normalized.split("/")[-2]
     if normalized.startswith("/api/v2/workers/") and normalized.endswith("/drain"):
         return "_handle_worker_node_drain", normalized.split("/")[-2]
     return None, None
@@ -99,8 +88,6 @@ def resolve_post_route(path: str) -> tuple[Optional[str], Optional[str]]:
 
 def resolve_delete_route(path: str) -> tuple[Optional[str], Optional[str]]:
     normalized = _normalized_path(path, keep_root=False)
-    if normalized.startswith("/api/scheduler/"):
-        return "_handle_scheduler_delete", normalized.rsplit("/", 1)[-1]
     if normalized.startswith("/api/principals/"):
         return "_handle_principals_delete", normalized.rsplit("/", 1)[-1]
     return None, None

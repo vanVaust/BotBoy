@@ -90,120 +90,26 @@ TASK_STORE_MIGRATIONS = (
             )
             """,
             "CREATE INDEX IF NOT EXISTS idx_queue_leases_queue_name ON queue_leases(queue_name)",
-            "CREATE INDEX IF NOT EXISTS idx_queue_leases_node_id ON queue_leases(node_id)",
-            "CREATE INDEX IF NOT EXISTS idx_queue_leases_status ON queue_leases(lease_status)",
         ),
     ),
     Migration(
         version=5,
-        name="workflow_ir_persistence",
+        name="tenancy_support",
         statements=(
             """
-            CREATE TABLE IF NOT EXISTS workflow_runs (
-                workflow_id       TEXT PRIMARY KEY,
-                task_id           TEXT NOT NULL DEFAULT '',
-                request_id        TEXT NOT NULL DEFAULT '',
-                principal         TEXT NOT NULL DEFAULT 'anonymous',
-                source            TEXT NOT NULL DEFAULT 'runtime',
-                status            TEXT NOT NULL DEFAULT '',
-                goal              TEXT NOT NULL DEFAULT '',
-                version           TEXT NOT NULL DEFAULT 'workflow-ir/v1',
-                metadata_json     TEXT NOT NULL DEFAULT '{}',
-                workflow_json     TEXT NOT NULL DEFAULT '{}',
-                created_at        TEXT NOT NULL,
-                updated_at        TEXT NOT NULL
+            CREATE TABLE IF NOT EXISTS organizations (
+                org_id              TEXT PRIMARY KEY,
+                name                TEXT NOT NULL,
+                billing_tier        TEXT NOT NULL DEFAULT 'free',
+                is_active           INTEGER NOT NULL DEFAULT 1,
+                metadata_json       TEXT NOT NULL DEFAULT '{}',
+                created_at          TEXT NOT NULL,
+                updated_at          TEXT NOT NULL
             )
             """,
-            "CREATE INDEX IF NOT EXISTS idx_workflow_runs_task_id ON workflow_runs(task_id)",
-            "CREATE INDEX IF NOT EXISTS idx_workflow_runs_request_id ON workflow_runs(request_id)",
-            "CREATE INDEX IF NOT EXISTS idx_workflow_runs_principal ON workflow_runs(principal)",
-            """
-            CREATE TABLE IF NOT EXISTS workflow_policy_decisions (
-                decision_id        TEXT PRIMARY KEY,
-                workflow_id        TEXT NOT NULL,
-                step_id            TEXT NOT NULL DEFAULT '',
-                surface            TEXT NOT NULL DEFAULT '',
-                action             TEXT NOT NULL DEFAULT '',
-                principal          TEXT NOT NULL DEFAULT 'anonymous',
-                allowed            INTEGER NOT NULL DEFAULT 0,
-                approval_required  INTEGER NOT NULL DEFAULT 0,
-                approval_granted   INTEGER NOT NULL DEFAULT 0,
-                reason             TEXT NOT NULL DEFAULT '',
-                roles_json         TEXT NOT NULL DEFAULT '[]',
-                capabilities_json  TEXT NOT NULL DEFAULT '[]',
-                evidence_json      TEXT NOT NULL DEFAULT '{}',
-                created_at         TEXT NOT NULL,
-                FOREIGN KEY(workflow_id) REFERENCES workflow_runs(workflow_id)
-            )
-            """,
-            "CREATE INDEX IF NOT EXISTS idx_workflow_policy_decisions_workflow_id ON workflow_policy_decisions(workflow_id)",
-            "CREATE INDEX IF NOT EXISTS idx_workflow_policy_decisions_allowed ON workflow_policy_decisions(allowed)",
-            """
-            CREATE TABLE IF NOT EXISTS workflow_replay_events (
-                event_id           TEXT PRIMARY KEY,
-                workflow_id        TEXT NOT NULL,
-                step_id            TEXT NOT NULL DEFAULT '',
-                event_type         TEXT NOT NULL DEFAULT '',
-                status             TEXT NOT NULL DEFAULT '',
-                payload_json       TEXT NOT NULL DEFAULT '{}',
-                created_at         TEXT NOT NULL,
-                FOREIGN KEY(workflow_id) REFERENCES workflow_runs(workflow_id)
-            )
-            """,
-            "CREATE INDEX IF NOT EXISTS idx_workflow_replay_events_workflow_id ON workflow_replay_events(workflow_id)",
-            "CREATE INDEX IF NOT EXISTS idx_workflow_replay_events_event_type ON workflow_replay_events(event_type)",
-        ),
-    ),
-    Migration(
-        version=6,
-        name="queue_lease_hardening",
-        statements=(
-            "CREATE INDEX IF NOT EXISTS idx_queue_leases_queue_status_expiry ON queue_leases(queue_name, lease_status, lease_expires_at)",
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_queue_leases_active_task_unique ON queue_leases(task_id) WHERE lease_status = 'active' AND task_id != ''",
-        ),
-    ),
-    Migration(
-        version=7,
-        name="queue_lease_receipts",
-        statements=(
-            """
-            CREATE TABLE IF NOT EXISTS queue_lease_receipts (
-                receipt_id           TEXT PRIMARY KEY,
-                lease_id             TEXT NOT NULL,
-                idempotency_key      TEXT NOT NULL,
-                payload_hash         TEXT NOT NULL DEFAULT '',
-                response_json        TEXT NOT NULL DEFAULT '{}',
-                created_at           TEXT NOT NULL,
-                updated_at           TEXT NOT NULL,
-                UNIQUE(lease_id, idempotency_key),
-                FOREIGN KEY(lease_id) REFERENCES queue_leases(lease_id)
-            )
-            """,
-            "CREATE INDEX IF NOT EXISTS idx_queue_lease_receipts_lease_id ON queue_lease_receipts(lease_id)",
-        ),
-    ),
-    Migration(
-        version=8,
-        name="dispatch_events",
-        statements=(
-            """
-            CREATE TABLE IF NOT EXISTS dispatch_events (
-                dispatch_id          TEXT PRIMARY KEY,
-                parent_task_id       TEXT NOT NULL DEFAULT '',
-                child_task_id        TEXT NOT NULL DEFAULT '',
-                worker_id            TEXT NOT NULL DEFAULT '',
-                queue_name           TEXT NOT NULL DEFAULT '',
-                dispatch_status      TEXT NOT NULL DEFAULT 'queued',
-                command_text         TEXT NOT NULL DEFAULT '',
-                metadata_json        TEXT NOT NULL DEFAULT '{}',
-                created_at           TEXT NOT NULL,
-                updated_at           TEXT NOT NULL
-            )
-            """,
-            "CREATE INDEX IF NOT EXISTS idx_dispatch_events_parent_task_id ON dispatch_events(parent_task_id)",
-            "CREATE INDEX IF NOT EXISTS idx_dispatch_events_child_task_id ON dispatch_events(child_task_id)",
-            "CREATE INDEX IF NOT EXISTS idx_dispatch_events_worker_id ON dispatch_events(worker_id)",
-            "CREATE INDEX IF NOT EXISTS idx_dispatch_events_status ON dispatch_events(dispatch_status)",
+            "CREATE INDEX IF NOT EXISTS idx_organizations_name ON organizations(name)",
+            "ALTER TABLE tasks ADD COLUMN org_id TEXT NOT NULL DEFAULT 'default'",
+            "CREATE INDEX IF NOT EXISTS idx_tasks_org_id ON tasks(org_id)",
         ),
     ),
 )

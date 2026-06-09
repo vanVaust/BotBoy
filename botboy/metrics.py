@@ -26,6 +26,9 @@ class MetricsCollector:
         self._cache_misses = 0
         self._cache_bypasses = 0
         self._memory_ops = 0
+        self._queue_wait_times: Dict[str, list] = defaultdict(list)
+        self._worker_executions: Dict[str, int] = defaultdict(int)
+        self._worker_errors: Dict[str, int] = defaultdict(int)
         self._start_time = time.time()
         self._lock = threading.Lock()
 
@@ -82,6 +85,16 @@ class MetricsCollector:
         with self._lock:
             self._memory_ops += 1
 
+    def record_queue_lease(self, queue_name: str, wait_time_s: float) -> None:
+        with self._lock:
+            self._queue_wait_times[queue_name].append(wait_time_s)
+
+    def record_worker_execution(self, worker_id: str, success: bool) -> None:
+        with self._lock:
+            self._worker_executions[worker_id] += 1
+            if not success:
+                self._worker_errors[worker_id] += 1
+
     def render(self) -> Tuple[str, str]:
         """Returns (body, content_type) for Prometheus scraping."""
         lines = []
@@ -133,6 +146,25 @@ class MetricsCollector:
             for principal, count in self._principal_counts.items():
                 lines.append(f'botboy_commands_by_principal_total{{principal="{principal}"}} {count}')
 
+            # Queue Wait Times
+            lines.append("# HELP botboy_queue_wait_seconds Queue average wait time")
+            lines.append("# TYPE botboy_queue_wait_seconds gauge")
+            for queue_name, waits in self._queue_wait_times.items():
+                if waits:
+                    avg_wait = sum(waits) / len(waits)
+                    lines.append(f'botboy_queue_wait_seconds{{queue="{queue_name}"}} {avg_wait:.6f}')
+
+            # Worker Executions
+            lines.append("# HELP botboy_worker_executions_total Total tasks executed by worker")
+            lines.append("# TYPE botboy_worker_executions_total counter")
+            for worker_id, count in self._worker_executions.items():
+                lines.append(f'botboy_worker_executions_total{{worker="{worker_id}"}} {count}')
+            
+            lines.append("# HELP botboy_worker_errors_total Total errors by worker")
+            lines.append("# TYPE botboy_worker_errors_total counter")
+            for worker_id, count in self._worker_errors.items():
+                lines.append(f'botboy_worker_errors_total{{worker="{worker_id}"}} {count}')
+
         body = "\n".join(lines) + "\n"
         return body, "text/plain; version=0.0.4; charset=utf-8"
 
@@ -158,6 +190,14 @@ class MetricsCollector:
             "cache_hits": cache_hits,
             "cache_misses": cache_misses,
             "memory_ops": memory_ops,
+            "queue_stats": {
+                k: {"count": len(v), "avg_wait_s": sum(v) / len(v) if v else 0.0}
+                for k, v in self._queue_wait_times.items()
+            },
+            "worker_stats": {
+                k: {"total": self._worker_executions[k], "errors": self._worker_errors.get(k, 0)}
+                for k in self._worker_executions
+            },
             "by_type": by_type,
             "by_principal": by_principal,
             "recent_commands": recent_commands,

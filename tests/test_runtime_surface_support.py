@@ -85,7 +85,6 @@ class RuntimeSurfaceSupportTest(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertIn("Available Commands", result["output"])
         self.assertIn("task merge queue", result["output"])
-        self.assertIn("security remote-readiness", result["output"])
 
     def test_build_status_response(self) -> None:
         result = build_status_response(_FakeBot())

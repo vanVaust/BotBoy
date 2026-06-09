@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
-import uuid
 from pathlib import Path
 
 
@@ -16,34 +14,20 @@ def install_root() -> Path:
     return package_root().parent
 
 
-def _runtime_home_temp_fallback() -> Path:
-    return (Path(tempfile.gettempdir()) / "botboy-runtime").resolve()
-
-
-def _is_writable_directory(candidate: Path) -> bool:
-    try:
-        candidate.mkdir(parents=True, exist_ok=True)
-        probe = candidate / f".write-test-{uuid.uuid4().hex}"
-        probe.write_text("ok", encoding="utf-8")
-        probe.unlink(missing_ok=True)
-        return True
-    except OSError:
-        return False
-
-
 def runtime_home_dir() -> Path:
     configured = str(os.getenv("BOTBOY_HOME", "~/.botboy")).strip() or "~/.botboy"
     primary = Path(configured).expanduser()
-    fallbacks = (_runtime_home_temp_fallback(), install_root() / ".botboy-runtime")
-    seen: set[Path] = set()
-    for candidate in (primary, *fallbacks):
-        resolved = candidate.expanduser().resolve()
-        if resolved in seen:
+    fallback = install_root() / ".botboy-runtime"
+    for candidate in (primary, fallback):
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".write-test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return candidate
+        except OSError:
             continue
-        seen.add(resolved)
-        if _is_writable_directory(resolved):
-            return resolved
-    return primary
+    return fallback
 
 
 def bundled_assets_dir() -> Path:

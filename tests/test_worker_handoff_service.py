@@ -8,10 +8,9 @@ from types import SimpleNamespace
 
 from botboy.tasks import (
     DELEGATION_STATUS_BLOCKED_ON_CHILD,
-    DELEGATION_STATUS_DELEGATED,
+    DELEGATION_STATUS_LEASED,
     TASK_STATUS_BLOCKED,
     TASK_STATUS_COMPLETED,
-    TASK_STATUS_FAILED,
     TASK_STATUS_QUEUED,
     TaskStore,
 )
@@ -146,15 +145,13 @@ class WorkerHandoffServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(child_record)
         self.assertEqual(child_record.parent_task_id, parent.task_id)
         self.assertEqual(child_record.delegated_to_worker, worker.worker_id)
-        self.assertEqual(child_record.delegation_status, DELEGATION_STATUS_DELEGATED)
+        self.assertEqual(child_record.delegation_status, DELEGATION_STATUS_LEASED)
         self.assertEqual(child_record.status, TASK_STATUS_QUEUED)
         self.assertEqual(child_record.payload["worker_id"], worker.worker_id)
         parent_events = [event.event_type for event in self.store.get_events(parent.task_id)]
         child_events = [event.event_type for event in self.store.get_events(child_ctx.task_id)]
-        dispatch_events = self.store.list_dispatch_events(child_task_id=child_ctx.task_id)
         self.assertIn("handoff_spawned", parent_events)
-        self.assertIn("worker_queued", child_events)
-        self.assertEqual([event["dispatch_status"] for event in dispatch_events], ["queued"])
+        self.assertIn("worker_started", child_events)
 
     async def test_execute_worker_child_task_updates_child_and_parent(self) -> None:
         parent = self._create_parent()
@@ -185,61 +182,7 @@ class WorkerHandoffServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(parent_record.status, TASK_STATUS_COMPLETED)
         self.assertEqual(parent_record.result["child_merges"][0]["merged_from_child_task_id"], child_ctx.task_id)
         artifact_categories = [artifact.category for artifact in self.store.get_artifacts(parent.task_id)]
-        lease_rows = self.store.list_queue_leases(task_id=child_ctx.task_id, include_released=True, include_expired=True)
-        dispatch_statuses = [
-            event["dispatch_status"] for event in self.store.list_dispatch_events(child_task_id=child_ctx.task_id)
-        ]
-        child_events = [event.event_type for event in self.store.get_events(child_ctx.task_id)]
         self.assertIn("merge_report", artifact_categories)
-        self.assertTrue(any(row["lease_status"] == "released" for row in lease_rows))
-        self.assertIn("queue_lease_claimed", child_events)
-        self.assertEqual(dispatch_statuses, ["queued", "daemon_started", "completed"])
-
-    async def test_execute_worker_child_task_reports_failure_and_releases_lease(self) -> None:
-        async def failing_process_command(*_args, **_kwargs) -> dict:
-            raise RuntimeError("worker exploded")
-
-        service = WorkerHandoffService(
-            SimpleNamespace(
-                task_store=self.store,
-                workers=self.workers,
-                process_command=failing_process_command,
-            )
-        )
-        parent = self._create_parent()
-        worker = self.workers["executor"]
-        child_ctx = service._create_worker_child_task(
-            parent_task=parent,
-            worker=worker,
-            delegated_command="explode",
-            principal="tester",
-            child_request_id="req-parent-wexecutor-2",
-            attempt_count=2,
-        )
-
-        result, child_record, child_status = await service._execute_worker_child_task(
-            parent_task=parent,
-            child_ctx=child_ctx,
-            worker=worker,
-            delegated_command="explode",
-            principal="tester",
-            roles=["build"],
-            approval_context={"granted": True, "explicit": True},
-        )
-
-        self.assertFalse(result["success"])
-        self.assertEqual(child_status, TASK_STATUS_FAILED)
-        self.assertIsNotNone(child_record)
-        self.assertEqual(child_record.status, TASK_STATUS_FAILED)
-        self.assertEqual(self.store.get_task(parent.task_id).status, TASK_STATUS_BLOCKED)
-        lease_rows = self.store.list_queue_leases(task_id=child_ctx.task_id, include_released=True, include_expired=True)
-        dispatch_statuses = [
-            event["dispatch_status"] for event in self.store.list_dispatch_events(child_task_id=child_ctx.task_id)
-        ]
-        child_events = [event.event_type for event in self.store.get_events(child_ctx.task_id)]
-        self.assertTrue(any(row["lease_status"] == "released" for row in lease_rows))
-        self.assertIn("queue_lease_claimed", child_events)
-        self.assertEqual(dispatch_statuses, ["queued", "daemon_started", "failed"])
 
     async def test_run_worker_handoff_returns_success(self) -> None:
         parent = self._create_parent()
@@ -255,37 +198,6 @@ class WorkerHandoffServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["data"]["worker"]["worker_id"], "planner")
         self.assertEqual(result["data"]["task_status"], TASK_STATUS_COMPLETED)
         self.assertEqual(self.store.get_task(parent.task_id).status, TASK_STATUS_COMPLETED)
-
-    async def test_run_worker_handoff_daemon_claims_created_child_only(self) -> None:
-        parent = self._create_parent()
-        older = self.store.create_task(
-            title="Older planner task",
-            kind="worker_handoff",
-            owner="worker:planner",
-            principal="tester",
-            request_id="req-older",
-            command="do not run",
-            delegated_to_worker="planner",
-            status=TASK_STATUS_QUEUED,
-            summary="older",
-        )
-
-        result = await self.service._run_worker_handoff(
-            parent_task=parent,
-            worker_id="planner",
-            delegated_command="write status",
-            principal="tester",
-            roles=["plan"],
-            approval_context={"granted": True, "explicit": True},
-        )
-
-        child_task_id = result["data"]["child_task"]["task_id"]
-        self.assertTrue(result["success"])
-        self.assertEqual(self.invocations[0]["command"], "write status")
-        self.assertEqual(self.invocations[0]["task_id"], child_task_id)
-        self.assertEqual(self.store.get_task(older.task_id).status, TASK_STATUS_QUEUED)
-        child_events = [event.event_type for event in self.store.get_events(child_task_id)]
-        self.assertIn("queue_lease_claimed", child_events)
 
     async def test_run_worker_handoff_batch_merges_children(self) -> None:
         parent = self._create_parent(payload={"merge_resolution_policy": "prefer_non_null"})

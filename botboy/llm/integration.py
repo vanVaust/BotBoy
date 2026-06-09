@@ -211,12 +211,30 @@ class AnthropicBackend(BaseLLMBackend):
 class LLMIntegration:
     """High-level LLM interface with conversation history."""
 
-    def __init__(self, backend: BaseLLMBackend, system_prompt: str = "") -> None:
+    def __init__(self, backend: BaseLLMBackend, system_prompt: str = "", max_history: int = 100, max_history_tokens: int = 4096) -> None:
         self._backend = backend
         self._system_prompt = system_prompt or (
             "You are BotBoy, a helpful AI agent. Be concise and accurate."
         )
+        self._max_history = max_history
+        self._max_history_tokens = max_history_tokens
         self._history: List[dict] = []
+
+    def _estimate_tokens(self, text: str) -> int:
+        return len(text) // 4
+
+    def _prune_history(self) -> None:
+        # First enforce the message count limit
+        if len(self._history) > self._max_history:
+            self._history = self._history[-self._max_history:]
+            
+        # Then enforce token limit
+        while self._history:
+            total_tokens = sum(self._estimate_tokens(m.get("content", "")) for m in self._history)
+            if total_tokens <= self._max_history_tokens:
+                break
+            # Remove oldest user/assistant pair or message to free up tokens
+            self._history.pop(0)
 
     @classmethod
     def from_config(cls, config) -> "LLMIntegration":
@@ -248,6 +266,7 @@ class LLMIntegration:
         if response.success and use_history:
             self._history.append({"role": "user", "content": user_message})
             self._history.append({"role": "assistant", "content": response.content})
+            self._prune_history()
 
         return response
 
@@ -262,6 +281,7 @@ class LLMIntegration:
         if chunks:
             self._history.append({"role": "user", "content": user_message})
             self._history.append({"role": "assistant", "content": "".join(chunks)})
+            self._prune_history()
 
     def clear_history(self) -> None:
         self._history.clear()

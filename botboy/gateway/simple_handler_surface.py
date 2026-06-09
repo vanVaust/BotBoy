@@ -13,9 +13,7 @@ from botboy.gateway.simple_auth_handlers import (
 from botboy.gateway.simple_read_handlers import (
     handle_history_get as shared_handle_history_get,
     handle_history_stats as shared_handle_history_stats,
-    handle_scheduler_delete as shared_handle_scheduler_delete,
     handle_scheduler_get as shared_handle_scheduler_get,
-    handle_scheduler_post as shared_handle_scheduler_post,
 )
 from botboy.gateway.simple_runtime_read_handlers import (
     handle_dashboard_json as shared_handle_dashboard_json,
@@ -35,7 +33,6 @@ from botboy.gateway.simple_runtime_write_handlers import (
 from botboy.gateway.simple_server_support import SimpleServerSupport
 from botboy.gateway.simple_static_handlers import handle_root as shared_handle_root
 from botboy.gateway.simple_task_read_handlers import (
-    handle_queue_leases_get as shared_handle_queue_leases_get,
     handle_task_artifacts as shared_handle_task_artifacts,
     handle_task_blockers as shared_handle_task_blockers,
     handle_task_children as shared_handle_task_children,
@@ -48,15 +45,9 @@ from botboy.gateway.simple_task_read_handlers import (
     handle_traces_get as shared_handle_traces_get,
     handle_worker_detail as shared_handle_worker_detail,
     handle_worker_nodes_get as shared_handle_worker_nodes_get,
-    handle_worker_queues_get as shared_handle_worker_queues_get,
     handle_workers_get as shared_handle_workers_get,
 )
 from botboy.gateway.simple_task_write_handlers import (
-    handle_queue_lease_acquire as shared_handle_queue_lease_acquire,
-    handle_queue_lease_claim_next as shared_handle_queue_lease_claim_next,
-    handle_queue_lease_report as shared_handle_queue_lease_report,
-    handle_queue_lease_release as shared_handle_queue_lease_release,
-    handle_queue_lease_renew as shared_handle_queue_lease_renew,
     handle_task_cancel as shared_handle_task_cancel,
     handle_task_merge_action as shared_handle_task_merge_action,
     handle_task_reassign as shared_handle_task_reassign,
@@ -265,12 +256,6 @@ class SimpleHandlerSurface:
     def _handle_worker_nodes_get(self, params: dict) -> None:
         shared_handle_worker_nodes_get(self, params)
 
-    def _handle_worker_queues_get(self, params: dict) -> None:
-        shared_handle_worker_queues_get(self, params)
-
-    def _handle_queue_leases_get(self, params: dict) -> None:
-        shared_handle_queue_leases_get(self, params)
-
     def _handle_worker_detail(self, worker_id: str) -> None:
         shared_handle_worker_detail(self, worker_id)
 
@@ -289,21 +274,6 @@ class SimpleHandlerSurface:
     def _handle_worker_node_register(self, payload: dict) -> None:
         shared_handle_worker_node_register(self, payload)
 
-    def _handle_queue_lease_acquire(self, payload: dict) -> None:
-        shared_handle_queue_lease_acquire(self, payload)
-
-    def _handle_queue_lease_claim_next(self, payload: dict) -> None:
-        shared_handle_queue_lease_claim_next(self, payload)
-
-    def _handle_queue_lease_renew(self, lease_id: str, payload: dict) -> None:
-        shared_handle_queue_lease_renew(self, lease_id, payload)
-
-    def _handle_queue_lease_report(self, lease_id: str, payload: dict) -> None:
-        shared_handle_queue_lease_report(self, lease_id, payload)
-
-    def _handle_queue_lease_release(self, lease_id: str, payload: dict) -> None:
-        shared_handle_queue_lease_release(self, lease_id, payload)
-
     def _handle_worker_node_heartbeat(self, payload: dict) -> None:
         shared_handle_worker_node_heartbeat(self, payload)
 
@@ -318,12 +288,6 @@ class SimpleHandlerSurface:
 
     def _handle_scheduler_get(self, params: dict) -> None:
         shared_handle_scheduler_get(self, params)
-
-    def _handle_scheduler_post(self, payload: dict) -> None:
-        shared_handle_scheduler_post(self, payload)
-
-    def _handle_scheduler_delete(self, task_id: str) -> None:
-        shared_handle_scheduler_delete(self, task_id)
 
     def _handle_command(self, payload: dict) -> None:
         shared_handle_command(self, payload)

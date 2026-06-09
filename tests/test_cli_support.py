@@ -23,12 +23,6 @@ class CliSupportTest(unittest.TestCase):
         self.assertEqual(args.worker_cmd, ["node", "register", "node-1", "planner"])
         self.assertEqual(resolve_exec_command(args), "worker node register node-1 planner")
 
-    def test_parse_security_command_and_resolve_exec_command(self) -> None:
-        args = parse_args(["security", "remote-readiness", "0.0.0.0"])
-        self.assertEqual(args.command, "security")
-        self.assertEqual(args.security_cmd, ["remote-readiness", "0.0.0.0"])
-        self.assertEqual(resolve_exec_command(args), "security remote-readiness 0.0.0.0")
-
     def test_handle_runtime_command_executes_worker_command(self) -> None:
         args = parse_args(["worker", "node", "list"])
         bot = _FakeBot()

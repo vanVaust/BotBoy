@@ -1,5 +1,5 @@
 {
-  "date": "2026-04-25",
+  "date": "2026-04-04",
   "workspace": "botboi_finished",
   "current_wave": "Welle 22",
   "release_tree": {
@@ -29,7 +29,7 @@
     "install_command": "python -m botboy.release_acceptance install --python .\\.venv-build\\Scripts\\python.exe --bootstrap-python python --wheel <wheel>",
     "source_tree_tests_command": "python -m unittest discover -s tests -v",
     "ci_workflow": ".github/workflows/release-verification.yml",
-    "temp_root_default": "system-temp/botboy-release-acceptance",
+    "temp_root_default": ".botboy-runtime/acceptance-temp",
     "status": "verified"
   },
   "verified_test_command": "python -m botboy.release_smoke -v",
@@ -49,12 +49,7 @@
   },
   "deferred_items": [],
   "eval_replay": {
-    "available": true,
-    "workflow_ir_hooks": true,
-    "policy_decision_records": true,
-    "replay_events": true,
-    "release_replay_cases": 6,
-    "remote_readiness_smoke": true
+    "available": false
   },
   "skills": {
     "default_directory": "botboy/bundled/skills",
@@ -153,57 +148,13 @@
         "worker_node_cli_surface",
         "worker_node_fastapi_v2_routes",
         "worker_node_stdlib_v2_routes",
-        "worker_node_observability",
-        "queue_lease_taskstore_contract",
-        "queue_lease_expiry_recovery",
-        "queue_lease_contract_tests",
-        "remote_bind_auth_fail_closed",
-        "mcp_http_token_auth_and_cors",
-        "mcp_tool_approval_enforcement",
-        "gateway_scheduler_contract_parity",
-        "stdlib_scheduler_write_routes",
-        "queue_lease_fastapi_v2_routes",
-        "queue_lease_stdlib_v2_routes",
-        "queue_lease_live_gateway_contract",
-        "queue_lease_cli_surface",
-        "queue_lease_claim_next_contract",
-        "queue_lease_report_result_contract",
-        "gateway_claim_report_contract_parity",
-        "external_worker_daemon_poll_loop",
-        "worker_daemon_target_task_claim",
-        "worker_daemon_retry_backoff",
-        "worker_daemon_expired_lease_recovery",
-        "worker_daemon_cli_entrypoint",
-        "worker_daemon_operability_ui",
-        "queue_backed_handoff_daemon_e2e",
-        "web_output_html_escape_hardening",
-        "packaging_extras_requirements_sync",
-        "ci_os_python_matrix_release_gate",
-        "sqlite_busy_timeout_and_read_only_lease_summary",
-        "v3_workflow_ir_contract",
-        "v3_policy_decision_records",
-        "v3_workflow_replay_events",
-        "v3_eval_replay_workflow_ir_hooks",
-        "release_eval_workflow_ir_smoke",
-        "remote_auth_readiness_assessment",
-        "remote_auth_readiness_cli_surface",
-        "release_eval_remote_readiness_smoke",
-        "remote_auth_operator_runbook",
-        "remote_auth_control_center_signals",
-        "queue_lease_report_identity_binding",
-        "queue_lease_report_idempotency",
-        "env_example_localhost_default"
+        "worker_node_observability"
     ],
-  "open_priorities": [
-    "live_workflow_ir_policy_persistence"
-  ],
-    "known_gaps": [
-    "v2 runtime now exposes Queue/Lease contracts through TaskStore, CLI, FastAPI, stdlib, local TaskStore-backed worker-daemon entrypoint, and queue-backed handoff through daemon claim/report execution. Remote HTTP worker execution across machines remains a future extension behind authenticated remote transport and deployment topology.",
-    "v4-v7 autonomy/agent-OS goals remain strategic roadmap items behind remote fabric hardening and live workflow-policy persistence."
-  ],
+  "open_priorities": [],
+    "known_gaps": [],
   "last_verified_run": {
     "command": "python -m unittest discover -s tests -v",
-    "result": "Ran 247 tests, OK"
+    "result": "Ran 169 tests, OK"
   },
   "last_verified_acceptance": {
     "build": "Verified inside tests.test_release_build_install via standard unittest full-suite",

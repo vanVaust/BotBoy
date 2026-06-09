@@ -139,14 +139,6 @@ def _route_paths(router) -> set[str]:
     return {route.path for route in router.routes}
 
 
-def _route_method_paths(router) -> set[tuple[str, str]]:
-    return {
-        (method, route.path)
-        for route in router.routes
-        for method in getattr(route, "methods", set())
-    }
-
-
 class GatewayRouterContractsTest(unittest.TestCase):
     def _make_bot(self) -> BotBoy:
         temp_root = (ROOT / ".botboy-runtime" / self._testMethodName).resolve()
@@ -172,12 +164,8 @@ class GatewayRouterContractsTest(unittest.TestCase):
         create_auth_router, create_core_router, create_task_router, create_ws_router = _load_route_factories()
         ctx = _dummy_context()
 
-        core_router = create_core_router(ctx)
-        core_paths = _route_paths(core_router)
-        core_method_paths = _route_method_paths(core_router)
-        task_router = create_task_router(ctx)
-        task_paths = _route_paths(task_router)
-        task_method_paths = _route_method_paths(task_router)
+        core_paths = _route_paths(create_core_router(ctx))
+        task_paths = _route_paths(create_task_router(ctx))
         auth_paths = _route_paths(create_auth_router(ctx))
         ws_paths = _route_paths(create_ws_router(ctx))
 
@@ -199,14 +187,6 @@ class GatewayRouterContractsTest(unittest.TestCase):
         )
         self.assertTrue(
             {
-                ("GET", "/api/scheduler"),
-                ("POST", "/api/scheduler"),
-                ("DELETE", "/api/scheduler/{task_id}"),
-            }.issubset(core_method_paths),
-            core_method_paths,
-        )
-        self.assertTrue(
-            {
                 "/api/tasks",
                 "/api/tasks/blockers",
                 "/api/tasks/{task_id}/merge",
@@ -221,31 +201,12 @@ class GatewayRouterContractsTest(unittest.TestCase):
                 "/api/workers",
                 "/api/workers/{worker_id}",
                 "/api/v2/workers/nodes",
-                "/api/v2/workers/queues",
-                "/api/v2/workers/leases",
-                "/api/v2/workers/leases/acquire",
-                "/api/v2/workers/leases/claim-next",
-                "/api/v2/workers/leases/{lease_id}/renew",
-                "/api/v2/workers/leases/{lease_id}/report",
-                "/api/v2/workers/leases/{lease_id}/release",
                 "/api/v2/workers/register",
                 "/api/v2/workers/heartbeat",
                 "/api/v2/workers/{node_id}/drain",
                 "/api/tasks/{task_id}/reassign",
             }.issubset(task_paths),
             task_paths,
-        )
-        self.assertTrue(
-            {
-                ("GET", "/api/v2/workers/queues"),
-                ("GET", "/api/v2/workers/leases"),
-                ("POST", "/api/v2/workers/leases/acquire"),
-                ("POST", "/api/v2/workers/leases/claim-next"),
-                ("POST", "/api/v2/workers/leases/{lease_id}/renew"),
-                ("POST", "/api/v2/workers/leases/{lease_id}/report"),
-                ("POST", "/api/v2/workers/leases/{lease_id}/release"),
-            }.issubset(task_method_paths),
-            task_method_paths,
         )
         self.assertTrue(
             {
@@ -271,9 +232,6 @@ class GatewayRouterContractsTest(unittest.TestCase):
                 "/api/status",
                 "/api/tasks",
                 "/api/v2/workers/nodes",
-                "/api/v2/workers/queues",
-                "/api/v2/workers/leases",
-                "/api/v2/workers/leases/claim-next",
                 "/api/tasks/{task_id}/merge",
                 "/api/auth/login",
                 "/ws/chat",

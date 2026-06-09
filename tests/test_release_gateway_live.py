@@ -5,7 +5,6 @@ import json
 import sys
 import time
 import unittest
-import uuid
 from pathlib import Path
 
 from botboy.__main__ import BotBoy
@@ -107,8 +106,6 @@ class ReleaseGatewayLiveTest(unittest.TestCase):
         bot = self._make_bot()
         task_id, trace_run_id = self._seed_task_store(bot)
         app = create_app(bot, host=default_bind_host(), port=8765)
-        node_id = f"node-fastapi-{uuid.uuid4().hex[:8]}"
-        queue_name = f"planner.{node_id}"
         with TestClient(app) as client:
             health = client.get("/health")
             status = client.get("/api/status")
@@ -129,77 +126,15 @@ class ReleaseGatewayLiveTest(unittest.TestCase):
             worker_detail = client.get("/api/workers/planner")
             worker_node_register = client.post(
                 "/api/v2/workers/register",
-                json={"node_id": node_id, "worker_id": "planner", "health": "unknown"},
-            )
-            lease_task = bot.task_store.create_task(
-                title="fastapi lease task",
-                command="status",
-                owner="worker:planner",
-                delegated_to_worker="planner",
-                status="queued",
-            )
-            worker_queues = client.get("/api/v2/workers/queues")
-            queue_lease_acquire = client.post(
-                "/api/v2/workers/leases/acquire",
-                json={
-                    "queue_name": queue_name,
-                    "node_id": node_id,
-                    "task_id": lease_task.task_id,
-                    "lease_ttl_seconds": 120,
-                },
-            )
-            queue_lease_id = queue_lease_acquire.json()["lease"]["lease_id"]
-            queue_lease_fencing_token = queue_lease_acquire.json()["lease"]["metadata"]["fencing_token"]
-            queue_leases = client.get("/api/v2/workers/leases", params={"queue_name": queue_name})
-            queue_lease_renew = client.post(
-                f"/api/v2/workers/leases/{queue_lease_id}/renew",
-                json={"lease_ttl_seconds": 120, "fencing_token": queue_lease_fencing_token},
-            )
-            queue_lease_release = client.post(
-                f"/api/v2/workers/leases/{queue_lease_id}/release",
-                json={
-                    "reason": "release-live",
-                    "node_id": node_id,
-                    "worker_id": "planner",
-                    "fencing_token": queue_lease_fencing_token,
-                },
-            )
-            claim_task = bot.task_store.create_task(
-                title="fastapi claim task",
-                command="status",
-                owner="worker:planner",
-                delegated_to_worker="planner",
-                status="queued",
-            )
-            queue_lease_claim = client.post(
-                "/api/v2/workers/leases/claim-next",
-                json={
-                    "queue_name": queue_name,
-                    "node_id": node_id,
-                    "worker_id": "planner",
-                    "lease_ttl_seconds": 120,
-                },
-            )
-            queue_lease_claim_id = queue_lease_claim.json()["lease"]["lease_id"]
-            queue_lease_claim_fencing_token = queue_lease_claim.json()["lease"]["metadata"]["fencing_token"]
-            queue_lease_report = client.post(
-                f"/api/v2/workers/leases/{queue_lease_claim_id}/report",
-                json={
-                    "success": True,
-                    "summary": "claim complete",
-                    "result": {"task_id": claim_task.task_id},
-                    "node_id": node_id,
-                    "worker_id": "planner",
-                    "fencing_token": queue_lease_claim_fencing_token,
-                },
+                json={"node_id": "node-fastapi", "worker_id": "planner", "health": "unknown"},
             )
             worker_nodes = client.get("/api/v2/workers/nodes")
             worker_node_heartbeat = client.post(
                 "/api/v2/workers/heartbeat",
-                json={"node_id": node_id, "status": "running", "health": "healthy", "load": 0.25},
+                json={"node_id": "node-fastapi", "status": "running", "health": "healthy", "load": 0.25},
             )
             worker_node_drain = client.post(
-                f"/api/v2/workers/{node_id}/drain",
+                "/api/v2/workers/node-fastapi/drain",
                 json={"reason": "maintenance"},
             )
             history_stats = client.get("/api/history/stats")
@@ -230,13 +165,6 @@ class ReleaseGatewayLiveTest(unittest.TestCase):
         self.assertEqual(workers.status_code, 200, workers.text)
         self.assertEqual(worker_detail.status_code, 200, worker_detail.text)
         self.assertEqual(worker_node_register.status_code, 200, worker_node_register.text)
-        self.assertEqual(worker_queues.status_code, 200, worker_queues.text)
-        self.assertEqual(queue_lease_acquire.status_code, 200, queue_lease_acquire.text)
-        self.assertEqual(queue_leases.status_code, 200, queue_leases.text)
-        self.assertEqual(queue_lease_renew.status_code, 200, queue_lease_renew.text)
-        self.assertEqual(queue_lease_release.status_code, 200, queue_lease_release.text)
-        self.assertEqual(queue_lease_claim.status_code, 200, queue_lease_claim.text)
-        self.assertEqual(queue_lease_report.status_code, 200, queue_lease_report.text)
         self.assertEqual(worker_nodes.status_code, 200, worker_nodes.text)
         self.assertEqual(worker_node_heartbeat.status_code, 200, worker_node_heartbeat.text)
         self.assertEqual(worker_node_drain.status_code, 200, worker_node_drain.text)
@@ -260,17 +188,8 @@ class ReleaseGatewayLiveTest(unittest.TestCase):
         self.assertIn("blockers", blockers.json())
         self.assertIn("worker_count", workers.json())
         self.assertEqual(worker_detail.json()["worker"]["worker_id"], "planner")
-        self.assertEqual(worker_node_register.json()["node"]["node_id"], node_id)
-        self.assertGreaterEqual(worker_queues.json()["summary"]["queue_count"], 1)
-        self.assertTrue(queue_lease_acquire.json()["acquired"])
-        self.assertEqual(queue_leases.json()["leases"][0]["lease_id"], queue_lease_id)
-        self.assertTrue(queue_lease_renew.json()["renewed"])
-        self.assertEqual(queue_lease_release.json()["lease"]["lease_status"], "released")
-        self.assertTrue(queue_lease_claim.json()["claimed"])
-        self.assertEqual(queue_lease_claim.json()["task"]["task_id"], claim_task.task_id)
-        self.assertTrue(queue_lease_report.json()["reported"])
-        self.assertEqual(queue_lease_report.json()["task"]["status"], "completed")
-        self.assertGreaterEqual(worker_nodes.json()["summary"]["node_count"], 1)
+        self.assertEqual(worker_node_register.json()["node"]["node_id"], "node-fastapi")
+        self.assertEqual(worker_nodes.json()["summary"]["node_count"], 1)
         self.assertEqual(worker_node_heartbeat.json()["node"]["health"], "healthy")
         self.assertEqual(worker_node_drain.json()["node"]["effective_status"], "draining")
         self.assertIn("total", history_stats.json())
@@ -336,109 +255,22 @@ class ReleaseGatewayLiveTest(unittest.TestCase):
         blockers_status, _, blockers_body = request("GET", "/api/tasks/blockers")
         workers_status, _, workers_body = request("GET", "/api/workers")
         worker_detail_status, _, worker_detail_body = request("GET", "/api/workers/planner")
-        node_id = f"node-stdlib-{uuid.uuid4().hex[:8]}"
-        queue_name = f"planner.{node_id}"
         worker_node_register_status, _, worker_node_register_body = request(
             "POST",
             "/api/v2/workers/register",
             headers={"Content-Type": "application/json"},
-            body=json.dumps({"node_id": node_id, "worker_id": "planner"}),
-        )
-        lease_task = bot.task_store.create_task(
-            title="stdlib lease task",
-            command="status",
-            owner="worker:planner",
-            delegated_to_worker="planner",
-            status="queued",
-        )
-        worker_queues_status, _, worker_queues_body = request("GET", "/api/v2/workers/queues")
-        queue_lease_acquire_status, _, queue_lease_acquire_body = request(
-            "POST",
-            "/api/v2/workers/leases/acquire",
-            headers={"Content-Type": "application/json"},
-            body=json.dumps(
-                {
-                    "queue_name": queue_name,
-                    "node_id": node_id,
-                    "task_id": lease_task.task_id,
-                    "lease_ttl_seconds": 120,
-                }
-            ),
-        )
-        queue_lease_acquire_preview = json.loads(queue_lease_acquire_body)
-        queue_lease_id = queue_lease_acquire_preview["lease"]["lease_id"]
-        queue_lease_fencing_token = queue_lease_acquire_preview["lease"]["metadata"]["fencing_token"]
-        queue_leases_status, _, queue_leases_body = request(
-            "GET",
-            f"/api/v2/workers/leases?queue_name={queue_name}",
-        )
-        queue_lease_renew_status, _, queue_lease_renew_body = request(
-            "POST",
-            f"/api/v2/workers/leases/{queue_lease_id}/renew",
-            headers={"Content-Type": "application/json"},
-            body=json.dumps({"lease_ttl_seconds": 120, "fencing_token": queue_lease_fencing_token}),
-        )
-        queue_lease_release_status, _, queue_lease_release_body = request(
-            "POST",
-            f"/api/v2/workers/leases/{queue_lease_id}/release",
-            headers={"Content-Type": "application/json"},
-            body=json.dumps(
-                {
-                    "reason": "release-live",
-                    "node_id": node_id,
-                    "worker_id": "planner",
-                    "fencing_token": queue_lease_fencing_token,
-                }
-            ),
-        )
-        claim_task = bot.task_store.create_task(
-            title="stdlib claim task",
-            command="status",
-            owner="worker:planner",
-            delegated_to_worker="planner",
-            status="queued",
-        )
-        queue_lease_claim_status, _, queue_lease_claim_body = request(
-            "POST",
-            "/api/v2/workers/leases/claim-next",
-            headers={"Content-Type": "application/json"},
-            body=json.dumps(
-                {
-                    "queue_name": queue_name,
-                    "node_id": node_id,
-                    "worker_id": "planner",
-                    "lease_ttl_seconds": 120,
-                }
-            ),
-        )
-        queue_lease_claim_preview = json.loads(queue_lease_claim_body)
-        queue_lease_claim_id = queue_lease_claim_preview["lease"]["lease_id"]
-        queue_lease_claim_fencing_token = queue_lease_claim_preview["lease"]["metadata"]["fencing_token"]
-        queue_lease_report_status, _, queue_lease_report_body = request(
-            "POST",
-            f"/api/v2/workers/leases/{queue_lease_claim_id}/report",
-            headers={"Content-Type": "application/json"},
-            body=json.dumps(
-                {
-                    "success": True,
-                    "summary": "claim complete",
-                    "result": {"task_id": claim_task.task_id},
-                    "node_id": node_id,
-                    "worker_id": "planner",
-                    "fencing_token": queue_lease_claim_fencing_token,
-                }
-            ),
+            body=json.dumps({"node_id": "node-stdlib", "worker_id": "planner"}),
         )
         worker_nodes_status, _, worker_nodes_body = request("GET", "/api/v2/workers/nodes")
         worker_node_heartbeat_status, _, worker_node_heartbeat_body = request(
             "POST",
             "/api/v2/workers/heartbeat",
             headers={"Content-Type": "application/json"},
-            body=json.dumps({"node_id": node_id, "status": "running", "health": "healthy", "load": 0.1}),
+            body=json.dumps({"node_id": "node-stdlib", "status": "running", "health": "healthy", "load": 0.1}),
         )
         worker_node_drain_status, _, worker_node_drain_body = request(
             "POST",
-            f"/api/v2/workers/{node_id}/drain",
+            "/api/v2/workers/node-stdlib/drain",
             headers={"Content-Type": "application/json"},
             body=json.dumps({"reason": "maintenance"}),
         )
@@ -471,13 +303,6 @@ class ReleaseGatewayLiveTest(unittest.TestCase):
         workers = json.loads(workers_body)
         worker_detail = json.loads(worker_detail_body)
         worker_node_register = json.loads(worker_node_register_body)
-        worker_queues = json.loads(worker_queues_body)
-        queue_lease_acquire = json.loads(queue_lease_acquire_body)
-        queue_leases = json.loads(queue_leases_body)
-        queue_lease_renew = json.loads(queue_lease_renew_body)
-        queue_lease_release = json.loads(queue_lease_release_body)
-        queue_lease_claim = json.loads(queue_lease_claim_body)
-        queue_lease_report = json.loads(queue_lease_report_body)
         worker_nodes = json.loads(worker_nodes_body)
         worker_node_heartbeat = json.loads(worker_node_heartbeat_body)
         worker_node_drain = json.loads(worker_node_drain_body)
@@ -502,13 +327,6 @@ class ReleaseGatewayLiveTest(unittest.TestCase):
         self.assertEqual(workers_status, 200, workers_body)
         self.assertEqual(worker_detail_status, 200, worker_detail_body)
         self.assertEqual(worker_node_register_status, 200, worker_node_register_body)
-        self.assertEqual(worker_queues_status, 200, worker_queues_body)
-        self.assertEqual(queue_lease_acquire_status, 200, queue_lease_acquire_body)
-        self.assertEqual(queue_leases_status, 200, queue_leases_body)
-        self.assertEqual(queue_lease_renew_status, 200, queue_lease_renew_body)
-        self.assertEqual(queue_lease_release_status, 200, queue_lease_release_body)
-        self.assertEqual(queue_lease_claim_status, 200, queue_lease_claim_body)
-        self.assertEqual(queue_lease_report_status, 200, queue_lease_report_body)
         self.assertEqual(worker_nodes_status, 200, worker_nodes_body)
         self.assertEqual(worker_node_heartbeat_status, 200, worker_node_heartbeat_body)
         self.assertEqual(worker_node_drain_status, 200, worker_node_drain_body)
@@ -532,17 +350,8 @@ class ReleaseGatewayLiveTest(unittest.TestCase):
         self.assertIn("blockers", blockers)
         self.assertIn("worker_count", workers)
         self.assertEqual(worker_detail["worker"]["worker_id"], "planner")
-        self.assertEqual(worker_node_register["node"]["node_id"], node_id)
-        self.assertGreaterEqual(worker_queues["summary"]["queue_count"], 1)
-        self.assertTrue(queue_lease_acquire["acquired"])
-        self.assertEqual(queue_leases["leases"][0]["lease_id"], queue_lease_id)
-        self.assertTrue(queue_lease_renew["renewed"])
-        self.assertEqual(queue_lease_release["lease"]["lease_status"], "released")
-        self.assertTrue(queue_lease_claim["claimed"])
-        self.assertEqual(queue_lease_claim["task"]["task_id"], claim_task.task_id)
-        self.assertTrue(queue_lease_report["reported"])
-        self.assertEqual(queue_lease_report["task"]["status"], "completed")
-        self.assertGreaterEqual(worker_nodes["summary"]["node_count"], 1)
+        self.assertEqual(worker_node_register["node"]["node_id"], "node-stdlib")
+        self.assertEqual(worker_nodes["summary"]["node_count"], 1)
         self.assertEqual(worker_node_heartbeat["node"]["health"], "healthy")
         self.assertEqual(worker_node_drain["node"]["effective_status"], "draining")
         self.assertIn("total", history_stats)

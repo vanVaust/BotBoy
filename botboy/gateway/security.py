@@ -9,32 +9,8 @@ LOCALHOST_ALIASES = ("127.0.0.1", "localhost")
 DEFAULT_GATEWAY_PORT = 8765
 
 
-def _env_truthy(name: str) -> bool:
-    return str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "on", "allow"}
-
-
 def default_bind_host() -> str:
     return str(os.getenv("BOTBOY_HOST", "127.0.0.1")).strip() or "127.0.0.1"
-
-
-def is_loopback_host(host: str) -> bool:
-    normalized = str(host or "").strip().lower().strip("[]")
-    return normalized in {*LOCALHOST_ALIASES, "::1"} or normalized.startswith("127.")
-
-
-def insecure_remote_override_enabled(surface: str = "gateway") -> bool:
-    surface_key = f"BOTBOY_{str(surface or 'gateway').upper()}_ALLOW_INSECURE_REMOTE"
-    return _env_truthy(surface_key) or _env_truthy("BOTBOY_ALLOW_INSECURE_REMOTE")
-
-
-def validate_safe_bind(host: str, *, auth_enabled: bool, surface: str = "gateway") -> None:
-    """Reject remote binds without auth unless an explicit operator override is set."""
-    if auth_enabled or is_loopback_host(host) or insecure_remote_override_enabled(surface):
-        return
-    raise RuntimeError(
-        f"Refusing to start {surface} on non-loopback host '{host}' with auth disabled. "
-        "Enable authentication or set BOTBOY_ALLOW_INSECURE_REMOTE=1 explicitly."
-    )
 
 
 def resolve_cors_origins(*, host: str = "", port: int = DEFAULT_GATEWAY_PORT) -> list[str]:

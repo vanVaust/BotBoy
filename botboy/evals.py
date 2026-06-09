@@ -30,13 +30,6 @@ from botboy.resources import (
     bundled_skills_dir,
 )
 from botboy.scheduler import ScheduledTask
-from botboy.workflow_ir import (
-    WorkflowIR,
-    WorkflowReplayRecorder,
-    build_policy_decision,
-    compile_workflow_ir,
-    workflow_step_from_spec,
-)
 
 
 @dataclass(frozen=True)
@@ -1115,42 +1108,25 @@ class EvalReplayRunner:
     def _run_workflow_case(self, bot: BotBoy, case: EvalCase, seed: ReplaySeed) -> EvalCaseResult:
         step_specs = case.expected.get("steps") or [seed.input or case.command or "status"]
         executed_steps: List[Dict[str, Any]] = []
-        workflow_goal = seed.input or case.command or case.id
-        workflow_probe = compile_workflow_ir(
-            goal=workflow_goal,
-            step_specs=step_specs,
-            principal=seed.principal,
-            request_id=seed.request_id,
-            metadata={"case_id": seed.case_id, "seed_id": seed.id},
-        )
-        workflow_id = workflow_probe.workflow_id
-        workflow_steps = []
-        policy_decisions = []
-        executed_step_ids: set[str] = set()
-        replay = WorkflowReplayRecorder(workflow_id)
-        replay.record(
-            "workflow_started",
-            status="running",
-            payload={"case_id": seed.case_id, "step_count": len(step_specs)},
-        )
 
         for index, step_spec in enumerate(step_specs):
             template_context = {"steps": executed_steps}
             resolved_step = _resolve_template_value(step_spec, template_context)
-            step_ir = workflow_step_from_spec(resolved_step, index=index, default_request_id=seed.request_id)
-            workflow_steps.append(step_ir)
 
-            step_command = step_ir.command
-            step_request_id = step_ir.request_id or seed.request_id
-            step_approval_context = dict(step_ir.approval_context)
+            if isinstance(resolved_step, str):
+                step_command = resolved_step.strip()
+                step_request_id = seed.request_id
+                step_approval_context: Dict[str, Any] = {}
+            elif isinstance(resolved_step, dict):
+                step_command = str(resolved_step.get("command", "")).strip()
+                step_request_id = str(resolved_step.get("request_id", seed.request_id))
+                step_approval_context = dict(resolved_step.get("approval_context") or {})
+            else:
+                step_command = str(resolved_step).strip()
+                step_request_id = seed.request_id
+                step_approval_context = {}
 
             if not step_command:
-                replay.record(
-                    "step_failed",
-                    step_id=step_ir.step_id,
-                    status="invalid",
-                    payload={"reason": "empty command", "index": index},
-                )
                 return EvalCaseResult(
                     case_id=seed.case_id,
                     kind=seed.kind,
@@ -1158,99 +1134,21 @@ class EvalReplayRunner:
                     error=f"Workflow case '{seed.case_id}' contains an empty step at index {index}",
                 )
 
-            replay.record(
-                "step_started",
-                step_id=step_ir.step_id,
-                status="running",
-                payload={"command": step_command, "request_id": step_request_id},
-            )
-
-            missing_dependencies = [dep for dep in step_ir.depends_on if dep not in executed_step_ids]
-            if missing_dependencies:
-                step_result = {
-                    "success": False,
-                    "type": "workflow",
-                    "output": f"Skipped workflow step; dependencies not met: {', '.join(missing_dependencies)}",
-                    "skipped": True,
-                    "missing_dependencies": missing_dependencies,
-                }
-                executed_steps.append(
-                    {
-                        "step_id": step_ir.step_id,
-                        "command": step_command,
-                        "request_id": step_request_id,
-                        "result": step_result,
-                    }
-                )
-                replay.record(
-                    "step_skipped",
-                    step_id=step_ir.step_id,
-                    status="skipped",
-                    payload={"missing_dependencies": missing_dependencies},
-                )
-                continue
-
             command_kwargs = _command_kwargs(case, seed)
             command_kwargs["request_id"] = step_request_id
-            merged_approval_context = dict(command_kwargs.get("approval_context") or {})
             if step_approval_context:
+                merged_approval_context = dict(command_kwargs.get("approval_context") or {})
                 merged_approval_context.update(step_approval_context)
                 command_kwargs["approval_context"] = merged_approval_context
 
-            decision = build_policy_decision(
-                workflow_id=workflow_id,
-                step=step_ir,
-                principal=seed.principal,
-                roles=command_kwargs.get("roles", []),
-                approval_context=merged_approval_context,
-                surface="eval_replay",
-            )
-            policy_decisions.append(decision)
-            if not decision.allowed:
-                step_result = {
-                    "success": False,
-                    "type": "policy",
-                    "output": f"Workflow policy denied step '{step_ir.step_id}': {decision.reason}",
-                    "data": {"policy": decision.to_dict()},
-                }
-            else:
-                step_result = asyncio.run(bot.process_command(step_command, **command_kwargs))
+            step_result = asyncio.run(bot.process_command(step_command, **command_kwargs))
             executed_steps.append(
                 {
-                    "step_id": step_ir.step_id,
                     "command": step_command,
                     "request_id": step_request_id,
                     "result": step_result,
-                    "policy": decision.to_dict(),
                 }
             )
-            if step_result.get("success"):
-                executed_step_ids.add(step_ir.step_id)
-            replay.record(
-                "step_completed",
-                step_id=step_ir.step_id,
-                status="success" if step_result.get("success") else "failed",
-                payload={
-                    "result_success": bool(step_result.get("success", False)),
-                    "policy_allowed": bool(decision.allowed),
-                },
-            )
-
-        workflow_ir = WorkflowIR(
-            workflow_id=workflow_id,
-            goal=workflow_goal,
-            steps=workflow_steps,
-            principal=seed.principal,
-            request_id=seed.request_id,
-            policy_decisions=policy_decisions,
-            metadata={"case_id": seed.case_id, "seed_id": seed.id},
-        )
-        workflow_ir_issues = workflow_ir.validate()
-        replay.record(
-            "workflow_completed",
-            status="success" if all(bool(step["result"].get("success", False)) for step in executed_steps) else "failed",
-            payload={"validation_issue_count": len(workflow_ir_issues), "executed_step_count": len(executed_steps)},
-        )
 
         primary_result = executed_steps[0]["result"]
         final_result = executed_steps[-1]["result"]
@@ -1286,13 +1184,6 @@ class EvalReplayRunner:
             "request_total": request_total,
             "principal_records": [record.to_dict() for record in principal_records],
             "principal_total": principal_total,
-            "workflow_ir": workflow_ir.to_dict(),
-            "workflow_ir_validation": {
-                "valid": not workflow_ir_issues,
-                "issues": [issue.to_dict() for issue in workflow_ir_issues],
-            },
-            "policy_decisions": [decision.to_dict() for decision in policy_decisions],
-            "replay_events": replay.to_dicts(),
         }
 
         checks: List[EvalCheck] = []
@@ -1344,32 +1235,6 @@ class EvalReplayRunner:
                     passed=all(bool(step["result"].get("success", False)) for step in executed_steps),
                     expected=True,
                     actual=[bool(step["result"].get("success", False)) for step in executed_steps],
-                )
-            )
-
-        if resolved_expected.get("verify_workflow_ir", True):
-            checks.append(
-                EvalCheck(
-                    name="workflow.ir_valid",
-                    passed=not workflow_ir_issues,
-                    expected=[],
-                    actual=[issue.to_dict() for issue in workflow_ir_issues],
-                )
-            )
-            checks.append(
-                EvalCheck(
-                    name="workflow.policy_decision_count",
-                    passed=len(policy_decisions) >= len([step for step in executed_steps if not step["result"].get("skipped")]),
-                    expected=len(executed_steps),
-                    actual=len(policy_decisions),
-                )
-            )
-            checks.append(
-                EvalCheck(
-                    name="workflow.replay_event_count",
-                    passed=len(replay.events) >= len(executed_steps) + 2,
-                    expected=len(executed_steps) + 2,
-                    actual=len(replay.events),
                 )
             )
 

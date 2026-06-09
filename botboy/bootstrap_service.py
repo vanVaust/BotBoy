@@ -32,6 +32,9 @@ from botboy.tracing import TraceStore
 from botboy.validation import InputValidator
 from botboy.cache import ResponseCache
 from botboy.history import TaskHistory
+from botboy.core.dag_engine import MassEscalationEngine
+from botboy.core.self_healing import SelfHealingEngine
+from botboy.security.governance import GovernanceEngine
 
 
 class BootstrapService:
@@ -47,6 +50,9 @@ class BootstrapService:
     def initialize(self) -> bool:
         """Initialise the core runtime components on the bot object."""
         try:
+            from botboy.observability import configure_json_logging
+            configure_json_logging()
+            
             self.bot.monitor = PerformanceMonitor(
                 retention=self.config.performance.metrics_retention
             )
@@ -98,6 +104,10 @@ class BootstrapService:
                         break
                     except (OSError, RuntimeError):
                         continue
+                if hasattr(self.bot, 'task_store') and self.bot.task_store:
+                    self.bot.dag_engine = MassEscalationEngine(self.bot.task_store)
+                    self.bot.self_healing = SelfHealingEngine(self.bot.task_store)
+                    self.bot.governance = GovernanceEngine(self.bot.task_store)
 
             if self.config.scheduler.enabled:
                 sched_path = self.config.resolve_scheduler_db_path()
@@ -140,9 +150,23 @@ class BootstrapService:
             if self.config.llm.enabled:
                 self._init_llm()
 
+            security = getattr(self.config, "security", None)
+            enable_auth = getattr(security, "enable_auth", False) if security else False
+            if not enable_auth:
+                import logging
+                import warnings
+                _auth_msg = (
+                    "[SECURITY WARNING] BotBoy auth is DISABLED. All API endpoints are publicly accessible. "
+                    "Set security.enable_auth=true in config or BOTBOY_ENABLE_AUTH=true for production."
+                )
+                warnings.warn(_auth_msg, stacklevel=2)
+                logging.warning(_auth_msg)
+
             self.bot._initialized = True
             return True
         except Exception as exc:  # pragma: no cover - defensive parity with __main__
+            import traceback
+            traceback.print_exc(file=sys.stderr)
             print(f"[BotBoy] Initialisation error: {exc}", file=sys.stderr)
             return False
 

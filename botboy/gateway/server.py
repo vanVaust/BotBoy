@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from botboy.gateway.security import default_bind_host, resolve_cors_origins, validate_safe_bind
+from botboy.gateway.security import default_bind_host, resolve_cors_origins
 from botboy.gateway.app_context import GatewayAppContext
 from botboy.gateway.dashboard_payload import enrich_dashboard_payload as shared_enrich_dashboard_payload
 from botboy.gateway.merge_actions import (
@@ -129,8 +129,8 @@ def create_app(bot, *, host: str = default_bind_host(), port: int = 8765) -> Any
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Forwarded-For", "X-Real-IP", "X-BotBoy-Approval"],
         allow_credentials=False,
     )
 
@@ -142,10 +142,32 @@ def create_app(bot, *, host: str = default_bind_host(), port: int = 8765) -> Any
         response.headers["X-Request-ID"] = request_id
         return response
 
+    @app.middleware("http")
+    async def csrf_protection(request: Request, call_next):
+        if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+            # Enforce Double Submit Cookie pattern if auth cookies are present
+            # or if the config enforces CSRF strictly.
+            # To avoid breaking purely API-key or Bearer driven clients that don't send cookies,
+            # we only strictly enforce CSRF if there is a session/auth cookie, 
+            # OR if we know the request is from a browser.
+            from botboy.gateway.csrf import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, verify_csrf_token
+            
+            cookie_token = request.cookies.get(CSRF_COOKIE_NAME)
+            header_token = request.headers.get(CSRF_HEADER_NAME) or request.headers.get(CSRF_HEADER_NAME.lower())
+            
+            # If the user has the CSRF cookie, they MUST provide the header.
+            if cookie_token:
+                if not verify_csrf_token(header_token, cookie_token):
+                    raise HTTPException(status_code=403, detail="CSRF token validation failed")
+            
+            # For now, if no cookie is present, we pass through (assuming it's a CLI/API client).
+            
+        response = await call_next(request)
+        return response
+
     config = getattr(bot, "config", None)
     security = getattr(config, "security", None)
     auth_enabled = bool(getattr(security, "enable_auth", False))
-    validate_safe_bind(host, auth_enabled=auth_enabled, surface="gateway")
 
     jwt_secret = ""
     if config and hasattr(config, "resolve_jwt_secret"):
@@ -154,7 +176,20 @@ def create_app(bot, *, host: str = default_bind_host(), port: int = 8765) -> Any
         jwt_secret = getattr(security, "jwt_secret", "")
 
     try:
-        auth = JWTAuth(secret=jwt_secret, allow_generate=not auth_enabled)
+        from botboy.gateway.secrets import TokenRevocationStore
+        
+        revocation_store_path = ""
+        if config and hasattr(config, "resolve_token_revocation_db_path"):
+            revocation_store_path = config.resolve_token_revocation_db_path()
+        else:
+            revocation_store_path = str(Path.home() / ".botboy" / "revoked_tokens.db")
+            
+        try:
+            revocation_store = TokenRevocationStore(db_path=revocation_store_path)
+        except (OSError, RuntimeError, sqlite3.Error):
+            revocation_store = None
+            
+        auth = JWTAuth(secret=jwt_secret, allow_generate=not auth_enabled, revocation_store=revocation_store)
     except ValueError as exc:
         raise RuntimeError(
             "BotBoy auth is enabled, but no stable JWT secret is configured. "
@@ -541,6 +576,8 @@ def create_app(bot, *, host: str = default_bind_host(), port: int = 8765) -> Any
     from botboy.gateway.routes_core import create_core_router
     from botboy.gateway.routes_tasks import create_task_router
     from botboy.gateway.routes_ws import create_ws_router
+    from botboy.gateway.routes_fleet import create_fleet_router
+    from botboy.gateway.routes_orgs import create_org_router
 
     route_context = GatewayAppContext(
         bot=bot,
@@ -579,6 +616,8 @@ def create_app(bot, *, host: str = default_bind_host(), port: int = 8765) -> Any
     app.include_router(create_task_router(route_context))
     app.include_router(create_auth_router(route_context))
     app.include_router(create_ws_router(route_context))
+    app.include_router(create_fleet_router(route_context))
+    app.include_router(create_org_router(route_context))
 
     if bot.history:
         from botboy.history import make_history_router

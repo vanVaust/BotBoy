@@ -8,7 +8,6 @@ from botboy.gateway.auth import JWTAuth
 from botboy.gateway.dashboard_payload import enrich_dashboard_payload as shared_enrich_dashboard_payload
 from botboy.gateway.rate_limit import RateLimiter
 from botboy.gateway.secrets import PrincipalStore, SecretStore
-from botboy.gateway.security import validate_safe_bind
 from botboy.gateway.task_support import (
     build_task_graph as shared_build_task_graph,
     collect_task_records as shared_collect_task_records,
@@ -42,7 +41,6 @@ def build_simple_handler_state(
     config = getattr(bot, "config", None)
     security = getattr(config, "security", None)
     auth_enabled = bool(getattr(security, "enable_auth", False))
-    validate_safe_bind(host, auth_enabled=auth_enabled, surface="gateway")
 
     jwt_secret = ""
     if config and hasattr(config, "resolve_jwt_secret"):
@@ -51,7 +49,20 @@ def build_simple_handler_state(
         jwt_secret = getattr(security, "jwt_secret", "")
 
     try:
-        auth = JWTAuth(secret=jwt_secret, allow_generate=not auth_enabled)
+        from botboy.gateway.secrets import TokenRevocationStore
+        
+        revocation_store_path = ""
+        if config and hasattr(config, "resolve_token_revocation_db_path"):
+            revocation_store_path = config.resolve_token_revocation_db_path()
+        else:
+            revocation_store_path = str(Path.home() / ".botboy" / "revoked_tokens.db")
+            
+        try:
+            revocation_store = TokenRevocationStore(db_path=revocation_store_path)
+        except (OSError, RuntimeError, sqlite3.Error):
+            revocation_store = None
+            
+        auth = JWTAuth(secret=jwt_secret, allow_generate=not auth_enabled, revocation_store=revocation_store)
     except ValueError as exc:
         raise RuntimeError(
             "BotBoy auth is enabled, but no stable JWT secret is configured. "

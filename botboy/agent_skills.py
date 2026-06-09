@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -28,6 +28,33 @@ class AgentSkillEntry:
     routing_keywords: List[str]
     has_references: bool
     has_scripts: bool
+    inputs_schema: Dict[str, Any] = field(default_factory=dict)
+    outputs_schema: Dict[str, Any] = field(default_factory=dict)
+
+    class ContractValidationError(Exception):
+        pass
+
+    def validate_contract(self, inputs: Dict[str, Any]) -> bool:
+        """Validates inputs against the typed contract schema."""
+        if not self.inputs_schema:
+            return True
+            
+        required = self.inputs_schema.get("required", [])
+        for req in required:
+            if req not in inputs:
+                raise self.ContractValidationError(f"Missing required input: {req}")
+                
+        properties = self.inputs_schema.get("properties", {})
+        for k, v in inputs.items():
+            if k in properties:
+                expected_type = properties[k].get("type")
+                if expected_type == "string" and not isinstance(v, str):
+                    raise self.ContractValidationError(f"Input '{k}' must be string")
+                elif expected_type == "integer" and not isinstance(v, int):
+                    raise self.ContractValidationError(f"Input '{k}' must be integer")
+                elif expected_type == "boolean" and not isinstance(v, bool):
+                    raise self.ContractValidationError(f"Input '{k}' must be boolean")
+        return True
 
     @property
     def resolved_path(self) -> str:
@@ -48,6 +75,8 @@ class AgentSkillEntry:
             routing_keywords=[str(item) for item in payload.get("routing_keywords", [])],
             has_references=bool(payload.get("has_references", False)),
             has_scripts=bool(payload.get("has_scripts", False)),
+            inputs_schema=payload.get("inputs_schema", {}),
+            outputs_schema=payload.get("outputs_schema", {}),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -64,6 +93,8 @@ class AgentSkillEntry:
             "routing_keywords": list(self.routing_keywords),
             "has_references": self.has_references,
             "has_scripts": self.has_scripts,
+            "inputs_schema": self.inputs_schema,
+            "outputs_schema": self.outputs_schema,
         }
 
 
@@ -105,6 +136,25 @@ class AgentSkillLibrary:
             if entry.name.lower() == lowered:
                 return entry
         return None
+
+    def load_skill_dynamic(self, payload: Dict[str, Any]) -> AgentSkillEntry:
+        """Dynamically loads and hot-swaps an MCP/Skill entry at runtime."""
+        entry = AgentSkillEntry.from_dict(payload)
+        
+        # Remove old entry if hot-swapping an existing skill
+        self.unload_skill(entry.name)
+        
+        self.entries.append(entry)
+        return entry
+
+    def unload_skill(self, name: str) -> bool:
+        """Dynamically unloads a skill at runtime."""
+        lowered = name.strip().lower()
+        for i, entry in enumerate(self.entries):
+            if entry.name.lower() == lowered:
+                self.entries.pop(i)
+                return True
+        return False
 
     def suggest(self, query: str, *, phase: str = "", limit: int = 5) -> List[AgentSkillEntry]:
         tokens = [token for token in re.split(r"[^a-z0-9]+", query.lower()) if token]

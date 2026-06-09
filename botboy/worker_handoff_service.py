@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any, Awaitable, Callable, Optional
 
@@ -19,7 +18,7 @@ from botboy.task_merge_helpers import (
 from botboy.tasks import (
     DELEGATION_STATUS_AWAITING_MERGE,
     DELEGATION_STATUS_BLOCKED_ON_CHILD,
-    DELEGATION_STATUS_DELEGATED,
+    DELEGATION_STATUS_LEASED,
     TASK_STATUS_BLOCKED,
     TASK_STATUS_CANCELLED,
     TASK_STATUS_COMPLETED,
@@ -29,103 +28,19 @@ from botboy.tasks import (
     TASK_STATUS_WAITING_APPROVAL,
     TaskContext,
 )
-from botboy.worker_client import TaskStoreWorkerClient
-from botboy.worker_daemon import WorkerDaemon, WorkerDaemonConfig
 
-MERGE_RESOLUTION_LAST_CHILD_WINS = "last_child_wins"
-MERGE_RESOLUTION_FIRST_CHILD_WINS = "first_child_wins"
-MERGE_RESOLUTION_PREFER_NON_NULL = "prefer_non_null"
-MERGE_RESOLUTION_PREFER_RICHER_VALUE = "prefer_richer_value"
-MERGE_RESOLUTION_PREFER_WORKER_PRIORITY = "prefer_worker_priority"
-SUPPORTED_MERGE_RESOLUTION_POLICIES = {
-    MERGE_RESOLUTION_LAST_CHILD_WINS: MERGE_RESOLUTION_LAST_CHILD_WINS,
-    "last_wins": MERGE_RESOLUTION_LAST_CHILD_WINS,
-    MERGE_RESOLUTION_FIRST_CHILD_WINS: MERGE_RESOLUTION_FIRST_CHILD_WINS,
-    "first_wins": MERGE_RESOLUTION_FIRST_CHILD_WINS,
-    MERGE_RESOLUTION_PREFER_NON_NULL: MERGE_RESOLUTION_PREFER_NON_NULL,
-    "non_null": MERGE_RESOLUTION_PREFER_NON_NULL,
-    MERGE_RESOLUTION_PREFER_RICHER_VALUE: MERGE_RESOLUTION_PREFER_RICHER_VALUE,
-    "richer_value": MERGE_RESOLUTION_PREFER_RICHER_VALUE,
-    "prefer_richer": MERGE_RESOLUTION_PREFER_RICHER_VALUE,
-    MERGE_RESOLUTION_PREFER_WORKER_PRIORITY: MERGE_RESOLUTION_PREFER_WORKER_PRIORITY,
-    "worker_priority": MERGE_RESOLUTION_PREFER_WORKER_PRIORITY,
-    "prefer_worker": MERGE_RESOLUTION_PREFER_WORKER_PRIORITY,
-}
-MERGE_REVIEW_ACTIONS = (
-    "set_policy",
-    "resolve_key",
-    "resolve_many",
-    "resolve_all_by_source",
-    "clear_resolution",
-    "clear_many",
-    "apply_preset",
-    "reapply",
+from botboy.constants import (
+    MERGE_RESOLUTION_FIRST_CHILD_WINS,
+    MERGE_RESOLUTION_LAST_CHILD_WINS,
+    MERGE_RESOLUTION_PREFER_NON_NULL,
+    MERGE_RESOLUTION_PREFER_RICHER_VALUE,
+    MERGE_RESOLUTION_PREFER_WORKER_PRIORITY,
+    MERGE_REVIEW_ACTIONS,
+    MERGE_REVIEW_PRESETS,
+    MERGE_WORKER_PRIORITY,
+    SUPPORTED_MERGE_RESOLUTION_POLICIES,
 )
-MERGE_WORKER_PRIORITY = {
-    "reviewer": 50,
-    "executor": 40,
-    "planner": 30,
-    "researcher": 20,
-    "designer": 10,
-}
-MERGE_REVIEW_PRESETS = {
-    "fastest": {
-        "preset": "fastest",
-        "mode": "policy",
-        "policy": MERGE_RESOLUTION_LAST_CHILD_WINS,
-        "label": "Fastest",
-        "description": "Favor the latest completed child result.",
-    },
-    "safest": {
-        "preset": "safest",
-        "mode": "policy",
-        "policy": MERGE_RESOLUTION_FIRST_CHILD_WINS,
-        "label": "Safest",
-        "description": "Keep the first completed child result where conflicts exist.",
-    },
-    "richest": {
-        "preset": "richest",
-        "mode": "policy",
-        "policy": MERGE_RESOLUTION_PREFER_RICHER_VALUE,
-        "label": "Richest",
-        "description": "Prefer structurally richer payload values during merge review.",
-    },
-    "priority_weighted": {
-        "preset": "priority_weighted",
-        "mode": "policy",
-        "policy": MERGE_RESOLUTION_PREFER_WORKER_PRIORITY,
-        "label": "Priority Weighted",
-        "description": "Prefer higher-priority worker outputs during conflict resolution.",
-    },
-    "prefer_non_null": {
-        "preset": "prefer_non_null",
-        "mode": "policy",
-        "policy": MERGE_RESOLUTION_PREFER_NON_NULL,
-        "label": "Prefer Non Null",
-        "description": "Prefer non-null values when children disagree.",
-    },
-    "prefer_reviewer": {
-        "preset": "prefer_reviewer",
-        "mode": "source",
-        "source": "reviewer",
-        "label": "Prefer Reviewer",
-        "description": "Resolve all pending conflict keys to reviewer when available.",
-    },
-    "prefer_planner": {
-        "preset": "prefer_planner",
-        "mode": "source",
-        "source": "planner",
-        "label": "Prefer Planner",
-        "description": "Resolve all pending conflict keys to planner when available.",
-    },
-    "prefer_executor": {
-        "preset": "prefer_executor",
-        "mode": "source",
-        "source": "executor",
-        "label": "Prefer Executor",
-        "description": "Resolve all pending conflict keys to executor when available.",
-    },
-}
+
 
 
 class WorkerHandoffService:
@@ -138,11 +53,21 @@ class WorkerHandoffService:
         process_command: Callable[..., Awaitable[dict]] | None = None,
     ) -> None:
         self.bot = bot
-        self.task_store = task_store if task_store is not None else getattr(bot, "task_store", None)
-        self.workers = workers if workers is not None else getattr(bot, "workers", {})
-        self.process_command = (
-            process_command if process_command is not None else getattr(bot, "process_command", None)
-        )
+        self._task_store_arg = task_store
+        self._workers_arg = workers
+        self._process_command_arg = process_command
+
+    @property
+    def task_store(self):
+        return self._task_store_arg if self._task_store_arg is not None else getattr(self.bot, "task_store", None)
+
+    @property
+    def workers(self):
+        return self._workers_arg if self._workers_arg is not None else getattr(self.bot, "workers", {})
+
+    @property
+    def process_command(self):
+        return self._process_command_arg if self._process_command_arg is not None else getattr(self.bot, "process_command", None)
 
     @staticmethod
     def _child_request_id(root_request_id: str, worker_id: str, attempt: int) -> str:
@@ -417,75 +342,6 @@ class WorkerHandoffService:
             return self.workers.get(worker_id)
         return None
 
-    @staticmethod
-    def _handoff_queue_name(worker) -> str:
-        return f"{worker.worker_id}.handoff-local"
-
-    @staticmethod
-    def _handoff_node_id(worker) -> str:
-        return f"handoff-local-{worker.worker_id}"
-
-    def _handoff_worker_client(self, worker) -> TaskStoreWorkerClient:
-        if not self.task_store:
-            raise RuntimeError("Task store not enabled.")
-        if not self._supports_queue_backed_handoff():
-            raise RuntimeError("Queue-backed handoff requires a task store with worker-fabric support.")
-        client = TaskStoreWorkerClient(
-            self.task_store,
-            worker_id=worker.worker_id,
-            node_id=self._handoff_node_id(worker),
-            queue_name=self._handoff_queue_name(worker),
-            lease_ttl_seconds=300,
-            max_parallelism=max(1, int(getattr(worker, "max_concurrency", 1) or 1)),
-        )
-        client.bootstrap_node(
-            display_name=f"{worker.display_name} Handoff Local",
-            capabilities=list(getattr(worker, "capabilities", []) or []),
-            metadata={
-                "source": "worker_handoff_service",
-                "mode": "queue_backed_local",
-            },
-        )
-        return client
-
-    def _supports_queue_backed_handoff(self) -> bool:
-        if not self.task_store:
-            return False
-        required = (
-            "register_worker_node",
-            "claim_next_queue_lease",
-            "report_queue_lease_result",
-            "release_queue_lease",
-            "get_task",
-        )
-        return all(callable(getattr(self.task_store, name, None)) for name in required)
-
-    def _record_dispatch_event(
-        self,
-        *,
-        parent_task_id: str,
-        child_task_id: str,
-        worker_id: str,
-        queue_name: str,
-        dispatch_status: str,
-        command_text: str,
-        metadata: Optional[dict] = None,
-    ) -> None:
-        if not self.task_store:
-            return
-        recorder = getattr(self.task_store, "record_dispatch_event", None)
-        if not callable(recorder):
-            return
-        recorder(
-            parent_task_id=parent_task_id,
-            child_task_id=child_task_id,
-            worker_id=worker_id,
-            queue_name=queue_name,
-            dispatch_status=dispatch_status,
-            command_text=command_text,
-            metadata=metadata,
-        )
-
     def _create_worker_child_task(
         self,
         *,
@@ -515,9 +371,18 @@ class WorkerHandoffService:
             root_task_id=parent_task.root_task_id,
             status=TASK_STATUS_QUEUED,
             summary=f"Delegated to worker:{worker.worker_id}",
-            delegation_status=DELEGATION_STATUS_DELEGATED,
+            delegation_status=DELEGATION_STATUS_LEASED,
             delegated_to_worker=worker.worker_id,
             attempt_count=attempt_count,
+        )
+        lease_expires_at = self.task_store._now()
+        heartbeat_at = lease_expires_at
+        self.task_store.update_task(
+            child_ctx.task_id,
+            delegation_status=DELEGATION_STATUS_LEASED,
+            delegated_to_worker=worker.worker_id,
+            lease_expires_at=lease_expires_at,
+            heartbeat_at=heartbeat_at,
         )
         self.task_store.add_event(
             parent_task.task_id,
@@ -530,25 +395,12 @@ class WorkerHandoffService:
         )
         self.task_store.add_event(
             child_ctx.task_id,
-            event_type="worker_queued",
-            status=TASK_STATUS_QUEUED,
-            message=f"Worker {worker.display_name} queued",
+            event_type="worker_started",
+            status=TASK_STATUS_RUNNING,
+            message=f"Worker {worker.display_name} started",
             principal=principal,
             request_id=child_request_id,
             payload_ref=worker.worker_id,
-        )
-        self._record_dispatch_event(
-            parent_task_id=parent_task.task_id,
-            child_task_id=child_ctx.task_id,
-            worker_id=worker.worker_id,
-            queue_name=self._handoff_queue_name(worker),
-            dispatch_status="queued",
-            command_text=delegated_command,
-            metadata={
-                "source": "worker_handoff_service",
-                "request_id": child_request_id,
-                "attempt_count": attempt_count,
-            },
         )
         return child_ctx
 
@@ -563,148 +415,33 @@ class WorkerHandoffService:
         roles: Optional[list[str]] = None,
         approval_context: Optional[dict] = None,
     ) -> tuple[dict, Any, str]:
-        if not self.task_store:
-            raise RuntimeError("Task store not enabled.")
         if not callable(self.process_command):
             raise RuntimeError("process_command is not configured.")
-        if not self._supports_queue_backed_handoff():
-            child_result = await self.process_command(
-                delegated_command,
+        child_result = await self.process_command(
+            delegated_command,
+            principal=principal,
+            request_id=child_ctx.request_id,
+            roles=roles or [],
+            approval_context=self._build_child_approval_context(approval_context),
+            task_context=child_ctx,
+        )
+        child_record = self.task_store.get_task(child_ctx.task_id) if self.task_store else None
+        child_status = child_record.status if child_record else self._infer_task_status(child_result)
+        if self.task_store:
+            self.task_store.add_event(
+                child_ctx.task_id,
+                event_type="worker_heartbeat",
+                status=child_status,
+                message=f"Worker {worker.display_name} heartbeat",
                 principal=principal,
                 request_id=child_ctx.request_id,
-                roles=roles or [],
-                approval_context=self._build_child_approval_context(approval_context),
-                task_context=child_ctx,
+                run_id=child_record.run_id if child_record else "",
+                payload_ref=worker.worker_id,
             )
-            child_record = self.task_store.get_task(child_ctx.task_id) if self.task_store else None
-            child_status = child_record.status if child_record else self._infer_task_status(child_result)
-            add_event = getattr(self.task_store, "add_event", None)
-            if callable(add_event):
-                add_event(
-                    child_ctx.task_id,
-                    event_type="worker_heartbeat",
-                    status=child_status,
-                    message=f"Worker {worker.display_name} heartbeat",
-                    principal=principal,
-                    request_id=child_ctx.request_id,
-                    run_id=child_record.run_id if child_record else "",
-                    payload_ref=worker.worker_id,
-                )
-            self._sync_parent_after_child(
-                child_record,
-                principal=principal,
-                request_id=parent_task.request_id,
-            )
-            return child_result, child_record, child_status
-        worker_client = self._handoff_worker_client(worker)
-        child_record = self.task_store.get_task(child_ctx.task_id)
-        if not child_record:
-            raise RuntimeError(f"Unknown child task '{child_ctx.task_id}'.")
-        self._record_dispatch_event(
-            parent_task_id=parent_task.task_id,
-            child_task_id=child_ctx.task_id,
-            worker_id=worker.worker_id,
-            queue_name=self._handoff_queue_name(worker),
-            dispatch_status="daemon_started",
-            command_text=delegated_command,
-            metadata={
-                "source": "worker_handoff_service",
-                "node_id": worker_client.node_id,
-                "target_task_id": child_ctx.task_id,
-            },
-        )
-
-        async def _execute_record(record) -> dict:
-            return await self.process_command(
-                record.command or delegated_command,
-                principal=principal,
-                request_id=record.request_id or child_ctx.request_id,
-                roles=roles or [],
-                approval_context=self._build_child_approval_context(approval_context),
-                task_context=record.to_context(),
-            )
-
-        daemon = WorkerDaemon(
-            worker_client,
-            executor=_execute_record,
-            config=WorkerDaemonConfig(
-                worker_id=worker_client.worker_id,
-                node_id=worker_client.node_id,
-                queue_name=worker_client.queue_name,
-                target_task_id=child_ctx.task_id,
-                principal=principal,
-                once=True,
-                heartbeat_interval_s=999,
-                lease_ttl_seconds=worker_client.config.lease_ttl_seconds,
-                max_attempts=3,
-                display_name=f"{worker.display_name} Handoff Local",
-                max_parallelism=worker_client.config.max_parallelism,
-            ),
-            sleeper=lambda _seconds: None,
-            on_task_finalized=lambda record: self._sync_parent_after_child(
-                record,
-                principal=principal,
-                request_id=parent_task.request_id,
-            ),
-        )
-        daemon_result = await asyncio.to_thread(daemon.run_once)
-        child_record = self.task_store.get_task(child_ctx.task_id)
-        child_status = child_record.status if child_record else TASK_STATUS_FAILED
-        child_result = child_record.result if child_record and isinstance(child_record.result, dict) else {}
-        if not child_result:
-            child_result = {
-                "success": child_status == TASK_STATUS_COMPLETED,
-                "output": child_record.summary if child_record else child_status,
-                "data": {"task_status": child_status},
-            }
-        if not (daemon_result.processed or daemon_result.retried or daemon_result.failed):
-            output = "Worker daemon did not claim child task."
-            self._record_dispatch_event(
-                parent_task_id=parent_task.task_id,
-                child_task_id=child_ctx.task_id,
-                worker_id=worker.worker_id,
-                queue_name=self._handoff_queue_name(worker),
-                dispatch_status="unclaimed",
-                command_text=delegated_command,
-                metadata={
-                    "source": "worker_handoff_service",
-                    "node_id": worker_client.node_id,
-                    "target_task_id": child_ctx.task_id,
-                    "task_status": child_status,
-                    "daemon_result": daemon_result.__dict__,
-                },
-            )
-            return {
-                "success": False,
-                "output": output,
-                "type": "handoff",
-                "data": {
-                    "task_status": child_status,
-                    "error": output,
-                },
-            }, child_record, child_status
-
-        if child_status == TASK_STATUS_COMPLETED:
-            dispatch_status = "completed"
-        elif child_status in {TASK_STATUS_WAITING_APPROVAL, TASK_STATUS_BLOCKED, TASK_STATUS_CANCELLED}:
-            dispatch_status = child_status
-        elif child_status == TASK_STATUS_QUEUED and daemon_result.retried:
-            dispatch_status = "retry_scheduled"
-        else:
-            dispatch_status = "failed"
-        self._record_dispatch_event(
-            parent_task_id=parent_task.task_id,
-            child_task_id=child_ctx.task_id,
-            worker_id=worker.worker_id,
-            queue_name=self._handoff_queue_name(worker),
-            dispatch_status=dispatch_status,
-            command_text=delegated_command,
-            metadata={
-                "source": "worker_handoff_service",
-                "node_id": worker_client.node_id,
-                "task_status": child_status,
-                "daemon_result": daemon_result.__dict__,
-            },
+        self._sync_parent_after_child(
+            child_record,
+            principal=principal,
+            request_id=parent_task.request_id,
         )
         return child_result, child_record, child_status
 

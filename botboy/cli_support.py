@@ -11,7 +11,6 @@ from typing import Optional, Sequence
 
 from botboy.gateway.security import default_bind_host
 from botboy.resources import runtime_home_dir
-from botboy.worker_daemon import add_cli_arguments as add_worker_daemon_arguments
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -36,12 +35,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     worker_p = subparsers.add_parser("worker", help="Worker and worker-node commands")
     worker_p.add_argument("worker_cmd", nargs="+", help="Worker sub-command to execute")
-
-    security_p = subparsers.add_parser("security", help="Security and remote-readiness commands")
-    security_p.add_argument("security_cmd", nargs="+", help="Security sub-command to execute")
-
-    worker_daemon_p = subparsers.add_parser("worker-daemon", help="Run the external worker daemon")
-    add_worker_daemon_arguments(worker_daemon_p)
 
     eval_p = subparsers.add_parser("evals", help="Run eval/replay baseline")
     eval_p.add_argument("--wave", default="", help="Optional eval wave alias, e.g. 1, 2, wave_1, wave_2")
@@ -109,8 +102,6 @@ def resolve_exec_command(args: argparse.Namespace) -> str:
         return "task " + " ".join(args.task_cmd)
     if args.command == "worker":
         return "worker " + " ".join(args.worker_cmd)
-    if args.command == "security":
-        return "security " + " ".join(args.security_cmd)
     return " ".join(args.cmd)
 
 

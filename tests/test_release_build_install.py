@@ -4,10 +4,8 @@ import os
 import shutil
 import subprocess
 import sys
-import tarfile
 import unittest
 import uuid
-import zipfile
 from pathlib import Path
 
 
@@ -117,42 +115,3 @@ class ReleaseBuildInstallAcceptanceTest(unittest.TestCase):
     def test_clean_install_acceptance_passes(self) -> None:
         self.assertEqual(self.full_result.returncode, 0, self.full_result.stdout + "\n" + self.full_result.stderr)
         self.assertIn("Built and verified release artifacts", self.full_result.stdout)
-
-    def test_acceptance_temp_and_dist_roots_are_disjoint(self) -> None:
-        self.assertEqual(self.full_result.returncode, 0, self.full_result.stdout + "\n" + self.full_result.stderr)
-        self.assertNotEqual(self.acceptance_temp_root, self.dist_dir)
-        with self.assertRaises(ValueError):
-            self.dist_dir.relative_to(self.acceptance_temp_root)
-        with self.assertRaises(ValueError):
-            self.acceptance_temp_root.relative_to(self.dist_dir)
-
-    def test_sdist_excludes_transient_workspace_roots(self) -> None:
-        self.assertEqual(self.full_result.returncode, 0, self.full_result.stdout + "\n" + self.full_result.stderr)
-        self.assertIsNotNone(self.sdist_path)
-        with tarfile.open(self.sdist_path, "r:gz") as archive:
-            names = [name.replace("\\", "/").strip("/") for name in archive.getnames()]
-        members = ["/".join(name.split("/")[1:]) for name in names if "/" in name]
-        forbidden_prefixes = (
-            ".botboy-runtime/",
-            ".botboy-mcp-runtime/",
-            ".venv-build/",
-            ".release-build-venv/",
-            "dist/",
-            "build/",
-            "__pycache__/",
-        )
-        self.assertFalse(
-            any(member.startswith(prefix) for prefix in forbidden_prefixes for member in members),
-            "sdist contains transient workspace roots",
-        )
-        self.assertFalse(any(member.split("/", 1)[0].startswith("tmp") for member in members))
-
-    def test_wheel_excludes_source_tree_only_roots(self) -> None:
-        self.assertEqual(self.full_result.returncode, 0, self.full_result.stdout + "\n" + self.full_result.stderr)
-        self.assertIsNotNone(self.wheel_path)
-        with zipfile.ZipFile(self.wheel_path) as archive:
-            names = [name.replace("\\", "/").strip("/") for name in archive.namelist()]
-        self.assertFalse(any(name.startswith("skills/") for name in names))
-        self.assertFalse(any(name.startswith("examples/skills/") for name in names))
-        self.assertFalse(any(name.startswith("tests/") for name in names))
-        self.assertFalse(any("/__pycache__/" in f"/{name}/" for name in names))

@@ -164,6 +164,7 @@ class TaskMergeServiceTests(unittest.TestCase):
         best_path = artifact_root / "artifact" / "best.json"
         worse_path = artifact_root / "artifact" / "worse.json"
         best_path.parent.mkdir(parents=True, exist_ok=True)
+        worse_path.parent.mkdir(parents=True, exist_ok=True)
         best_path.write_text(
             json.dumps(
                 {

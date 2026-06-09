@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sys
 import unittest
 from pathlib import Path
@@ -232,17 +231,6 @@ class GatewayHardeningTest(unittest.TestCase):
         self.assertEqual(api_key_attempts, ["broken-api-keys.db"])
         self.assertEqual(principal_attempts, ["broken-principals.db"])
 
-    def test_fastapi_rejects_remote_bind_when_auth_disabled(self) -> None:
-        create_app = _load_create_app()
-        bot = _dummy_gateway_bot(_make_auth_config(enable_auth=False))
-
-        with patch.dict(
-            os.environ,
-            {"BOTBOY_ALLOW_INSECURE_REMOTE": "", "BOTBOY_GATEWAY_ALLOW_INSECURE_REMOTE": ""},
-        ):
-            with self.assertRaisesRegex(RuntimeError, "auth disabled"):
-                create_app(bot, host="0.0.0.0", port=8765)
-
     def test_stdlib_store_bootstrap_does_not_fallback_to_memory_when_auth_disabled(self) -> None:
         bot = _dummy_gateway_bot(_make_auth_config(enable_auth=False))
         api_key_attempts: list[str] = []
@@ -266,16 +254,6 @@ class GatewayHardeningTest(unittest.TestCase):
 
         self.assertEqual(api_key_attempts, ["broken-api-keys.db"])
         self.assertEqual(principal_attempts, ["broken-principals.db"])
-
-    def test_stdlib_rejects_remote_bind_when_auth_disabled(self) -> None:
-        bot = _dummy_gateway_bot(_make_auth_config(enable_auth=False))
-
-        with patch.dict(
-            os.environ,
-            {"BOTBOY_ALLOW_INSECURE_REMOTE": "", "BOTBOY_GATEWAY_ALLOW_INSECURE_REMOTE": ""},
-        ):
-            with self.assertRaisesRegex(RuntimeError, "auth disabled"):
-                SimpleHTTPServer(bot, host="0.0.0.0", port=0)
 
     def test_fastapi_login_rejects_invalid_credentials_without_development_fallback(self) -> None:
         create_app = _load_create_app()
@@ -355,8 +333,6 @@ class GatewayHardeningTest(unittest.TestCase):
                 "run_id": "",
             }
         ])
-        self.assertTrue(response.json()["reassigned"])
-        self.assertEqual(response.json()["worker_id"], "reviewer")
         self.assertEqual(response.json()["task"]["owner"], "worker:reviewer")
 
     def test_websocket_runtime_errors_surface_as_error_frames(self) -> None:

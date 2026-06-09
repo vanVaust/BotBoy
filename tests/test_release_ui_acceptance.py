@@ -72,33 +72,9 @@ class ReleaseUiAcceptanceTest(unittest.TestCase):
         for text in (
             "Operations Control Center",
             'data-smoke="control-banner"',
-            'data-smoke="operability-signals"',
             'data-smoke="latest-merge-review"',
-            'data-smoke="signal-segments"',
-            'data-smoke="signal-queue-lease"',
-            'data-smoke="signal-replay"',
-            'data-smoke="signal-incident"',
-            'data-segment="operator-surface"',
-            'data-segment="queue-lease"',
-            'data-segment="replay"',
-            'data-segment="incident"',
             "Known Gaps",
-            "Queue / Lease / Worker Daemon",
-            "Queue Depth",
-            "Lease expiry",
             "Latest Merge Review",
-            "Remote/Auth Readiness Signals",
-            "Stable Signal Segments",
-            "Contract version",
-            'data-smoke="remote-auth-readiness"',
-            'data-smoke="remote-auth-auth"',
-            'data-smoke="remote-auth-cors"',
-            'data-smoke="remote-auth-mcp-token"',
-            'data-smoke="remote-auth-bind"',
-            'data-smoke="remote-auth-rollback"',
-            "MCP Token",
-            "Remote Bind",
-            "Rollback",
         ):
             self.assertIn(text, index_html)
 
@@ -152,13 +128,6 @@ class ReleaseUiAcceptanceTest(unittest.TestCase):
             self.assertIn("Operations Control Center", body)
             self.assertIn('data-smoke="control-banner"', body)
             self.assertIn('data-smoke="latest-merge-review"', body)
-            self.assertIn('data-smoke="signal-segments"', body)
-            self.assertIn('data-smoke="signal-queue-lease"', body)
-            self.assertIn('data-smoke="signal-replay"', body)
-            self.assertIn('data-smoke="signal-incident"', body)
-            self.assertIn('data-smoke="remote-auth-readiness"', body)
-            self.assertIn('data-smoke="remote-auth-mcp-token"', body)
-            self.assertIn("Remote/Auth Readiness Signals", body)
 
         def assert_dashboard_response(status: int, body: str) -> None:
             self.assertEqual(status, 200, body)
@@ -212,7 +181,6 @@ class ReleaseUiAcceptanceTest(unittest.TestCase):
             "monitoring",
             "operations_summary",
             "system_readiness",
-            "control_center_contract",
         ):
             self.assertIn(key, payload)
 
@@ -230,14 +198,7 @@ class ReleaseUiAcceptanceTest(unittest.TestCase):
             "snapshot": snapshot,
             "traces": payload.get("traces", {}),
             "monitoring": payload.get("monitoring", {}),
-            "control_center_contract": payload.get("control_center_contract", {}),
         }
-        contract = payload.get("control_center_contract", {})
-        self.assertIn("contract_version", contract)
-        self.assertIn("segments", contract)
-        self.assertIn("write_set", contract)
-        self.assertIn("queue_lease", contract["segments"])
-        self.assertIn("incident", contract["segments"])
         temp_root = (ROOT / ".botboy-runtime" / "ui-acceptance-contracts" / self._testMethodName).resolve()
         temp_root.mkdir(parents=True, exist_ok=True)
         payload_path = temp_root / f"dashboard_payload-{suffix}.json"

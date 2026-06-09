@@ -14,7 +14,6 @@ from botboy.cli_support import (
     resolve_init_config_path,
     run_release_smoke,
 )
-from botboy.worker_daemon import run_from_namespace as run_worker_daemon_from_namespace
 
 if TYPE_CHECKING:
     import argparse
@@ -55,15 +54,6 @@ def handle_static_command(
     if args.command == "test":
         return run_release_smoke(Path(__file__).resolve().parent.parent)
 
-    if args.command == "worker-daemon":
-        exit_code, result = run_worker_daemon_from_namespace(args)
-        print(
-            "Worker daemon finished: "
-            f"processed={result.processed} retried={result.retried} failed={result.failed} "
-            f"recovered={result.recovered} released={result.released}"
-        )
-        return exit_code
-
     return None
 
 
@@ -79,7 +69,7 @@ def handle_runtime_command(
         serve(bot, host=args.host, port=args.port)
         return 0
 
-    if args.command in {"exec", "task", "worker", "security"}:
+    if args.command in {"exec", "task", "worker"}:
         command = resolve_exec_command(args)
         result = asyncio.run(bot.process_command(command, principal="local-cli"))
         print(result.get("output", ""))

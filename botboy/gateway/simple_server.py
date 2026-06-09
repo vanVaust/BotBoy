@@ -1,4 +1,4 @@
-﻿"""
+"""
 SimpleHTTPServer - stdlib-only HTTP/1.1 server for BotBoy.
 
 Provides the same REST API as the FastAPI gateway but requires
@@ -65,8 +65,25 @@ class SimpleAPIHandler(SimpleHandlerSurface, BaseHTTPRequestHandler):
             return
         handler(route_arg)
 
+    def _verify_csrf(self) -> bool:
+        from botboy.gateway.csrf import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, verify_csrf_token
+        import http.cookies
+        cookie_header = self.headers.get("Cookie") or ""
+        cookies = http.cookies.SimpleCookie(cookie_header)
+        cookie_token = cookies[CSRF_COOKIE_NAME].value if CSRF_COOKIE_NAME in cookies else None
+        
+        if cookie_token:
+            header_token = self.headers.get(CSRF_HEADER_NAME) or self.headers.get(CSRF_HEADER_NAME.lower())
+            if not verify_csrf_token(header_token, cookie_token):
+                self._json({"error": "CSRF token validation failed"}, 403)
+                return False
+        return True
+
     def do_POST(self) -> None:
         self._assign_request_id()
+        if not self._verify_csrf():
+            return
+            
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
 
@@ -90,6 +107,9 @@ class SimpleAPIHandler(SimpleHandlerSurface, BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         self._assign_request_id()
+        if not self._verify_csrf():
+            return
+            
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
         handler_name, route_arg = resolve_delete_route(path)

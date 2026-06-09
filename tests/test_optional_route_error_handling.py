@@ -93,7 +93,6 @@ class OptionalRouteErrorHandlingTest(unittest.TestCase):
             label="broken merge",
             file_path=str(artifact_path),
             media_type="application/json",
-            allow_external_source=True,
         )
 
         loaded = bot._load_task_merge_result(bot.task_store.get_task(task.task_id))

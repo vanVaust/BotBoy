@@ -84,34 +84,6 @@ class TaskStoreWorkerNodesTest(unittest.TestCase):
         self.assertTrue(bool(nodes[0].get("draining")))
         self.assertGreaterEqual(summary.get("draining_count", 0), 1)
 
-    def test_register_and_heartbeat_do_not_reactivate_draining_queue(self) -> None:
-        store = self._make_store()
-        store.register_worker_node(
-            node_id="node-theta",
-            worker_id="executor",
-            endpoint="http://127.0.0.1:9107",
-            capabilities=["implementation"],
-            max_concurrency=1,
-        )
-        store.drain_worker_node("node-theta", reason="maintenance")
-
-        re_registered = store.register_worker_node(
-            node_id="node-theta",
-            worker_id="executor",
-            endpoint="http://127.0.0.1:9107",
-            capabilities=["implementation"],
-            max_concurrency=1,
-        )
-        heartbeated = store.heartbeat_worker_node("node-theta", node_status="ready", health="healthy")
-        queue = store.get_execution_queue(re_registered["queue_name"])
-
-        self.assertIsNotNone(heartbeated)
-        self.assertTrue(bool(re_registered.get("draining")))
-        self.assertEqual(re_registered.get("effective_status"), "draining")
-        self.assertEqual(heartbeated.get("effective_status"), "draining")
-        self.assertIsNotNone(queue)
-        self.assertEqual(queue["queue_status"], "draining")
-
     def test_list_and_summary_return_observability_data(self) -> None:
         store = self._make_store()
         store.register_worker_node(

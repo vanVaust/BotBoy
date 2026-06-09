@@ -1,8 +1,8 @@
 # BotBoy V2.5 To V5 Execution Roadmap
 
-Last updated: 2026-04-25
+Last updated: 2026-06-08
 Owner: active execution program
-Status: v2.5 runtime gates green; v3 live workflow runtime next
+Status: v2.5 local production gates green; v3 deterministic replay and operator intervention next
 Scope: from current v2/v3 transition state to v5 GA
 
 ## 1. Purpose
@@ -21,9 +21,9 @@ This document supersedes older broad strategy files as the practical build order
 
 ## 2. Current Baseline
 
-Date of baseline: `2026-04-25`
+Date of baseline: `2026-06-08`
 Workspace: `botboi_finished`
-Current wave: `Welle 22`
+Current wave: `Welle 23`
 
 Verified commands:
 
@@ -33,25 +33,28 @@ Verified commands:
 
 Current open priorities from `botboy/data/STATUS_SNAPSHOT.json`:
 
-- `live_workflow_ir_policy_persistence`
+- `v3_replay_diff_persistence_and_surface`
+- `v3_operator_intervention_queue`
+- `remote_deployment_topology_hardening`
+- `github_release_candidate_publication`
 
 Current reality:
 
 - BotBoy is already release-capable for local-first operation.
 - Queue, lease, dispatch, and worker daemon infrastructure exist.
 - Worker handoff now uses the canonical queue-backed daemon claim/report path for child task execution.
-- Workflow IR exists, but is not yet a complete live persisted runtime.
+- Workflow IR, policy decisions, and replay events persist in the live runtime path and survive TaskStore restart.
 - Remote readiness and auth hardening exist, but remote distributed operation is not yet a finished product path.
 - Packaging and source-tree isolation gates pass; GitHub publication remains a separate explicit release action.
 
 What BotBoy is now:
 
-- a strong single-host orchestrator with a canonical local worker fabric
+- a strong single-host orchestrator with a canonical local worker fabric and verified live Workflow IR persistence
 
 What BotBoy is not yet:
 
 - a complete distributed execution fabric
-- a policy-governed autonomy runtime
+- a complete deterministic replay and operator-intervention runtime
 - a tenant-safe fleet platform
 
 ## 3. Non-Negotiables
@@ -79,7 +82,7 @@ Finish the runtime fabric so handoff, dispatch, lease, worker execution, and con
 - CLI, stdlib, FastAPI, and MCP surfaces are contract-aligned where intended
 - public release packaging is isolated from local development artifacts
 
-Current checkpoint: these `v2.5` implementation and packaging gates are green as of `2026-04-25`; the next engineering focus is `v3` live workflow and policy persistence.
+Current checkpoint: these `v2.5` implementation and packaging gates are green as of `2026-06-08`; live workflow and policy persistence are verified, and the first deterministic replay diff report is implemented. The next engineering focus is replay-diff persistence and API/UI surface, operator intervention queue, and remote production topology hardening.
 
 ### 4.2 V3 Mission
 
@@ -154,8 +157,8 @@ No version transition is allowed without the preceding gate passing.
 
 The roadmap is intentionally sequenced:
 
-1. close the three open priorities
-2. promote Workflow IR from eval artifact to live runtime
+1. publish the verified v2.5.1 release candidate
+2. turn live Workflow IR and policy persistence into deterministic replay and operator intervention
 3. add governance and incident control
 4. add tenant separation and organizational policy inheritance
 5. add usage, quotas, economics, and fleet command capability
@@ -243,18 +246,18 @@ This track adds usage, quota, budget, and release-grade operational discipline.
 
 ## 9. Sprintable Immediate Next Steps
 
-These are the next ten smallest effective coding steps. They are ordered for immediate execution and can be split across the seven agents without write conflicts.
+These are the next ten smallest effective coding steps after the verified `2026-06-08` v2.5 local production baseline. They are ordered for immediate execution and can be split across the seven agents without write conflicts.
 
-1. `NOW-01` create the contract canon artifact for CLI, FastAPI, stdlib, and MCP response shapes
-2. `NOW-02` bind contract tests to that canon and fail on drift
-3. `NOW-03` add queue lease schema hardening for uniqueness, indexing, and fencing token support
-4. `NOW-04` add idempotency receipts for result reporting
-5. `NOW-05` make `report_queue_lease_result` fully transactional under race conditions
-6. `NOW-06` add dispatch event persistence and read support
-7. `NOW-07` route handoff initiation through dispatch plus queue path behind a temporary feature flag
-8. `NOW-08` add parent-child state sync and merge-on-report for queue-backed handoff
-9. `NOW-09` promote workflow persistence schema from design artifact to runtime migration
-10. `NOW-10` stabilize dashboard response segmentation and `contract_version` for operator-facing surfaces
+1. `NOW-01` publish the verified `v2.5.1` release candidate from the clean GitHub tree
+2. `NOW-02` completed: deterministic replay diff report for workflow plan, policy, route, and outcome
+3. `NOW-03` persist replay diff summaries with stable divergence reason codes
+4. `NOW-04` add an operator intervention queue read model for approvals, blocked workflows, and replay drift
+5. `NOW-05` expose intervention and replay-diff summaries through FastAPI and stdlib dashboard contracts
+6. `NOW-06` extend the Control Center with read-first intervention and replay-diff panels
+7. `NOW-07` add remote deployment topology checks for TLS/proxy, backup/restore, token rotation, and worker transport boundaries
+8. `NOW-08` gate remote production readiness on the topology checks plus existing auth and MCP checks
+9. `NOW-09` add v3 acceptance tests covering replay diff, intervention queue, and remote topology readiness
+10. `NOW-10` cut `G4` only after replay, operator, and remote-topology gates are green
 
 ## 10. Parallel Agent Work Allocation
 

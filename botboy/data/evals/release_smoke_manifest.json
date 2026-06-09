@@ -61,64 +61,6 @@
           "status": 200
         }
       }
-    },
-    {
-      "id": "release_workflow_ir_replay_smoke",
-      "kind": "workflow",
-      "command": "status",
-      "expected_contains": [
-        "Status"
-      ],
-      "expected": {
-        "steps": [
-          {
-            "step_id": "status",
-            "command": "status",
-            "request_id": "release-workflow-ir-1"
-          },
-          {
-            "step_id": "help",
-            "command": "help",
-            "depends_on": [
-              "status"
-            ],
-            "request_id": "release-workflow-ir-1"
-          }
-        ],
-        "result_success": true,
-        "min_step_count": 2,
-        "min_trace_runs": 2,
-        "required_paths": [
-          "workflow_ir.workflow_id",
-          "workflow_ir.steps.0.command",
-          "workflow_ir.policy_decisions.0.allowed",
-          "policy_decisions.0.allowed",
-          "replay_events.0.event_type"
-        ],
-        "field_values": {
-          "workflow_ir.steps.0.command": "status",
-          "workflow_ir.policy_decisions.0.allowed": true,
-          "policy_decisions.0.allowed": true,
-          "replay_events.0.event_type": "workflow_started"
-        }
-      }
-    },
-    {
-      "id": "release_remote_readiness_smoke",
-      "kind": "command",
-      "command": "security remote-readiness 127.0.0.1",
-      "expected_contains": [
-        "Remote readiness",
-        "Overall: local-only"
-      ],
-      "expected": {
-        "result_success": true,
-        "field_values": {
-          "type": "security",
-          "data.overall": "local-only",
-          "data.failed": 0
-        }
-      }
     }
   ]
 }

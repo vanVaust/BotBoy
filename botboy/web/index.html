@@ -1,9 +1,9 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BotBoy v0.6 â€” AI Agent Console</title>
+<title>BotBoy v0.6 — AI Agent Console</title>
 <style>
   :root {
     --bg:       #0d1117;
@@ -33,7 +33,7 @@
     overflow: hidden;
   }
 
-  /* â”€â”€ Header â”€â”€ */
+  /* ── Header ── */
   header {
     background: var(--surface);
     border-bottom: 1px solid var(--border);
@@ -77,14 +77,14 @@
   .status-dot.ok { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
   .status-dot.err { background: var(--err); }
 
-  /* â”€â”€ Layout â”€â”€ */
+  /* ── Layout ── */
   .layout {
     display: flex;
     flex: 1;
     overflow: hidden;
   }
 
-  /* â”€â”€ Sidebar â”€â”€ */
+  /* ── Sidebar ── */
   .sidebar {
     width: 210px;
     background: var(--surface);
@@ -117,7 +117,7 @@
   .sidebar-item.active { background: rgba(88,166,255,0.1); color: var(--accent); }
   .sidebar-item .icon { width: 16px; text-align: center; opacity: 0.7; }
 
-  /* â”€â”€ Chat area â”€â”€ */
+  /* ── Chat area ── */
   .chat-area {
     flex: 1;
     display: flex;
@@ -135,7 +135,7 @@
     scroll-behavior: smooth;
   }
 
-  /* â”€â”€ Message bubbles â”€â”€ */
+  /* ── Message bubbles ── */
   .message {
     display: flex;
     gap: 12px;
@@ -232,7 +232,7 @@
   .badge-error      { background: rgba(248,81,73,0.15);  color: #ff7b72; }
   .badge-system     { background: rgba(110,118,129,0.15); color: #8b949e; }
 
-  /* â”€â”€ Input area â”€â”€ */
+  /* ── Input area ── */
   .input-area {
     background: var(--surface);
     border-top: 1px solid var(--border);
@@ -301,7 +301,7 @@
   }
   .chip:hover { background: rgba(88,166,255,0.1); color: var(--accent); border-color: rgba(88,166,255,0.3); }
 
-  /* â”€â”€ Right panel â”€â”€ */
+  /* ── Right panel ── */
   .right-panel {
     width: 260px;
     border-left: 1px solid var(--border);
@@ -504,53 +504,6 @@
     color: #ff7b72;
     background: rgba(248,81,73,0.08);
   }
-  .remote-signal-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 6px;
-    margin-bottom: 8px;
-  }
-  .remote-signal {
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: rgba(255,255,255,0.025);
-    padding: 7px 8px;
-    min-width: 0;
-  }
-  .remote-signal.good {
-    border-color: rgba(63,185,80,0.30);
-    background: rgba(63,185,80,0.07);
-  }
-  .remote-signal.warn {
-    border-color: rgba(240,136,62,0.32);
-    background: rgba(240,136,62,0.07);
-  }
-  .remote-signal.bad {
-    border-color: rgba(248,81,73,0.32);
-    background: rgba(248,81,73,0.07);
-  }
-  .remote-signal.muted {
-    border-color: var(--border);
-  }
-  .remote-signal-label {
-    color: var(--dim);
-    font-size: 9.5px;
-    letter-spacing: 0.6px;
-    text-transform: uppercase;
-  }
-  .remote-signal-value {
-    color: var(--text);
-    font-size: 12px;
-    font-weight: 700;
-    line-height: 1.25;
-    margin-top: 3px;
-  }
-  .remote-signal-detail {
-    color: var(--dim);
-    font-size: 9.5px;
-    line-height: 1.35;
-    margin-top: 3px;
-  }
   .control-event-list {
     display: flex;
     flex-direction: column;
@@ -604,13 +557,13 @@
     line-height: 1.5;
   }
 
-  /* â”€â”€ Scrollbar â”€â”€ */
+  /* ── Scrollbar ── */
   ::-webkit-scrollbar { width: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   ::-webkit-scrollbar-thumb:hover { background: var(--dim); }
 
-  /* â”€â”€ Typing indicator â”€â”€ */
+  /* ── Typing indicator ── */
   .typing {
     display: flex; gap: 5px; align-items: center;
     padding: 10px 14px;
@@ -628,7 +581,7 @@
     40% { transform: translateY(-5px); opacity: 1; }
   }
 
-  /* â”€â”€ Toast notifications â”€â”€ */
+  /* ── Toast notifications ── */
   #toast {
     position: fixed;
     bottom: 80px;
@@ -647,7 +600,7 @@
   }
   #toast.show { opacity: 1; }
 
-  /* â”€â”€ History list â”€â”€ */
+  /* ── History list ── */
   .history-item {
     padding: 5px 0;
     border-bottom: 1px solid rgba(255,255,255,0.04);
@@ -670,7 +623,7 @@
 <!-- Header -->
 <header>
   <div class="logo">
-    <div class="logo-icon">ðŸ¤–</div>
+    <div class="logo-icon">🤖</div>
     BotBoy <span style="color:var(--dim);font-weight:400;font-size:12px;margin-left:6px">v0.6.0-dev</span>
   </div>
   <div class="status-bar">
@@ -678,7 +631,7 @@
     <span><span class="status-dot" id="dot-memory"></span>Memory</span>
     <span><span class="status-dot" id="dot-trace"></span>Trace</span>
     <span><span class="status-dot" id="dot-llm"></span>LLM</span>
-    <span style="color:var(--accent)" id="latency-display">â€”ms</span>
+    <span style="color:var(--accent)" id="latency-display">—ms</span>
   </div>
 </header>
 
@@ -687,29 +640,29 @@
   <!-- Sidebar -->
   <aside class="sidebar">
     <div class="sidebar-section">Commands</div>
-    <div class="sidebar-item active" onclick="setInput('help')"><span class="icon">â“</span>Help</div>
-    <div class="sidebar-item" onclick="setInput('status')"><span class="icon">ðŸ“Š</span>Status</div>
-    <div class="sidebar-item" onclick="setInput('skills')"><span class="icon">ðŸ”§</span>Skills</div>
-    <div class="sidebar-item" onclick="setInput('performance')"><span class="icon">âš¡</span>Performance</div>
+    <div class="sidebar-item active" onclick="setInput('help')"><span class="icon">❓</span>Help</div>
+    <div class="sidebar-item" onclick="setInput('status')"><span class="icon">📊</span>Status</div>
+    <div class="sidebar-item" onclick="setInput('skills')"><span class="icon">🔧</span>Skills</div>
+    <div class="sidebar-item" onclick="setInput('performance')"><span class="icon">⚡</span>Performance</div>
 
     <div class="sidebar-section">Memory</div>
-    <div class="sidebar-item" onclick="setInput('memories')"><span class="icon">ðŸ§ </span>All Memories</div>
-    <div class="sidebar-item" onclick="setInput('memstats')"><span class="icon">ðŸ“ˆ</span>Mem Stats</div>
-    <div class="sidebar-item" onclick="setInput('search ')"><span class="icon">ðŸ”</span>Search</div>
+    <div class="sidebar-item" onclick="setInput('memories')"><span class="icon">🧠</span>All Memories</div>
+    <div class="sidebar-item" onclick="setInput('memstats')"><span class="icon">📈</span>Mem Stats</div>
+    <div class="sidebar-item" onclick="setInput('search ')"><span class="icon">🔍</span>Search</div>
 
     <div class="sidebar-section">Skills</div>
-    <div class="sidebar-item" onclick="setInput('calculate ')"><span class="icon">ðŸ”¢</span>Calculator</div>
+    <div class="sidebar-item" onclick="setInput('calculate ')"><span class="icon">🔢</span>Calculator</div>
     <div class="sidebar-item" onclick="setInput('hash sha256 ')"><span class="icon">#</span>Hash</div>
-    <div class="sidebar-item" onclick="setInput('base64 encode ')"><span class="icon">ðŸ”’</span>Base64</div>
-    <div class="sidebar-item" onclick="setInput('convert ')"><span class="icon">â†”ï¸</span>Convert</div>
-    <div class="sidebar-item" onclick="setInput('weather ')"><span class="icon">ðŸŒ¤</span>Weather</div>
-    <div class="sidebar-item" onclick="setInput('web search ')"><span class="icon">ðŸŒ</span>Web Search</div>
+    <div class="sidebar-item" onclick="setInput('base64 encode ')"><span class="icon">🔒</span>Base64</div>
+    <div class="sidebar-item" onclick="setInput('convert ')"><span class="icon">↔️</span>Convert</div>
+    <div class="sidebar-item" onclick="setInput('weather ')"><span class="icon">🌤</span>Weather</div>
+    <div class="sidebar-item" onclick="setInput('web search ')"><span class="icon">🌐</span>Web Search</div>
 
     <div class="sidebar-section">System</div>
-    <div class="sidebar-item" onclick="setInput('history')"><span class="icon">ðŸ“œ</span>History</div>
-    <div class="sidebar-item" onclick="setInput('schedule list')"><span class="icon">ðŸ“…</span>Scheduler</div>
-    <div class="sidebar-item" onclick="setInput('archetypes stats')"><span class="icon">ðŸ§©</span>Archetypes</div>
-    <div class="sidebar-item" onclick="clearChat()"><span class="icon">ðŸ—‘</span>Clear Chat</div>
+    <div class="sidebar-item" onclick="setInput('history')"><span class="icon">📜</span>History</div>
+    <div class="sidebar-item" onclick="setInput('schedule list')"><span class="icon">📅</span>Scheduler</div>
+    <div class="sidebar-item" onclick="setInput('archetypes stats')"><span class="icon">🧩</span>Archetypes</div>
+    <div class="sidebar-item" onclick="clearChat()"><span class="icon">🗑</span>Clear Chat</div>
   </aside>
 
   <!-- Chat area -->
@@ -720,14 +673,14 @@
       <div class="suggestions" id="suggestions">
         <div class="chip" onclick="setInput('help')">help</div>
         <div class="chip" onclick="setInput('calculate pi * 2')">calculate pi * 2</div>
-        <div class="chip" onclick="setInput('remember ')">rememberâ€¦</div>
+        <div class="chip" onclick="setInput('remember ')">remember…</div>
         <div class="chip" onclick="setInput('weather Berlin')">weather Berlin</div>
-        <div class="chip" onclick="setInput('web search ')">web searchâ€¦</div>
+        <div class="chip" onclick="setInput('web search ')">web search…</div>
         <div class="chip" onclick="setInput('status')">status</div>
       </div>
       <div class="input-row">
-        <textarea id="cmd-input" placeholder="Enter a commandâ€¦ (Enter to send, Shift+Enter for newline)" rows="1"></textarea>
-        <button id="send-btn" onclick="sendCommand()">Send â†µ</button>
+        <textarea id="cmd-input" placeholder="Enter a command… (Enter to send, Shift+Enter for newline)" rows="1"></textarea>
+        <button id="send-btn" onclick="sendCommand()">Send ↵</button>
       </div>
     </div>
   </main>
@@ -738,27 +691,27 @@
     <div class="panel-body">
       <div class="metric-card">
         <div class="metric-label">Commands</div>
-        <div class="metric-value" id="m-commands">â€”</div>
+        <div class="metric-value" id="m-commands">—</div>
         <div class="metric-sub">this session</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Cache Hit Rate</div>
-        <div class="metric-value" id="m-cache">â€”</div>
+        <div class="metric-value" id="m-cache">—</div>
         <div class="metric-sub">of requests served from cache</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Memory Items</div>
-        <div class="metric-value" id="m-memory">â€”</div>
+        <div class="metric-value" id="m-memory">—</div>
         <div class="metric-sub">stored memories</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Avg Latency</div>
-        <div class="metric-value" id="m-latency">â€”</div>
+        <div class="metric-value" id="m-latency">—</div>
         <div class="metric-sub">milliseconds per command</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Trace Runs</div>
-        <div class="metric-value" id="m-traces">â€”</div>
+        <div class="metric-value" id="m-traces">—</div>
         <div class="metric-sub">recorded command runs</div>
       </div>
 
@@ -774,14 +727,14 @@
 <div id="toast"></div>
 
 <script>
-const API = '';  // relative URL â€” same origin
+const API = '';  // relative URL — same origin
 
-// â”€â”€ State â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── State ─────────────────────────────────────────────────────────────────────
 let cmdCount = 0;
 let latencies = [];
 let sessionHistory = [];
 
-// â”€â”€ Init â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Init ──────────────────────────────────────────────────────────────────────
 window.addEventListener('load', () => {
   checkHealth();
   refreshDashboard();
@@ -805,7 +758,7 @@ window.addEventListener('load', () => {
   addBotMessage('BotBoy v0.6.0-dev ready. Type a command or click a shortcut.', 'system');
 });
 
-// â”€â”€ Health check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Health check ──────────────────────────────────────────────────────────────
 async function checkHealth() {
   try {
     const r = await fetch(`${API}/health`);
@@ -824,15 +777,15 @@ function setDot(id, ok) {
   if (dot) { dot.className = 'status-dot ' + (ok ? 'ok' : 'err'); }
 }
 
-// â”€â”€ Metrics refresh â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Metrics refresh ───────────────────────────────────────────────────────────
 async function refreshMetrics() {
   try {
     const r = await fetch(`${API}/api/metrics`);
     if (!r.ok) return;
     const d = await r.json();
-    el('m-commands').textContent = d.total_commands ?? 'â€”';
+    el('m-commands').textContent = d.total_commands ?? '—';
     el('m-cache').textContent    = d.cache_hit_rate != null
-      ? Math.round(d.cache_hit_rate * 100) + '%' : 'â€”';
+      ? Math.round(d.cache_hit_rate * 100) + '%' : '—';
 
     // Memory count
     const mr = await fetch(`${API}/health`);
@@ -841,7 +794,7 @@ async function refreshMetrics() {
       const hr = await fetch(`${API}/api/memories?limit=1`);
       if (hr.ok) {
         const hd = await hr.json();
-        el('m-memory').textContent = hd.total ?? 'â€”';
+        el('m-memory').textContent = hd.total ?? '—';
       }
     }
 
@@ -861,7 +814,7 @@ async function refreshDashboard() {
     const r = await fetch(`${API}/api/dashboard`);
     if (!r.ok) return;
     const d = await r.json();
-    el('m-traces').textContent = d.traces?.total_runs ?? 'â€”';
+    el('m-traces').textContent = d.traces?.total_runs ?? '—';
     el('control-center').innerHTML = renderControlCenter(d);
   } catch { /* ignore */ }
 }
@@ -878,7 +831,7 @@ async function refreshHistoryPanel() {
       item.className = 'history-item';
       item.title = rec.command;
       item.onclick = () => setInput(rec.command);
-      const status = rec.success ? 'âœ“' : 'âœ—';
+      const status = rec.success ? '✓' : '✗';
       const color  = rec.success ? 'var(--accent2)' : 'var(--err)';
       const ms     = Math.round(rec.latency_ms || 0);
       item.innerHTML = `
@@ -891,7 +844,7 @@ async function refreshHistoryPanel() {
   } catch { /* ignore */ }
 }
 
-// â”€â”€ Send command â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Send command ──────────────────────────────────────────────────────────────
 async function sendCommand() {
   const inp = document.getElementById('cmd-input');
   const cmd = inp.value.trim();
@@ -934,7 +887,7 @@ async function sendCommand() {
   inp.focus();
 }
 
-// â”€â”€ Message rendering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Message rendering ─────────────────────────────────────────────────────────
 function addUserMessage(text) {
   const msgs = el('messages');
   const div  = document.createElement('div');
@@ -960,7 +913,7 @@ function addBotMessage(text, type, success = true) {
   const output = formatOutput(text);
 
   div.innerHTML = `
-    <div class="avatar">ðŸ¤–</div>
+    <div class="avatar">🤖</div>
     <div>
       <div class="bubble">${badge}${output}</div>
       <div class="meta">${timeNow()}</div>
@@ -976,7 +929,7 @@ function addTypingIndicator() {
   const div  = document.createElement('div');
   div.className = 'message bot';
   div.innerHTML = `
-    <div class="avatar">ðŸ¤–</div>
+    <div class="avatar">🤖</div>
     <div class="bubble"><div class="typing"><span></span><span></span><span></span></div></div>
   `;
   msgs.appendChild(div);
@@ -992,27 +945,24 @@ function typeBadge(type) {
   };
   if (!type || type === 'help') return '';
   const cls = map[type] || 'badge-system';
-  return `<span class="type-badge ${cls}">${escHtml(type)}</span>`;
+  return `<span class="type-badge ${cls}">${type}</span>`;
 }
 
 function formatOutput(text) {
   if (!text) return '';
-  const blockPlaceholders = [];
-  let out = String(text).replace(/```([\s\S]*?)```/g, (_, code) => {
-    const marker = `\uE000BOTBOY_CODE_${blockPlaceholders.length}\uE000`;
-    blockPlaceholders.push(`<pre>${escHtml(code.trim())}</pre>`);
-    return marker;
-  });
-  out = escHtml(out)
-    .replace(/`([^`]+)`/g, (_, code) => `<code>${code}</code>`)
-    .replace(/  ([\w$_])/g, '  <code>$1</code>');
-  blockPlaceholders.forEach((html, index) => {
-    out = out.replace(`\uE000BOTBOY_CODE_${index}\uE000`, html);
-  });
+  // Convert code blocks (```...```) to <pre>
+  let out = text
+    .replace(/```([^`]+)```/g, (_, code) => `<pre>${escHtml(code.trim())}</pre>`)
+    .replace(/`([^`]+)`/g, (_, code) => `<code>${escHtml(code)}</code>`);
+  // If no pre blocks, just escape HTML
+  if (!out.includes('<pre>')) {
+    out = escHtml(text)
+      .replace(/  ([\w$_])/g, '  <code>$1</code>');
+  }
   return out;
 }
 
-// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function el(id) { return document.getElementById(id); }
 
 function escHtml(str) {
@@ -1021,7 +971,7 @@ function escHtml(str) {
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-function normalizeControlValue(value, fallback = 'â€”') {
+function normalizeControlValue(value, fallback = '—') {
   if (value === null || value === undefined || value === '') return fallback;
   if (Array.isArray(value)) {
     return value.length > 0
@@ -1043,10 +993,10 @@ function controlTone(value) {
     return value ? 'good' : 'bad';
   }
   const text = String(value ?? '').trim().toLowerCase();
-  if (!text || text === 'â€”' || text === 'unknown' || text === 'none' || text === 'n/a') return 'muted';
-  if (['verified', 'healthy', 'online', 'enabled', 'available', 'ready', 'ok', 'success', 'passed', 'operational', 'protected', 'restricted', 'fail-closed', 'local-only', 'token-gated', 'release-gated', 'test-gated'].includes(text)) return 'good';
+  if (!text || text === '—' || text === 'unknown' || text === 'none' || text === 'n/a') return 'muted';
+  if (['verified', 'healthy', 'online', 'enabled', 'available', 'ready', 'ok', 'success', 'passed'].includes(text)) return 'good';
   if (['experimental', 'pending', 'partial', 'degraded', 'warn', 'warning', 'watch', 'attention', 'needs-review', 'review-required', 'override-required', 'actionable'].includes(text)) return 'warn';
-  if (['offline', 'failed', 'error', 'unavailable', 'disabled', 'blocked'].includes(text)) return 'bad';
+  if (['offline', 'failed', 'error', 'unavailable', 'disabled'].includes(text)) return 'bad';
   return 'muted';
 }
 
@@ -1060,126 +1010,6 @@ function renderControlPill(label, value, tone = 'muted') {
 
 function renderControlChip(label, value, tone = 'muted') {
   return `<span class="control-chip ${tone}">${escHtml(label)}${value !== undefined ? ': ' + escHtml(normalizeControlValue(value)) : ''}</span>`;
-}
-
-function hasCapability(capabilities, capability) {
-  return Array.isArray(capabilities) && capabilities.includes(capability);
-}
-
-function renderRemoteSignalBody(signal) {
-  return `
-    <div class="remote-signal-label">${escHtml(signal.label)}</div>
-    <div class="remote-signal-value">${escHtml(normalizeControlValue(signal.value))}</div>
-    <div class="remote-signal-detail">${escHtml(signal.detail)}</div>
-  `;
-}
-
-function deriveRemoteAuthSignals({ readiness, snapshot, authStatus, completedCapabilities, openPriorities, gatewayModes, uiStatus }) {
-  const authValue = readiness.auth || (authStatus.available === true ? 'enabled' : 'available');
-  const remoteFailClosed = hasCapability(completedCapabilities, 'remote_bind_auth_fail_closed');
-  const localhostDefault = hasCapability(completedCapabilities, 'localhost_default_bind');
-  const mcpCorsVerified = hasCapability(completedCapabilities, 'mcp_http_token_auth_and_cors');
-  const acceptance = snapshot.acceptance || {};
-  const lastAcceptance = snapshot.last_verified_acceptance || {};
-  const rollbackVerified = acceptance.status === 'verified' || Object.keys(lastAcceptance).length > 0;
-  const remoteRunbookOpen = Array.isArray(openPriorities) && openPriorities.includes('operator_runbook_for_remote_auth_rollout');
-  const gatewayVerified = Object.values(gatewayModes || {}).some(value => String(value).includes('verified'));
-  const canonicalUi = uiStatus.canonical_ui || 'web/index.html';
-  const prototypeUi = uiStatus.dashboard_prototype || 'web/dashboard.html';
-
-  const signals = [
-    {
-      id: 'auth',
-      label: 'Auth',
-      value: authValue,
-      tone: controlTone(authValue),
-      detail: authStatus.available === true || readiness.auth === 'verified'
-        ? 'gateway auth path reported by snapshot'
-        : 'local path allowed; remote bind guard covers exposure',
-    },
-    {
-      id: 'cors',
-      label: 'CORS',
-      value: mcpCorsVerified ? 'restricted' : (gatewayVerified ? 'gateway-checked' : 'restricted'),
-      tone: mcpCorsVerified || gatewayVerified ? 'good' : 'muted',
-      detail: mcpCorsVerified
-        ? 'MCP HTTP token and CORS contract verified'
-        : 'same-origin UI with explicit gateway origin policy',
-    },
-    {
-      id: 'mcp-token',
-      label: 'MCP Token',
-      value: mcpCorsVerified ? 'token-gated' : (readiness.mcp || 'available'),
-      tone: mcpCorsVerified ? 'good' : controlTone(readiness.mcp || 'available'),
-      detail: mcpCorsVerified
-        ? 'HTTP MCP access requires token authentication'
-        : 'MCP remains local unless HTTP transport is exposed',
-    },
-    {
-      id: 'bind',
-      label: 'Remote Bind',
-      value: remoteFailClosed ? 'fail-closed' : (localhostDefault ? 'local-only' : 'guarded'),
-      tone: remoteFailClosed || localhostDefault ? 'good' : 'warn',
-      detail: remoteFailClosed
-        ? 'non-loopback bind without auth is rejected'
-        : 'default bind stays on loopback scope',
-    },
-    {
-      id: 'rollback',
-      label: 'Rollback',
-      value: rollbackVerified ? 'release-gated' : 'test-gated',
-      tone: rollbackVerified ? 'good' : 'warn',
-      detail: rollbackVerified
-        ? `acceptance recorded; canonical ${canonicalUi}`
-        : `canonical ${canonicalUi}; prototype ${prototypeUi}`,
-    },
-  ];
-
-  return {
-    signals,
-    runbookStatus: remoteRunbookOpen ? 'operator_runbook_for_remote_auth_rollout' : 'no open remote rollout item',
-    rollbackAnchor: rollbackVerified ? summarizeObject(lastAcceptance, 2, 'release acceptance verified') : `${canonicalUi} / ${prototypeUi}`,
-  };
-}
-
-function renderRemoteAuthReadiness(remoteAuthReadiness) {
-  return `
-    <div class="control-card" data-smoke="remote-auth-readiness">
-      <div class="control-card-title">Remote/Auth Readiness Signals</div>
-      <div class="remote-signal-grid">
-        <div class="remote-signal ${remoteAuthReadiness.signals[0].tone}" data-smoke="remote-auth-auth">
-          ${renderRemoteSignalBody(remoteAuthReadiness.signals[0])}
-        </div>
-        <div class="remote-signal ${remoteAuthReadiness.signals[1].tone}" data-smoke="remote-auth-cors">
-          ${renderRemoteSignalBody(remoteAuthReadiness.signals[1])}
-        </div>
-        <div class="remote-signal ${remoteAuthReadiness.signals[2].tone}" data-smoke="remote-auth-mcp-token">
-          ${renderRemoteSignalBody(remoteAuthReadiness.signals[2])}
-        </div>
-        <div class="remote-signal ${remoteAuthReadiness.signals[3].tone}" data-smoke="remote-auth-bind">
-          ${renderRemoteSignalBody(remoteAuthReadiness.signals[3])}
-        </div>
-        <div class="remote-signal ${remoteAuthReadiness.signals[4].tone}" data-smoke="remote-auth-rollback">
-          ${renderRemoteSignalBody(remoteAuthReadiness.signals[4])}
-        </div>
-      </div>
-      <div class="control-lines">
-        ${renderControlLine('Remote rollout priority', remoteAuthReadiness.runbookStatus)}
-        ${renderControlLine('Rollback anchor', remoteAuthReadiness.rollbackAnchor)}
-      </div>
-    </div>
-  `;
-}
-
-function contractSegment(contract, segmentName) {
-  const segments = contract && typeof contract === 'object' ? (contract.segments || {}) : {};
-  const segment = segments && typeof segments === 'object' ? segments[segmentName] : {};
-  return segment && typeof segment === 'object' ? segment : {};
-}
-
-function segmentScope(segment, scopeName) {
-  const scope = segment && typeof segment === 'object' ? segment[scopeName] : {};
-  return scope && typeof scope === 'object' ? scope : {};
 }
 
 function summarizeList(list, limit = 3, fallback = 'none') {
@@ -1204,39 +1034,6 @@ function formatControlTimestamp(value) {
   });
 }
 
-function formatControlMoment(value) {
-  if (value === null || value === undefined || value === '') {
-    return 'â€”';
-  }
-
-  const numeric = Number(value);
-  if (Number.isFinite(numeric) && String(value).trim() !== '') {
-    const numericDate = new Date(numeric * 1000);
-    if (!Number.isNaN(numericDate.getTime())) {
-      return numericDate.toLocaleString([], {
-        month: 'short',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      });
-    }
-  }
-
-  const parsed = new Date(String(value));
-  if (!Number.isNaN(parsed.getTime())) {
-    return parsed.toLocaleString([], {
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-  }
-
-  return normalizeControlValue(value);
-}
-
 function renderObjectChips(obj, empty = 'none', limit = 4) {
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
     return `<span class="control-empty">${escHtml(empty)}</span>`;
@@ -1259,7 +1056,7 @@ function renderRecentCommand(entry) {
   const headline = [
     entry.cmd_type || 'command',
     entry.success === false ? 'failed' : 'ok',
-  ].filter(Boolean).join(' Â· ');
+  ].filter(Boolean).join(' · ');
   const details = [
     entry.principal ? `principal: ${entry.principal}` : '',
     entry.request_id ? `request: ${entry.request_id}` : '',
@@ -1377,7 +1174,7 @@ function renderTaskEntry(entry) {
   const headline = [
     entry.status || 'task',
     entry.kind || 'command',
-  ].filter(Boolean).join(' Â· ');
+  ].filter(Boolean).join(' · ');
   const details = [
     entry.task_id ? `task: ${entry.task_id}` : '',
     entry.principal ? `principal: ${entry.principal}` : '',
@@ -1421,13 +1218,13 @@ function renderWorkerGrid(entries, fallback = 'No workers available.') {
     const recentTask = (Array.isArray(worker.tasks) && worker.tasks.length > 0)
       ? worker.tasks[0]
       : null;
-    const recentLabel = recentTask ? `${recentTask.status || 'unknown'} Â· ${recentTask.task_id || 'task'}` : 'idle';
+    const recentLabel = recentTask ? `${recentTask.status || 'unknown'} · ${recentTask.task_id || 'task'}` : 'idle';
     const capabilityText = worker.capability_text || summarizeList(worker.capabilities || [], 3);
     return `
       <div class="worker-card">
         <strong>${escHtml(worker.display_name || worker.worker_id || 'worker')}</strong>
         <div class="worker-meta">
-          ${escHtml(worker.worker_id || 'unknown')} Â· ${escHtml(worker.role || 'role')}
+          ${escHtml(worker.worker_id || 'unknown')} · ${escHtml(worker.role || 'role')}
           <br>Tasks: ${escHtml(String(taskCount))} | Active: ${escHtml(String(activeCount))} | Blocked: ${escHtml(String(blockedCount))}
           <br>Latest: ${escHtml(recentLabel)}
         </div>
@@ -1436,52 +1233,8 @@ function renderWorkerGrid(entries, fallback = 'No workers available.') {
         </div>
         <div class="worker-meta" style="margin-top:4px">${escHtml(capabilityText)}</div>
       </div>
-    `;  
+    `;
   }).join('')}</div>`;
-}
-
-function renderOperabilitySignals({
-  workerPanel,
-  workerCount,
-  delegatedCount,
-  queuedTaskCount,
-  runningTaskCount,
-  handoffQueueDepth,
-  latestTask,
-  latestTaskId,
-}) {
-  const latestWorker = latestTask?.delegated_to_worker || 'none';
-  const latestLeaseState = latestTask?.delegation_status || (latestWorker !== 'none' ? 'delegated' : 'idle');
-  const latestLeaseExpiry = latestTask?.lease_expires_at ? formatControlMoment(latestTask.lease_expires_at) : 'none reported';
-  const latestHeartbeat = latestTask?.heartbeat_at ? formatControlMoment(latestTask.heartbeat_at) : 'none reported';
-  const queueTone = handoffQueueDepth > 0 ? 'warn' : 'good';
-  const leaseTone = latestLeaseState === 'leased' ? 'good' : latestLeaseState === 'delegated' ? 'warn' : latestWorker !== 'none' ? 'warn' : 'muted';
-  const daemonTone = workerPanel.available === true ? 'good' : 'bad';
-  const workerTone = workerCount > 0 ? 'good' : 'bad';
-  return `
-    <div class="control-card" data-smoke="operability-signals">
-      <div class="control-card-title">Queue / Lease / Worker Daemon</div>
-      <div class="control-lines">
-        ${renderControlLine('Worker daemon', workerPanel.available === true ? 'available' : 'offline')}
-        ${renderControlLine('Worker registry', workerCount)}
-        ${renderControlLine('Delegated tasks', delegatedCount)}
-        ${renderControlLine('Queue depth', handoffQueueDepth)}
-        ${renderControlLine('Queued tasks', queuedTaskCount)}
-        ${renderControlLine('Running tasks', runningTaskCount)}
-        ${renderControlLine('Latest task', latestTaskId || 'none')}
-        ${renderControlLine('Latest worker', latestWorker)}
-        ${renderControlLine('Lease state', latestLeaseState)}
-        ${renderControlLine('Lease expiry', latestLeaseExpiry)}
-        ${renderControlLine('Heartbeat', latestHeartbeat)}
-      </div>
-      <div class="control-chip-list" style="margin-top:8px">
-        ${renderControlPill('Queue', handoffQueueDepth, queueTone)}
-        ${renderControlPill('Lease', latestLeaseState, leaseTone)}
-        ${renderControlPill('Daemon', workerPanel.available === true ? 'online' : 'offline', daemonTone)}
-        ${renderControlPill('Workers', workerCount, workerTone)}
-      </div>
-    </div>
-  `;
 }
 
 function renderControlCenter(d) {
@@ -1504,23 +1257,6 @@ function renderControlCenter(d) {
   const traceStatus = snapshot.trace_status || {};
   const uiStatus = snapshot.ui_status || {};
   const evalReplay = snapshot.eval_replay || {};
-  const controlCenterContract = d.control_center_contract || {};
-  const contractVersion = controlCenterContract.contract_version || 'ops-legacy';
-  const contractWriteSet = controlCenterContract.write_set || {};
-  const queueLeaseSegment = contractSegment(controlCenterContract, 'queue_lease');
-  const queueLeaseSnapshot = segmentScope(queueLeaseSegment, 'snapshot');
-  const queueLeaseRuntime = segmentScope(queueLeaseSegment, 'runtime');
-  const queueLeaseSignals = Object.keys(queueLeaseRuntime).length > 0 && queueLeaseRuntime.available !== false
-    ? queueLeaseRuntime
-    : queueLeaseSnapshot;
-  const incidentSegment = contractSegment(controlCenterContract, 'incident');
-  const incidentSnapshot = segmentScope(incidentSegment, 'snapshot');
-  const incidentRuntime = segmentScope(incidentSegment, 'runtime');
-  const incidentSignals = {
-    ...incidentSnapshot,
-    ...(incidentRuntime.available === false ? {} : incidentRuntime),
-  };
-  const replaySignals = contractSegment(controlCenterContract, 'replay');
   const openPriorities = Array.isArray(snapshot.open_priorities) ? snapshot.open_priorities : [];
   const completedCapabilities = Array.isArray(snapshot.completed_capabilities) ? snapshot.completed_capabilities : [];
   const deferredItems = Array.isArray(snapshot.deferred_items) ? snapshot.deferred_items : [];
@@ -1544,12 +1280,12 @@ function renderControlCenter(d) {
   const recentBlockers = Array.isArray(tasks.recent_blockers) ? tasks.recent_blockers : blockerEntries.slice(0, 4);
   const byWorker = tasks.by_worker || workerSummary.by_worker || {};
   const byBlockedKind = tasks.by_blocked_kind || workerSummary.by_blocked_kind || {};
-  const workerCount = queueLeaseSignals.worker_count ?? operationsSummary.worker_count ?? tasks.worker_count ?? workerPanel.worker_count ?? workerRegistry.length;
-  const delegatedCount = queueLeaseSignals.delegated_count ?? operationsSummary.delegated_count ?? tasks.delegated_count ?? workerSummary.delegated_count ?? 0;
-  const runningTaskCount = queueLeaseSignals.running_count ?? operationsSummary.running_count ?? tasks.running_count ?? workerSummary.running_count ?? 0;
-  const queuedTaskCount = queueLeaseSignals.queued_count ?? operationsSummary.queued_count ?? tasks.queued_count ?? workerSummary.queued_count ?? 0;
-  const blockedTaskCount = incidentSignals.blocked_count ?? operationsSummary.blocked_count ?? tasks.blocked_count ?? workerSummary.blocked_count ?? blockerEntries.length;
-  const handoffQueueDepth = queueLeaseSignals.handoff_queue_depth ?? operationsSummary.handoff_queue_depth ?? tasks.handoff_queue_depth ?? workerSummary.handoff_queue_depth ?? 0;
+  const workerCount = operationsSummary.worker_count ?? tasks.worker_count ?? workerPanel.worker_count ?? workerRegistry.length;
+  const delegatedCount = operationsSummary.delegated_count ?? tasks.delegated_count ?? workerSummary.delegated_count ?? 0;
+  const runningTaskCount = operationsSummary.running_count ?? tasks.running_count ?? workerSummary.running_count ?? 0;
+  const queuedTaskCount = operationsSummary.queued_count ?? tasks.queued_count ?? workerSummary.queued_count ?? 0;
+  const blockedTaskCount = operationsSummary.blocked_count ?? tasks.blocked_count ?? workerSummary.blocked_count ?? blockerEntries.length;
+  const handoffQueueDepth = operationsSummary.handoff_queue_depth ?? tasks.handoff_queue_depth ?? workerSummary.handoff_queue_depth ?? 0;
   const oldestBlockedAge = operationsSummary.oldest_blocked_age_s ?? tasks.oldest_blocked_age_s ?? workerSummary.oldest_blocked_age_s ?? 0;
   const oldestRunningAge = operationsSummary.oldest_running_age_s ?? tasks.oldest_running_age_s ?? workerSummary.oldest_running_age_s ?? 0;
   const summaryTone = controlTone(operationsSummary.overall_status || '');
@@ -1568,50 +1304,48 @@ function renderControlCenter(d) {
     : overallTone === 'warn'
       ? 'The core path is up, but follow-up work remains.'
       : 'At least one readiness signal needs attention.';
-  const traceRunCount = traces.total_runs ?? 'â€”';
-  const traceSpanCount = traces.total_spans ?? 'â€”';
+  const traceRunCount = traces.total_runs ?? '—';
+  const traceSpanCount = traces.total_spans ?? '—';
   const traceStatusText = traceStatuses.length > 0
     ? traceStatuses.map(([key, value]) => `${key}:${value}`).join(' | ')
     : 'none';
   const traceCoverageCount = traceCoverage.length;
   const lastVerifiedCommand = lastRun.command || snapshot.verified_test_command || 'unknown';
-  const successRate = history.success_rate != null ? Math.round(history.success_rate * 100) + '%' : 'â€”';
-  const avgLatency = history.avg_latency_ms != null ? Math.round(history.avg_latency_ms) + 'ms' : 'â€”';
-  const totalCommands = metrics.total_commands ?? history.total ?? 'â€”';
+  const successRate = history.success_rate != null ? Math.round(history.success_rate * 100) + '%' : '—';
+  const avgLatency = history.avg_latency_ms != null ? Math.round(history.avg_latency_ms) + 'ms' : '—';
+  const totalCommands = metrics.total_commands ?? history.total ?? '—';
   const errorRate = metrics.total_errors != null && metrics.total_commands
     ? Math.round((metrics.total_errors / Math.max(1, metrics.total_commands)) * 100) + '%'
-    : 'â€”';
+    : '—';
   const monitoringSummary = summarizeObject(monitoring.summary);
   const commandTrail = recentCommands.slice(-3).reverse();
   const verifiedSignals = operationsSummary.verified_signals ?? Object.values(readiness).filter(v => v === 'verified').length;
-  const attentionSignals = Array.isArray(incidentSignals.attention_signals)
-    ? incidentSignals.attention_signals
-    : Array.isArray(operationsSummary.attention_signals)
-      ? operationsSummary.attention_signals
-      : [];
-  const suiteStatus = operationsSummary.suite_status || verified.status || 'â€”';
+  const attentionSignals = Array.isArray(operationsSummary.attention_signals)
+    ? operationsSummary.attention_signals
+    : [];
+  const suiteStatus = operationsSummary.suite_status || verified.status || '—';
   const suiteRunText = operationsSummary.suite_ran != null
     ? `${operationsSummary.suite_ran} ran / ${operationsSummary.suite_skipped ?? 0} skipped`
     : verified.ran != null
       ? `${verified.ran} ran / ${verified.skipped ?? 0} skipped`
-      : 'â€”';
-  const currentWave = operationsSummary.current_wave || snapshot.current_wave || 'â€”';
+      : '—';
+  const currentWave = operationsSummary.current_wave || snapshot.current_wave || '—';
   const latestTraceStatus = operationsSummary.latest_trace_status || traceStatusText;
-  const latestTraceRunId = operationsSummary.latest_trace_run_id || 'â€”';
+  const latestTraceRunId = operationsSummary.latest_trace_run_id || '—';
   const metricsTotalCommands = operationsSummary.metrics_total_commands ?? totalCommands;
-  const historyTotal = operationsSummary.history_total ?? history.total ?? 'â€”';
-  const taskTotal = operationsSummary.task_total ?? tasks.total ?? 'â€”';
-  const agentSkillCount = operationsSummary.agent_skill_count ?? agentSkillLibrary.count ?? 'â€”';
-  const activeTaskCount = operationsSummary.active_task_count ?? tasks.active_count ?? 'â€”';
-  const waitingApprovalCount = operationsSummary.waiting_approval_count ?? tasks.waiting_approval_count ?? 'â€”';
-  const failedTaskCount = operationsSummary.failed_task_count ?? tasks.failed_count ?? 'â€”';
+  const historyTotal = operationsSummary.history_total ?? history.total ?? '—';
+  const taskTotal = operationsSummary.task_total ?? tasks.total ?? '—';
+  const agentSkillCount = operationsSummary.agent_skill_count ?? agentSkillLibrary.count ?? '—';
+  const activeTaskCount = operationsSummary.active_task_count ?? tasks.active_count ?? '—';
+  const waitingApprovalCount = operationsSummary.waiting_approval_count ?? tasks.waiting_approval_count ?? '—';
+  const failedTaskCount = operationsSummary.failed_task_count ?? tasks.failed_count ?? '—';
   const mergeReviewReadyCount = operationsSummary.merge_review_ready_count ?? tasks.merge_review_ready_count ?? 0;
   const mergeConflictTaskCount = operationsSummary.merge_conflict_task_count ?? tasks.merge_conflict_task_count ?? 0;
   const mergeConflictTotal = operationsSummary.merge_conflict_total ?? tasks.merge_conflict_total ?? 0;
   const mergeResolutionPolicies = operationsSummary.merge_resolution_policies ?? tasks.merge_resolution_policies ?? {};
-  const latestMergeTaskId = operationsSummary.latest_merge_task_id || tasks.latest_merge_task_id || 'â€”';
-  const latestMergeResolutionPolicy = operationsSummary.latest_merge_resolution_policy || tasks.latest_merge_resolution_policy || 'â€”';
-  const latestTaskId = operationsSummary.latest_task_id || tasks.latest_task_id || 'â€”';
+  const latestMergeTaskId = operationsSummary.latest_merge_task_id || tasks.latest_merge_task_id || '—';
+  const latestMergeResolutionPolicy = operationsSummary.latest_merge_resolution_policy || tasks.latest_merge_resolution_policy || '—';
+  const latestTaskId = operationsSummary.latest_task_id || tasks.latest_task_id || '—';
   const latestMergeReview = extractMergeReview(latestTask);
   const latestMergeResolution = latestMergeReview.merge_resolution && typeof latestMergeReview.merge_resolution === 'object'
     ? latestMergeReview.merge_resolution
@@ -1623,62 +1357,31 @@ function renderControlCenter(d) {
     latestMergeResolution.policy
   );
   const latestMergeTaskLabel = latestTask?.task_id || latestMergeTaskId;
-  const latestMergeSource = latestMergeReview.merged_from_child_task_id || latestMergeReview.merged_from_task_id || 'â€”';
-  const latestMergeWorker = latestMergeReview.merged_from_worker || 'â€”';
+  const latestMergeSource = latestMergeReview.merged_from_child_task_id || latestMergeReview.merged_from_task_id || '—';
+  const latestMergeWorker = latestMergeReview.merged_from_worker || '—';
   const latestMergeConflictCount = latestMergeResolution.conflict_count ?? latestMergeReview.conflict_count ?? 0;
   const latestMergeLinkedArtifacts = latestMergeReview.linked_artifact_count ?? 0;
   const latestMergeCompletedChildren = latestMergeReview.completed_child_count ?? 0;
   const latestMergeActiveChildren = latestMergeReview.active_child_count ?? 0;
   const latestMergeWorkers = Array.isArray(latestMergeReview.workers_involved) ? latestMergeReview.workers_involved : [];
   const latestMergePendingChildren = Array.isArray(latestMergeReview.pending_child_ids) ? latestMergeReview.pending_child_ids : [];
-  const latestMergeConfiguredPolicy = latestMergeSignals.configuredPolicy || 'Ã¢â‚¬â€';
-  const latestMergeEffectivePolicy = latestMergeSignals.effectivePolicy || latestMergeResolutionPolicy || 'Ã¢â‚¬â€';
+  const latestMergeConfiguredPolicy = latestMergeSignals.configuredPolicy || 'â€”';
+  const latestMergeEffectivePolicy = latestMergeSignals.effectivePolicy || latestMergeResolutionPolicy || 'â€”';
   const latestMergeActionable = latestMergeSignals.actionable;
   const latestMergeOverrideActive = latestMergeSignals.overrideActive;
-  const latestMergeReviewState = latestMergeSignals.reviewState || 'Ã¢â‚¬â€';
-  const latestMergePolicyDelta = latestMergeSignals.policyDelta || 'Ã¢â‚¬â€';
-  const latestMergeNextAction = latestMergeSignals.nextAction || 'Ã¢â‚¬â€';
+  const latestMergeReviewState = latestMergeSignals.reviewState || 'â€”';
+  const latestMergePolicyDelta = latestMergeSignals.policyDelta || 'â€”';
+  const latestMergeNextAction = latestMergeSignals.nextAction || 'â€”';
   const latestMergeResolvedKeys = Array.isArray(latestMergeResolution.resolved_keys)
     ? latestMergeResolution.resolved_keys
     : Array.isArray(latestMergeReview.resolved_keys)
       ? latestMergeReview.resolved_keys
       : [];
-  const replayStatus = replaySignals.status || evalReplay.status || 'â€”';
-  const replayFocus = Array.isArray(replaySignals.focus) && replaySignals.focus.length > 0
-    ? replaySignals.focus
-    : evalReplay.focus;
-  const incidentOpenCount = incidentSignals.open_incident_count ?? (blockedTaskCount > 0 ? blockedTaskCount : attentionSignals.length);
-  const incidentStatus = incidentSignals.status || operationsSummary.overall_status || 'unknown';
-  const queueSegmentSource = queueLeaseRuntime.available === false
-    ? (queueLeaseSnapshot.source || 'dashboard_support')
-    : (queueLeaseRuntime.source || 'gateway_dashboard_payload');
-  const incidentSegmentSource = incidentRuntime.available === false
-    ? (incidentSnapshot.source || 'dashboard_support')
-    : (incidentRuntime.source || 'gateway_dashboard_payload');
-  const supportWriteSet = Array.isArray(contractWriteSet.dashboard_support) ? contractWriteSet.dashboard_support : [];
-  const gatewayWriteSet = Array.isArray(contractWriteSet.gateway_dashboard_payload) ? contractWriteSet.gateway_dashboard_payload : [];
   const skillByPhase = agentSkillLibrary.by_phase || {};
   const skillByCategory = agentSkillLibrary.by_category || {};
-  const latestLeaseExpiry = latestTask?.lease_expires_at || 'none reported';
-  const latestHeartbeat = latestTask?.heartbeat_at || 'none reported';
-  const latestWorker = latestTask?.delegated_to_worker || 'none';
-  const latestLeaseState = latestTask?.delegation_status || (latestWorker !== 'none' ? 'delegated' : 'idle');
-  const queueTone = handoffQueueDepth > 0 ? 'warn' : 'good';
-  const leaseTone = latestLeaseState === 'leased' ? 'good' : latestLeaseState === 'delegated' ? 'warn' : latestWorker !== 'none' ? 'warn' : 'muted';
-  const daemonTone = workerPanel.available === true ? 'good' : 'bad';
-  const workerTone = workerCount > 0 ? 'good' : 'bad';
-  const remoteAuthReadiness = deriveRemoteAuthSignals({
-    readiness,
-    snapshot,
-    authStatus,
-    completedCapabilities,
-    openPriorities,
-    gatewayModes,
-    uiStatus,
-  });
 
   return `
-    <div class="control-banner" data-smoke="control-banner" data-segment="operator-surface">
+    <div class="control-banner" data-smoke="control-banner">
       <div class="control-banner-top">
         <div>
           <div class="control-title">Operations Control Center</div>
@@ -1692,25 +1395,21 @@ function renderControlCenter(d) {
         </div>
       </div>
       <div class="control-pill-row">
-        ${renderControlPill('Queue Depth', handoffQueueDepth, queueTone)}
-        ${renderControlPill('Lease State', latestLeaseState, leaseTone)}
-        ${renderControlPill('Worker Daemon', workerPanel.available === true ? 'online' : 'offline', daemonTone)}
-        ${renderControlPill('Contract', contractVersion, 'muted')}
-        ${renderControlPill('Mode', health.mode || 'â€”', controlTone(health.mode))}
+        ${renderControlPill('Mode', health.mode || '—', controlTone(health.mode))}
         ${renderControlPill('Readiness', overallLabel, overallTone)}
-        ${renderControlPill('Version', health.version || 'â€”', 'muted')}
-        ${renderControlPill('Trace Runs', traceRunCount, traceRunCount !== 'â€”' ? 'good' : 'muted')}
+        ${renderControlPill('Version', health.version || '—', 'muted')}
+        ${renderControlPill('Trace Runs', traceRunCount, traceRunCount !== '—' ? 'good' : 'muted')}
         ${renderControlPill('Trace Coverage', traceCoverageCount, traceCoverageCount ? 'good' : 'muted')}
         ${renderControlPill('Verified Signals', verifiedSignals, verifiedSignals ? 'good' : 'muted')}
         ${renderControlPill('Attention Signals', attentionSignals.length, attentionSignals.length ? 'warn' : 'good')}
-        ${renderControlPill('Current Wave', currentWave, currentWave !== 'â€”' ? 'muted' : 'muted')}
+        ${renderControlPill('Current Wave', currentWave, currentWave !== '—' ? 'muted' : 'muted')}
         ${renderControlPill('Last Verified', lastVerifiedCommand, 'muted')}
         ${renderControlPill('Known Gaps', gaps.length, gaps.length ? 'warn' : 'good')}
         ${renderControlPill('Completed', completedCapabilities.length, completedCapabilities.length ? 'good' : 'muted')}
         ${renderControlPill('Recent Commands', recentCommands.length, recentCommands.length ? 'good' : 'muted')}
-        ${renderControlPill('Agent Skills', agentSkillCount, agentSkillCount !== 'â€”' ? 'good' : 'muted')}
-        ${renderControlPill('Task Total', taskTotal, taskTotal !== 'â€”' ? 'good' : 'muted')}
-        ${renderControlPill('Waiting Approval', waitingApprovalCount, waitingApprovalCount !== 'â€”' && Number(waitingApprovalCount) > 0 ? 'warn' : 'good')}
+        ${renderControlPill('Agent Skills', agentSkillCount, agentSkillCount !== '—' ? 'good' : 'muted')}
+        ${renderControlPill('Task Total', taskTotal, taskTotal !== '—' ? 'good' : 'muted')}
+        ${renderControlPill('Waiting Approval', waitingApprovalCount, waitingApprovalCount !== '—' && Number(waitingApprovalCount) > 0 ? 'warn' : 'good')}
       </div>
     </div>
 
@@ -1750,14 +1449,12 @@ function renderControlCenter(d) {
         </div>
       </div>
 
-      ${renderRemoteAuthReadiness(remoteAuthReadiness)}
-
       <div class="control-card" data-smoke="verification">
         <div class="control-card-title">Verification</div>
         <div class="control-lines">
           ${renderControlLine('Tests available', tests.available === true ? 'yes' : tests.available === false ? 'no' : 'unknown')}
-          ${renderControlLine('Verified tests', verified.status || 'â€”')}
-          ${renderControlLine('Test run', verified.ran != null ? `${verified.ran} ran / ${verified.skipped ?? 0} skipped` : 'â€”')}
+          ${renderControlLine('Verified tests', verified.status || '—')}
+          ${renderControlLine('Test run', verified.ran != null ? `${verified.ran} ran / ${verified.skipped ?? 0} skipped` : '—')}
           ${renderControlLine('Last verified', lastRun.command || snapshot.verified_test_command || 'unknown')}
           ${renderControlLine('Result', lastRun.result || 'n/a')}
         </div>
@@ -1799,7 +1496,7 @@ function renderControlCenter(d) {
         <div class="control-lines">
           ${renderControlLine('Latest merge task', latestMergeTaskLabel)}
           ${renderControlLine('Available', latestMergeAvailable ? 'yes' : 'no')}
-          ${renderControlLine('Merge policy', latestMergeReview.merge_policy || 'â€”')}
+          ${renderControlLine('Merge policy', latestMergeReview.merge_policy || '—')}
           ${renderControlLine('Configured policy', latestMergeConfiguredPolicy)}
           ${renderControlLine('Resolution policy', latestMergeEffectivePolicy)}
           ${renderControlLine('Review state', latestMergeReviewState)}
@@ -1869,51 +1566,7 @@ function renderControlCenter(d) {
         </div>
       </div>
 
-      <div class="control-card" data-smoke="operability-signals" data-segment="queue-lease">
-        <div class="control-card-title">Queue / Lease / Worker Daemon</div>
-        <div class="control-lines">
-          ${renderControlLine('Worker daemon', workerPanel.available === true ? 'available' : 'offline')}
-          ${renderControlLine('Worker registry', workerCount)}
-          ${renderControlLine('Delegated tasks', delegatedCount)}
-          ${renderControlLine('Queue depth', handoffQueueDepth)}
-          ${renderControlLine('Queued tasks', queuedTaskCount)}
-          ${renderControlLine('Running tasks', runningTaskCount)}
-          ${renderControlLine('Latest task', latestTaskId || 'none')}
-          ${renderControlLine('Latest worker', latestWorker)}
-          ${renderControlLine('Lease state', latestLeaseState)}
-          ${renderControlLine('Lease expiry', latestLeaseExpiry)}
-          ${renderControlLine('Heartbeat', latestHeartbeat)}
-        </div>
-        <div class="control-chip-list" style="margin-top:8px">
-          ${renderControlPill('Queue', handoffQueueDepth, queueTone)}
-          ${renderControlPill('Lease', latestLeaseState, leaseTone)}
-          ${renderControlPill('Daemon', workerPanel.available === true ? 'online' : 'offline', daemonTone)}
-          ${renderControlPill('Workers', workerCount, workerTone)}
-        </div>
-      </div>
-      <div class="control-card" data-smoke="signal-segments">
-        <div class="control-card-title">Stable Signal Segments</div>
-        <div class="control-lines">
-          ${renderControlLine('Contract version', contractVersion)}
-          ${renderControlLine('Support write-set', supportWriteSet.length)}
-          ${renderControlLine('Gateway write-set', gatewayWriteSet.length)}
-        </div>
-        <div class="control-event-list">
-          <div class="control-event" data-smoke="signal-queue-lease">
-            <strong>Queue/Lease</strong>
-            <small>${escHtml(`source=${queueSegmentSource} depth=${handoffQueueDepth} queued=${queuedTaskCount} running=${runningTaskCount}`)}</small>
-          </div>
-          <div class="control-event" data-smoke="signal-replay">
-            <strong>Replay</strong>
-            <small>${escHtml(`source=${replaySignals.source || 'dashboard_support'} status=${normalizeControlValue(replayStatus)} focus=${summarizeList(replayFocus, 2)}`)}</small>
-          </div>
-          <div class="control-event" data-smoke="signal-incident">
-            <strong>Incident</strong>
-            <small>${escHtml(`source=${incidentSegmentSource} status=${incidentStatus} open=${incidentOpenCount}`)}</small>
-          </div>
-        </div>
-      </div>
-      <div class="control-card" data-smoke="blocker-workbench" data-segment="incident">
+      <div class="control-card" data-smoke="blocker-workbench">
         <div class="control-card-title">Blocker Workbench</div>
         <div class="control-lines">
           ${renderControlLine('Blocked tasks', blockedTaskCount)}
@@ -1925,13 +1578,13 @@ function renderControlCenter(d) {
         </div>
       </div>
 
-      <div class="control-card" data-smoke="command-context" data-segment="replay">
+      <div class="control-card" data-smoke="command-context">
         <div class="control-card-title">Command Context</div>
         <div class="control-lines">
           ${renderControlLine('Gateway modes', summarizeObject(gatewayModes))}
           ${renderControlLine('UI status', summarizeObject(uiStatus))}
-          ${renderControlLine('Eval replay', replayStatus)}
-          ${renderControlLine('Replay focus', summarizeList(replayFocus, 3))}
+          ${renderControlLine('Eval replay', evalReplay.status || '—')}
+          ${renderControlLine('Replay focus', summarizeList(evalReplay.focus, 3))}
           ${renderControlLine('Last command', lastCommand ? summarizeObject(lastCommand, 6) : 'none')}
           ${renderControlLine('Recent commands', recentCommands.length)}
         </div>
@@ -1967,7 +1620,7 @@ function renderControlCenter(d) {
       <div class="control-card" data-smoke="delivery-snapshot">
         <div class="control-card-title">Delivery Snapshot</div>
         <div class="control-lines">
-          ${renderControlLine('Current wave', snapshot.current_wave || 'â€”')}
+          ${renderControlLine('Current wave', snapshot.current_wave || '—')}
           ${renderControlLine('Open priorities', summarizeList(openPriorities, 3))}
           ${renderControlLine('Known gaps', summarizeList(gaps, 4))}
           ${renderControlLine('Deferred items', summarizeList(deferredItems, 3))}
@@ -1996,7 +1649,7 @@ function renderControlCenter(d) {
         <div class="control-chip-list" style="margin-top:6px">
           ${evalReplay.manifest ? renderControlChip('manifest', evalReplay.manifest, 'muted') : ''}
           ${evalReplay.replay_seed ? renderControlChip('seed', evalReplay.replay_seed, 'muted') : ''}
-          ${traceSpanCount !== 'â€”' ? renderControlChip('spans', traceSpanCount, 'muted') : ''}
+          ${traceSpanCount !== '—' ? renderControlChip('spans', traceSpanCount, 'muted') : ''}
         </div>
       </div>
     </div>
@@ -2036,4 +1689,3 @@ function showToast(msg, dur = 2500) {
 </script>
 </body>
 </html>
-

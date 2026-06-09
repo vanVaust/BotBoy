@@ -89,15 +89,6 @@ class _FakeTaskStore:
             "health": "unknown",
             "draining": False,
         }
-        self.lease = {
-            "lease_id": "lease-1",
-            "queue_name": "reviewer.node-1",
-            "node_id": "node-1",
-            "task_id": "task-1",
-            "lease_status": "active",
-            "lease_expires_at": "2026-01-03T00:00:00+00:00",
-            "is_active": True,
-        }
 
     def get_task(self, task_id: str):
         return _FakeTaskRecord() if task_id == "task-1" else None
@@ -106,48 +97,10 @@ class _FakeTaskStore:
         return [dict(self.node)]
 
     def list_execution_queues(self):
-        return [{"queue_name": self.node["queue_name"], "worker_id": self.node["worker_id"], "queue_status": "ready"}]
+        return [{"queue_name": self.node["queue_name"], "worker_id": self.node["worker_id"]}]
 
     def worker_node_summary(self):
         return {"node_count": 1, "healthy_count": 1, "draining_count": 0}
-
-    def queue_summary(self):
-        return {
-            "queue_count": 1,
-            "active_lease_count": int(self.lease["lease_status"] == "active"),
-            "expired_lease_count": 0,
-            "released_lease_count": int(self.lease["lease_status"] == "released"),
-            "queue_depths": {self.node["queue_name"]: int(self.lease["lease_status"] == "active")},
-        }
-
-    def list_queue_leases(self, **kwargs):
-        return [dict(self.lease)]
-
-    def acquire_queue_lease(self, **kwargs):
-        self.lease.update(
-            {
-                "lease_id": "lease-1",
-                "queue_name": kwargs["queue_name"],
-                "node_id": kwargs["node_id"],
-                "task_id": kwargs.get("task_id", ""),
-                "lease_status": "active",
-                "is_active": True,
-            }
-        )
-        return dict(self.lease)
-
-    def renew_queue_lease(self, lease_id: str, **kwargs):
-        if lease_id != self.lease["lease_id"]:
-            raise ValueError("Unknown queue lease")
-        self.lease["lease_expires_at"] = "2026-01-04T00:00:00+00:00"
-        return dict(self.lease)
-
-    def release_queue_lease(self, lease_id: str, **kwargs):
-        if lease_id != self.lease["lease_id"]:
-            raise ValueError("Unknown queue lease")
-        self.lease["lease_status"] = "released"
-        self.lease["is_active"] = False
-        return dict(self.lease)
 
     def register_worker_node(self, **kwargs):
         self.node.update(
@@ -249,25 +202,6 @@ class IntrospectionCommandSupportTest(unittest.TestCase):
         self.assertIn("heartbeat", heartbeat["output"].lower())
         self.assertTrue(drain["success"])
         self.assertIn("draining", drain["output"].lower())
-
-    def test_handle_worker_lease_commands(self) -> None:
-        bot = _FakeBot()
-        queues = handle_workers(bot, "worker lease queues")
-        acquire = handle_workers(bot, "worker lease acquire reviewer.node-1 node-1 task-1")
-        listing = handle_workers(bot, "worker lease list reviewer.node-1")
-        renew = handle_workers(bot, "worker lease renew lease-1")
-        release = handle_workers(bot, "worker lease release lease-1 done")
-
-        self.assertTrue(queues["success"])
-        self.assertIn("Execution queues", queues["output"])
-        self.assertTrue(acquire["success"])
-        self.assertIn("Queue lease acquired", acquire["output"])
-        self.assertTrue(listing["success"])
-        self.assertEqual(listing["data"]["leases"][0]["lease_id"], "lease-1")
-        self.assertTrue(renew["success"])
-        self.assertIn("renewed", renew["output"])
-        self.assertTrue(release["success"])
-        self.assertEqual(release["data"]["lease"]["lease_status"], "released")
 
     def test_handle_reflection_archive_stats(self) -> None:
         result = handle_reflection_archive(_FakeBot(), "reflect stats", principal="tester")

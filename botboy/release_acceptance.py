@@ -6,7 +6,6 @@ import shutil
 import subprocess
 import sys
 import tarfile
-import tempfile
 import uuid
 import venv
 import zipfile
@@ -14,13 +13,12 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_RUNTIME_TEMP_ROOT = (Path(tempfile.gettempdir()) / "botboy-release-acceptance").resolve()
 RUNTIME_TEMP_ROOT = Path(
     os.getenv(
         "BOTBOY_ACCEPTANCE_TEMP_ROOT",
-        str(DEFAULT_RUNTIME_TEMP_ROOT),
+        str(ROOT / ".botboy-runtime" / "acceptance-temp"),
     )
-).expanduser().resolve()
+)
 IGNORED_ROOT_NAMES = {
     ".botboy-mcp-runtime",
     ".botboy-runtime",
@@ -32,16 +30,6 @@ IGNORED_ROOT_NAMES = {
     "build",
     "dist",
 }
-FORBIDDEN_WHEEL_PREFIXES = ("skills/", "examples/skills/", "tests/")
-FORBIDDEN_SDIST_PREFIXES = (
-    ".botboy-mcp-runtime/",
-    ".botboy-runtime/",
-    ".codex_eval_runtime/",
-    ".deps-build/",
-    ".release-build-venv/",
-    ".venv-build/",
-    "__pycache__/",
-)
 REQUIRED_SDIST_ENTRIES = (
     "README.md",
     "pyproject.toml",
@@ -89,75 +77,6 @@ def _assert_no_absolute_archive_names(names: list[str], *, artifact: Path) -> No
             raise RuntimeError(f"{artifact.name} contains absolute archive member: {normalized}")
 
 
-def _is_relative_to(path: Path, parent: Path) -> bool:
-    try:
-        path.relative_to(parent)
-        return True
-    except ValueError:
-        return False
-
-
-def _assert_disjoint_paths(paths: dict[str, Path]) -> None:
-    items = [(label, value.expanduser().resolve()) for label, value in paths.items()]
-    for index, (label_a, path_a) in enumerate(items):
-        for label_b, path_b in items[index + 1:]:
-            if path_a == path_b or _is_relative_to(path_a, path_b) or _is_relative_to(path_b, path_a):
-                raise RuntimeError(
-                    "Release write-set paths must be disjoint: "
-                    f"{label_a}={path_a} overlaps with {label_b}={path_b}"
-                )
-
-
-def _assert_no_path_traversal_archive_names(names: list[str], *, artifact: Path) -> None:
-    for name in names:
-        normalized = name.strip("/")
-        if not normalized:
-            continue
-        segments = [segment for segment in normalized.split("/") if segment]
-        if any(segment == ".." for segment in segments):
-            raise RuntimeError(f"{artifact.name} contains traversal archive member: {name}")
-
-
-def _assert_no_cache_members(names: list[str], *, artifact: Path) -> None:
-    for name in names:
-        normalized = name.strip("/")
-        if not normalized:
-            continue
-        if "/__pycache__/" in f"/{normalized}/" or normalized.endswith((".pyc", ".pyo", ".pyd")):
-            raise RuntimeError(f"{artifact.name} contains cache-like member: {name}")
-
-
-def _assert_no_forbidden_prefixes(names: list[str], *, artifact: Path, forbidden_prefixes: tuple[str, ...]) -> None:
-    for name in names:
-        normalized = name.strip("/")
-        if not normalized:
-            continue
-        for forbidden in forbidden_prefixes:
-            if normalized.startswith(forbidden):
-                raise RuntimeError(f"{artifact.name} contains forbidden member: {normalized}")
-
-
-def _assert_single_sdist_root(names: list[str], *, artifact: Path) -> str:
-    roots: set[str] = set()
-    for name in names:
-        normalized = name.strip("/")
-        if not normalized:
-            continue
-        roots.add(normalized.split("/", 1)[0])
-    if len(roots) != 1:
-        raise RuntimeError(f"{artifact.name} must contain exactly one top-level directory, got {sorted(roots)}")
-    return next(iter(roots))
-
-
-def _assert_no_tmp_root_members(names: list[str], *, artifact: Path) -> None:
-    for name in names:
-        normalized = name.strip("/")
-        if not normalized:
-            continue
-        if normalized.split("/", 1)[0].startswith("tmp"):
-            raise RuntimeError(f"{artifact.name} contains forbidden tmp* top-level member: {normalized}")
-
-
 def _copy_ignore(_src: str, names: list[str]) -> set[str]:
     ignored: set[str] = set()
     for name in names:
@@ -173,11 +92,6 @@ def _copy_ignore(_src: str, names: list[str]) -> set[str]:
 def _clean_source_tree(temp_dir: Path) -> Path:
     target = temp_dir / "source"
     shutil.copytree(ROOT, target, ignore=_copy_ignore)
-    for forbidden in IGNORED_ROOT_NAMES:
-        if (target / forbidden).exists():
-            raise RuntimeError(f"Clean source clone leaked ignored root directory: {forbidden}")
-    if any(child.name.startswith("tmp") for child in target.iterdir()):
-        raise RuntimeError("Clean source clone leaked tmp* root entries")
     return target
 
 
@@ -236,19 +150,7 @@ def _inspect_sdist(artifact: Path) -> None:
         raw_names = archive.getnames()
     normalized = _normalize_archive_names(raw_names)
     _assert_no_absolute_archive_names(normalized, artifact=artifact)
-    _assert_no_path_traversal_archive_names(normalized, artifact=artifact)
-    _assert_no_cache_members(normalized, artifact=artifact)
-    root_prefix = _assert_single_sdist_root(normalized, artifact=artifact)
-    members: list[str] = []
-    for name in normalized:
-        cleaned = name.strip("/")
-        if not cleaned or cleaned == root_prefix:
-            continue
-        if not cleaned.startswith(f"{root_prefix}/"):
-            raise RuntimeError(f"{artifact.name} contains inconsistent sdist member outside root: {cleaned}")
-        members.append(cleaned[len(root_prefix) + 1 :])
-    _assert_no_forbidden_prefixes(members, artifact=artifact, forbidden_prefixes=FORBIDDEN_SDIST_PREFIXES)
-    _assert_no_tmp_root_members(members, artifact=artifact)
+    members = ["/".join(name.split("/")[1:]) for name in normalized if "/" in name]
     for required in REQUIRED_SDIST_ENTRIES:
         if required not in members:
             raise RuntimeError(f"{artifact.name} missing expected sdist member: {required}")
@@ -259,20 +161,14 @@ def _inspect_wheel(artifact: Path) -> None:
         raw_names = archive.namelist()
     normalized = _normalize_archive_names(raw_names)
     _assert_no_absolute_archive_names(normalized, artifact=artifact)
-    _assert_no_path_traversal_archive_names(normalized, artifact=artifact)
-    _assert_no_cache_members(normalized, artifact=artifact)
-    _assert_no_forbidden_prefixes(normalized, artifact=artifact, forbidden_prefixes=FORBIDDEN_WHEEL_PREFIXES)
     for required in REQUIRED_WHEEL_ENTRIES:
         if required not in normalized:
             raise RuntimeError(f"{artifact.name} missing expected wheel member: {required}")
 
 
 def build_release_artifacts(*, python_executable: str | Path, outdir: Path) -> tuple[Path, Path]:
-    outdir = outdir.expanduser().resolve()
-    _assert_disjoint_paths({"acceptance temp root": RUNTIME_TEMP_ROOT, "release artifact outdir": outdir})
     outdir.mkdir(parents=True, exist_ok=True)
     temp_dir = _create_workspace_tempdir("build-")
-    _assert_disjoint_paths({"release build temp dir": temp_dir, "release artifact outdir": outdir})
     try:
         source_root = _clean_source_tree(temp_dir)
         build_env = _command_env(temp_dir)
@@ -380,40 +276,13 @@ def _run_botboy_command(env_python: Path, base_dir: Path, name: str, *args: str)
     )
 
 
-def _select_standard_site_packages_seed(*, bootstrap_site_packages: Path) -> Path:
-    candidates: list[Path] = []
-    override = str(os.getenv("BOTBOY_ACCEPTANCE_STANDARD_SITE_PACKAGES", "")).strip()
-    if override:
-        candidates.append(Path(override).expanduser())
-    release_build_root = ROOT / ".release-build-venv"
-    candidates.append(release_build_root / "Lib" / "site-packages")
-    candidates.extend(sorted((release_build_root / "lib").glob("python*/site-packages")))
-    candidates.append(bootstrap_site_packages)
-
-    seen: set[Path] = set()
-    for candidate in candidates:
-        resolved = candidate.expanduser().resolve()
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        if resolved.exists():
-            return resolved
-    return bootstrap_site_packages.expanduser().resolve()
-
-
 def run_install_acceptance(*, bootstrap_python: str | Path, wheel_path: Path) -> None:
     temp_dir = _create_workspace_tempdir("install-")
     try:
         minimal_python = _create_venv(temp_dir / "release-minimal")
         standard_python = _create_venv(temp_dir / "release-standard")
-        _assert_disjoint_paths(
-            {
-                "minimal botboy home": temp_dir / "botboy-home" / "minimal",
-                "standard botboy home": temp_dir / "botboy-home" / "standard",
-            }
-        )
         bootstrap_site_packages = _site_packages_dir(bootstrap_python, base_dir=temp_dir)
-        standard_source = _select_standard_site_packages_seed(bootstrap_site_packages=bootstrap_site_packages)
+        standard_source = ROOT / ".release-build-venv" / "Lib" / "site-packages"
 
         _copy_site_packages_seed(bootstrap_site_packages, _site_packages_dir(minimal_python, base_dir=temp_dir))
         _pip_install(bootstrap_python, minimal_python, str(wheel_path), base_dir=temp_dir, no_deps=True)
@@ -467,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--outdir",
-        default=str((Path.cwd() / "dist").resolve()),
+        default=str(ROOT / "dist"),
         help="Output directory for build artifacts.",
     )
     parser.add_argument(

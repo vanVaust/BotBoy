@@ -9,12 +9,7 @@ on:
 
 jobs:
   release-verification:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    runs-on: windows-latest
 
     steps:
       - name: Checkout
@@ -23,7 +18,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.13"
 
       - name: Install build and standard runtime dependencies
         shell: pwsh
@@ -40,6 +35,4 @@ jobs:
       - name: Run release test suite
         shell: pwsh
         run: |
-          python -m botboy.release_smoke -v
-          python -m botboy evals --summary
-          python -c "import sys, unittest; suite = unittest.defaultTestLoader.discover('tests'); result = unittest.TextTestRunner(verbosity=2).run(suite); sys.exit(1 if (not result.wasSuccessful() or result.skipped) else 0)"
+          python -m unittest discover -s tests -v

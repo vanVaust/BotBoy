@@ -245,64 +245,6 @@ def handle_worker_nodes_get(handler, params: dict) -> None:
     )
 
 
-def _param_bool(params: dict, key: str) -> bool:
-    value = params.get(key, [""])[0]
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def handle_worker_queues_get(handler, params: dict) -> None:
-    del params
-    if handler._ensure_access(require_auth=handler.auth_enabled) is None:
-        return
-    store = handler._task_store()
-    if not store:
-        return
-    handler._json(
-        {
-            "available": True,
-            "queues": store.list_execution_queues(),
-            "summary": store.queue_summary(),
-        }
-    )
-
-
-def handle_queue_leases_get(handler, params: dict) -> None:
-    if handler._ensure_access(require_auth=handler.auth_enabled) is None:
-        return
-    store = handler._task_store()
-    if not store:
-        return
-    try:
-        limit = int(params.get("limit", ["100"])[0])
-    except (TypeError, ValueError):
-        handler._json({"error": "Invalid limit"}, 400)
-        return
-    handler._json(
-        {
-            "available": True,
-            "leases": [
-                {
-                    **lease,
-                    "metadata": {
-                        key: value
-                        for key, value in dict(lease.get("metadata") or {}).items()
-                        if key != "fencing_token"
-                    },
-                }
-                for lease in store.list_queue_leases(
-                    queue_name=str(params.get("queue_name", [""])[0]).strip(),
-                    node_id=str(params.get("node_id", [""])[0]).strip(),
-                    task_id=str(params.get("task_id", [""])[0]).strip(),
-                    include_released=_param_bool(params, "include_released"),
-                    include_expired=_param_bool(params, "include_expired"),
-                    limit=limit,
-                )
-            ],
-            "summary": store.queue_summary(),
-        }
-    )
-
-
 def handle_worker_detail(handler, worker_id: str) -> None:
     if handler._ensure_access(require_auth=handler.auth_enabled) is None:
         return

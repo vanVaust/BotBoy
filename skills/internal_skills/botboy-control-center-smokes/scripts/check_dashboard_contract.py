@@ -12,7 +12,6 @@ REQUIRED_PATHS = (
     ("snapshot",),
     ("traces",),
     ("monitoring",),
-    ("control_center_contract",),
 )
 
 SNAPSHOT_KEYS = (
@@ -20,12 +19,6 @@ SNAPSHOT_KEYS = (
     "open_priorities",
     "deferred_items",
     "eval_replay",
-)
-
-CONTRACT_KEYS = (
-    "contract_version",
-    "segments",
-    "write_set",
 )
 
 
@@ -55,16 +48,6 @@ def main(argv: list[str]) -> int:
     for key in SNAPSHOT_KEYS:
         if key not in snapshot:
             missing.append(f"snapshot.{key}")
-
-    contract = payload.get("control_center_contract", {})
-    for key in CONTRACT_KEYS:
-        if key not in contract:
-            missing.append(f"control_center_contract.{key}")
-
-    segments = contract.get("segments", {}) if isinstance(contract, dict) else {}
-    for key in ("operator_surface", "queue_lease", "replay", "incident"):
-        if key not in segments:
-            missing.append(f"control_center_contract.segments.{key}")
 
     result = {"ok": not missing, "missing": missing}
     print(json.dumps(result, indent=2, sort_keys=True))

@@ -1,4 +1,4 @@
-﻿"""BotBoy v0.6.0-dev ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Core Orchestrator with full Phase-0 integration."""
+"""BotBoy v0.6.0-dev ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Core Orchestrator with full Phase-0 integration."""
 from __future__ import annotations
 
 import asyncio
@@ -92,102 +92,18 @@ from botboy.tasks import (
 from botboy.reflection_memory import ReflectionMemoryArchive
 from botboy.worker_handoff_service import WorkerHandoffService
 from botboy.workers import WorkerRegistry
-
-MERGE_RESOLUTION_LAST_CHILD_WINS = "last_child_wins"
-MERGE_RESOLUTION_FIRST_CHILD_WINS = "first_child_wins"
-MERGE_RESOLUTION_PREFER_NON_NULL = "prefer_non_null"
-MERGE_RESOLUTION_PREFER_RICHER_VALUE = "prefer_richer_value"
-MERGE_RESOLUTION_PREFER_WORKER_PRIORITY = "prefer_worker_priority"
-DEFAULT_MERGE_RESOLUTION_POLICY = MERGE_RESOLUTION_LAST_CHILD_WINS
-SUPPORTED_MERGE_RESOLUTION_POLICIES = {
-    MERGE_RESOLUTION_LAST_CHILD_WINS: MERGE_RESOLUTION_LAST_CHILD_WINS,
-    "last_wins": MERGE_RESOLUTION_LAST_CHILD_WINS,
-    MERGE_RESOLUTION_FIRST_CHILD_WINS: MERGE_RESOLUTION_FIRST_CHILD_WINS,
-    "first_wins": MERGE_RESOLUTION_FIRST_CHILD_WINS,
-    MERGE_RESOLUTION_PREFER_NON_NULL: MERGE_RESOLUTION_PREFER_NON_NULL,
-    "non_null": MERGE_RESOLUTION_PREFER_NON_NULL,
-    MERGE_RESOLUTION_PREFER_RICHER_VALUE: MERGE_RESOLUTION_PREFER_RICHER_VALUE,
-    "richer_value": MERGE_RESOLUTION_PREFER_RICHER_VALUE,
-    "prefer_richer": MERGE_RESOLUTION_PREFER_RICHER_VALUE,
-    MERGE_RESOLUTION_PREFER_WORKER_PRIORITY: MERGE_RESOLUTION_PREFER_WORKER_PRIORITY,
-    "worker_priority": MERGE_RESOLUTION_PREFER_WORKER_PRIORITY,
-    "prefer_worker": MERGE_RESOLUTION_PREFER_WORKER_PRIORITY,
-}
-MERGE_REVIEW_ACTIONS = (
-    "set_policy",
-    "resolve_key",
-    "resolve_many",
-    "resolve_all_by_source",
-    "clear_resolution",
-    "clear_many",
-    "apply_preset",
-    "reapply",
+from botboy.constants import (
+    DEFAULT_MERGE_RESOLUTION_POLICY,
+    MERGE_RESOLUTION_FIRST_CHILD_WINS,
+    MERGE_RESOLUTION_LAST_CHILD_WINS,
+    MERGE_RESOLUTION_PREFER_NON_NULL,
+    MERGE_RESOLUTION_PREFER_RICHER_VALUE,
+    MERGE_RESOLUTION_PREFER_WORKER_PRIORITY,
+    MERGE_REVIEW_ACTIONS,
+    MERGE_REVIEW_PRESETS,
+    MERGE_WORKER_PRIORITY,
+    SUPPORTED_MERGE_RESOLUTION_POLICIES,
 )
-MERGE_WORKER_PRIORITY = {
-    "reviewer": 50,
-    "executor": 40,
-    "planner": 30,
-    "researcher": 20,
-    "designer": 10,
-}
-MERGE_REVIEW_PRESETS = {
-    "fastest": {
-        "preset": "fastest",
-        "mode": "policy",
-        "policy": MERGE_RESOLUTION_LAST_CHILD_WINS,
-        "label": "Fastest",
-        "description": "Favor the latest completed child result.",
-    },
-    "safest": {
-        "preset": "safest",
-        "mode": "policy",
-        "policy": MERGE_RESOLUTION_FIRST_CHILD_WINS,
-        "label": "Safest",
-        "description": "Keep the first completed child result where conflicts exist.",
-    },
-    "richest": {
-        "preset": "richest",
-        "mode": "policy",
-        "policy": MERGE_RESOLUTION_PREFER_RICHER_VALUE,
-        "label": "Richest",
-        "description": "Prefer structurally richer payload values during merge review.",
-    },
-    "priority_weighted": {
-        "preset": "priority_weighted",
-        "mode": "policy",
-        "policy": MERGE_RESOLUTION_PREFER_WORKER_PRIORITY,
-        "label": "Priority Weighted",
-        "description": "Prefer higher-priority worker outputs during conflict resolution.",
-    },
-    "prefer_non_null": {
-        "preset": "prefer_non_null",
-        "mode": "policy",
-        "policy": MERGE_RESOLUTION_PREFER_NON_NULL,
-        "label": "Prefer Non Null",
-        "description": "Prefer non-null values when children disagree.",
-    },
-    "prefer_reviewer": {
-        "preset": "prefer_reviewer",
-        "mode": "source",
-        "source": "reviewer",
-        "label": "Prefer Reviewer",
-        "description": "Resolve all pending conflict keys to reviewer when available.",
-    },
-    "prefer_planner": {
-        "preset": "prefer_planner",
-        "mode": "source",
-        "source": "planner",
-        "label": "Prefer Planner",
-        "description": "Resolve all pending conflict keys to planner when available.",
-    },
-    "prefer_executor": {
-        "preset": "prefer_executor",
-        "mode": "source",
-        "source": "executor",
-        "label": "Prefer Executor",
-        "description": "Resolve all pending conflict keys to executor when available.",
-    },
-}
 
 class BotBoy:
     """
@@ -233,6 +149,7 @@ class BotBoy:
         self.planner = None
         self.parallel_thinker = None
         self.reflection_archive: Optional[ReflectionMemoryArchive] = None
+
         self.delegation_advisor: Optional[DelegationAdvisor] = None
         self.a2a_pilot: Optional[BoundedA2APilotRegistry] = None
         self._initialized = False
@@ -240,23 +157,33 @@ class BotBoy:
         self.archetypes: Optional[ArchetypeDatabase] = None
         self.channel_adapter: Optional[ChannelAdapter] = None
         self.workers = WorkerRegistry()
+        self.dag_engine = None
+        self.self_healing = None
+        self.governance = None
         self._hybrid_memory = False
         self._start_time = time.time()
 
+        # Phase 2: Proper Dependency Injection for Services
+        self.bootstrap_service = BootstrapService(self)
+        self.task_merge_service = TaskMergeService(self)
+        self.worker_handoff_service = WorkerHandoffService(self)
+        self.lifecycle_service = OrchestratorLifecycleService(self)
+        self.command_execution_service = CommandExecutionService(self)
+
     def _bootstrap_service(self) -> BootstrapService:
-        return BootstrapService(self)
+        return self.bootstrap_service
 
     def _task_merge_service(self) -> TaskMergeService:
-        return TaskMergeService(self)
+        return self.task_merge_service
 
     def _worker_handoff_service(self) -> WorkerHandoffService:
-        return WorkerHandoffService(self)
+        return self.worker_handoff_service
 
     def _lifecycle_service(self) -> OrchestratorLifecycleService:
-        return OrchestratorLifecycleService(self)
+        return self.lifecycle_service
 
     def _command_execution_service(self) -> CommandExecutionService:
-        return CommandExecutionService(self)
+        return self.command_execution_service
 
     def initialize(self) -> bool:
         """Initialise all components. Returns True on success."""
@@ -432,14 +359,14 @@ class BotBoy:
     def _merge_available_review_presets(self, merge: dict) -> list[dict]:
         return self._task_merge_service().merge_available_review_presets(merge)
 
-    @staticmethod
     def _merge_review_next_action(
+        self,
         *,
         pending_child_ids: list[str],
         review_pending_keys: list[str],
         override_count: int,
     ) -> str:
-        return TaskMergeService(bot=None).merge_review_next_action(
+        return self.task_merge_service.merge_review_next_action(
             pending_child_ids=pending_child_ids,
             review_pending_keys=review_pending_keys,
             override_count=override_count,
@@ -840,7 +767,19 @@ class BotBoy:
 
         Returns: {"success": bool, "output": str, "type": str, "data": dict}
         """
-        return await self._command_execution_service().process_command(
+        # Phase 1: Governance Pre-Execution Block
+        if self.governance:
+            org_id = getattr(self.config, "org_id", "default_org")
+            cmd_hint = raw_command.split(" ")[0] if raw_command else "unknown"
+            if not self.governance.enforce_pre_execution(org_id, skill_name=cmd_hint, risk="medium"):
+                return {
+                    "success": False,
+                    "output": f"Governance block: Execution rejected for {cmd_hint} (org: {org_id}).",
+                    "type": "error",
+                    "data": {"governance": "blocked"}
+                }
+
+        result = await self._command_execution_service().process_command(
             raw_command,
             principal=principal,
             request_id=request_id,
@@ -848,6 +787,28 @@ class BotBoy:
             approval_context=approval_context,
             task_context=task_context,
         )
+
+        # Phase 1: Self-Healing & DAG Post-Execution
+        if self.self_healing:
+            try:
+                stale_tasks = self.self_healing.scan_for_stale_tasks(timeout_seconds=3600)
+                for st in stale_tasks:
+                    self.self_healing.execute_auto_retry(st["task_id"])
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"[SELF-HEALING] Error during auto-retry scan: {e}")
+
+        if self.dag_engine:
+            task_info = result.get("data", {}).get("task", {})
+            root_id = task_info.get("root_task_id") or task_info.get("task_id")
+            if root_id:
+                try:
+                    await self.dag_engine.execute_fringe(root_id)
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).warning(f"[DAG-ENGINE] Error fanning out fringe for {root_id}: {e}")
+
+        return result
     async def _route(
         self,
         command: str,

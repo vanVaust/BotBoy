@@ -5,9 +5,7 @@ import unittest
 from botboy.gateway.simple_read_handlers import (
     handle_history_get,
     handle_history_stats,
-    handle_scheduler_delete,
     handle_scheduler_get,
-    handle_scheduler_post,
 )
 
 
@@ -36,22 +34,8 @@ class _FakeHistory:
 
 
 class _FakeScheduler:
-    def __init__(self) -> None:
-        self.added: list[dict] = []
-        self.cancelled: list[str] = []
-
     def list_tasks(self):
         return [_FakeScheduledTask("s-1")]
-
-    def stats(self) -> dict:
-        return {"total": 1}
-
-    def add(self, *, name: str, schedule: str, task_type: str = "generic", payload=None) -> str:
-        self.added.append({"name": name, "schedule": schedule, "task_type": task_type, "payload": payload})
-        return "sched-new"
-
-    def cancel(self, task_id: str) -> None:
-        self.cancelled.append(task_id)
 
 
 class _FakeBot:
@@ -95,27 +79,7 @@ class SimpleReadHandlersTest(unittest.TestCase):
         payload, status = handler.payloads[-1]
         self.assertEqual(status, 200)
         self.assertEqual(payload["count"], 1)
-        self.assertEqual(payload["stats"], {"total": 1})
         self.assertEqual(payload["tasks"][0]["task_id"], "s-1")
-
-    def test_handle_scheduler_post(self) -> None:
-        handler = _FakeHandler()
-        handle_scheduler_post(
-            handler,
-            {"name": "nightly", "schedule": "in 1h", "task_type": "generic", "payload": {"command": "status"}},
-        )
-        payload, status = handler.payloads[-1]
-        self.assertEqual(status, 200)
-        self.assertEqual(payload, {"task_id": "sched-new", "name": "nightly", "schedule": "in 1h"})
-        self.assertEqual(handler.botboy.scheduler.added[0]["payload"], {"command": "status"})
-
-    def test_handle_scheduler_delete(self) -> None:
-        handler = _FakeHandler()
-        handle_scheduler_delete(handler, "sched-new")
-        payload, status = handler.payloads[-1]
-        self.assertEqual(status, 200)
-        self.assertEqual(payload, {"cancelled": "sched-new"})
-        self.assertEqual(handler.botboy.scheduler.cancelled, ["sched-new"])
 
 
 if __name__ == "__main__":

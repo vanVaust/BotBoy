@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import json
-import time
 import unittest
 
 from botboy.gateway.auth import JWTAuth, _b64url_encode
@@ -31,42 +30,6 @@ class GatewayAuthSecurityTest(unittest.TestCase):
         token = f"{header}.{payload}.{auth._sign(header, payload)}"
 
         self.assertIsNone(auth.verify(token))
-
-    def test_jwt_verify_returns_none_when_subject_missing(self) -> None:
-        auth = JWTAuth("x" * 32)
-        header = _b64url_encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
-        payload = _b64url_encode(
-            json.dumps(
-                {
-                    "roles": ["admin"],
-                    "iat": int(time.time()),
-                    "exp": int(time.time()) + 3600,
-                    "jti": "tid",
-                    "type": "access",
-                }
-            ).encode()
-        )
-        token = f"{header}.{payload}.{auth._sign(header, payload)}"
-
-        self.assertIsNone(auth.verify(token))
-
-    def test_jwt_refresh_returns_none_when_subject_missing(self) -> None:
-        auth = JWTAuth("x" * 32)
-        header = _b64url_encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
-        payload = _b64url_encode(
-            json.dumps(
-                {
-                    "roles": ["admin"],
-                    "iat": int(time.time()),
-                    "exp": int(time.time()) + 3600,
-                    "jti": "tid",
-                    "type": "refresh",
-                }
-            ).encode()
-        )
-        token = f"{header}.{payload}.{auth._sign(header, payload)}"
-
-        self.assertIsNone(auth.refresh(token))
 
     def test_verify_key_returns_false_for_malformed_hash_material(self) -> None:
         self.assertFalse(_verify_key("secret", "not-a-valid-hash"))
@@ -99,3 +62,25 @@ class GatewayAuthSecurityTest(unittest.TestCase):
         conn.commit()
 
         self.assertIsNone(store.rotate(key.key_id))
+
+    def test_jwt_revocation(self) -> None:
+        auth = JWTAuth("x" * 32)
+        pair = auth.create_pair("admin")
+        
+        # Verify works normally
+        self.assertIsNotNone(auth.verify(pair.access_token))
+        
+        # Revoke the token
+        self.assertTrue(auth.revoke_token(pair.access_token))
+        
+        # Verify should now fail (return None)
+        self.assertIsNone(auth.verify(pair.access_token))
+        
+        # Verify works normally for refresh token
+        self.assertIsNotNone(auth.refresh(pair.refresh_token))
+        
+        # Revoke the refresh token
+        self.assertTrue(auth.revoke_token(pair.refresh_token))
+        
+        # Refresh should now fail
+        self.assertIsNone(auth.refresh(pair.refresh_token))

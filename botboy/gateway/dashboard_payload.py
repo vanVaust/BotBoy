@@ -16,77 +16,6 @@ def _coerce_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
-def _coerce_int(value: Any, default: int = 0) -> int:
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return default
-
-
-def _ensure_control_center_contract(payload: dict[str, Any]) -> dict[str, Any]:
-    contract = _coerce_dict(payload.get("control_center_contract"))
-    payload["control_center_contract"] = contract
-    contract.setdefault("contract_version", "ops-legacy")
-    contract.setdefault("segment_order", ["operator_surface", "queue_lease", "replay", "incident"])
-    write_set = _coerce_dict(contract.get("write_set"))
-    write_set.setdefault("dashboard_support", [])
-    write_set.setdefault("gateway_dashboard_payload", [])
-    contract["write_set"] = write_set
-    segments = _coerce_dict(contract.get("segments"))
-    queue_lease = _coerce_dict(segments.get("queue_lease"))
-    queue_lease.setdefault("snapshot", {})
-    queue_lease.setdefault("runtime", {"available": False, "source": "gateway_dashboard_payload"})
-    incident = _coerce_dict(segments.get("incident"))
-    incident.setdefault("snapshot", {})
-    incident.setdefault("runtime", {"available": False, "source": "gateway_dashboard_payload"})
-    segments["queue_lease"] = queue_lease
-    segments["incident"] = incident
-    segments.setdefault("operator_surface", {})
-    segments.setdefault("replay", {})
-    contract["segments"] = segments
-    return contract
-
-
-def _update_runtime_segments(
-    payload: dict[str, Any],
-    *,
-    metrics: dict[str, Any],
-    tasks: dict[str, Any],
-) -> None:
-    contract = _ensure_control_center_contract(payload)
-    segments = _coerce_dict(contract.get("segments"))
-    queue_lease = _coerce_dict(segments.get("queue_lease"))
-    incident = _coerce_dict(segments.get("incident"))
-
-    queue_runtime = {
-        "handoff_queue_depth": _coerce_int(metrics.get("handoff_queue_depth", tasks.get("handoff_queue_depth"))),
-        "queued_count": _coerce_int(metrics.get("queued_count", tasks.get("queued_count"))),
-        "running_count": _coerce_int(metrics.get("running_count", tasks.get("running_count"))),
-        "delegated_count": _coerce_int(metrics.get("delegated_count", tasks.get("delegated_count"))),
-        "worker_count": _coerce_int(metrics.get("worker_count", tasks.get("worker_count"))),
-        "oldest_running_age_s": _coerce_int(metrics.get("oldest_running_age_s", tasks.get("oldest_running_age_s"))),
-        "oldest_blocked_age_s": _coerce_int(metrics.get("oldest_blocked_age_s", tasks.get("oldest_blocked_age_s"))),
-        "source": "gateway_dashboard_payload",
-        "available": True,
-    }
-    incident_runtime = {
-        "blocked_count": _coerce_int(metrics.get("blocked_count", tasks.get("blocked_count"))),
-        "recent_blocker_count": len(_coerce_list(metrics.get("recent_blockers"))),
-        "blocker_count": len(_coerce_list(metrics.get("blockers"))),
-        "open_incident_count": _coerce_int(metrics.get("blocked_count", tasks.get("blocked_count"))),
-        "status": "attention" if _coerce_int(metrics.get("blocked_count", tasks.get("blocked_count"))) > 0 else "watch",
-        "source": "gateway_dashboard_payload",
-        "available": True,
-    }
-
-    queue_lease["runtime"] = queue_runtime
-    incident["runtime"] = incident_runtime
-    segments["queue_lease"] = queue_lease
-    segments["incident"] = incident
-    contract["segments"] = segments
-    payload["control_center_contract"] = contract
-
-
 def enrich_dashboard_payload(
     payload: dict[str, Any],
     *,
@@ -99,7 +28,6 @@ def enrich_dashboard_payload(
     decorate_task_record: Callable[[Any, Any, Optional[list[Any]]], dict[str, Any]],
     build_task_graph: Callable[[Any, list[Any], str], dict[str, Any]],
 ) -> dict[str, Any]:
-    _ensure_control_center_contract(payload)
     if not store:
         payload.setdefault("workers", EMPTY_WORKERS.copy())
         payload.setdefault("handoffs", EMPTY_HANDOFFS.copy())
@@ -140,18 +68,18 @@ def enrich_dashboard_payload(
     )
     tasks.update(
         {
-            "blocked_count": _coerce_int(metrics.get("blocked_count")),
-            "delegated_count": _coerce_int(metrics.get("delegated_count")),
-            "running_count": _coerce_int(metrics.get("running_count")),
-            "queued_count": _coerce_int(metrics.get("queued_count")),
-            "worker_count": _coerce_int(metrics.get("worker_count")),
-            "handoff_queue_depth": _coerce_int(metrics.get("handoff_queue_depth")),
-            "oldest_blocked_age_s": _coerce_int(metrics.get("oldest_blocked_age_s")),
-            "oldest_running_age_s": _coerce_int(metrics.get("oldest_running_age_s")),
-            "by_worker": _coerce_dict(metrics.get("by_worker")),
-            "by_blocked_kind": _coerce_dict(metrics.get("by_blocked_kind")),
-            "blockers": _coerce_list(metrics.get("blockers")),
-            "recent_blockers": _coerce_list(metrics.get("recent_blockers")),
+            "blocked_count": metrics["blocked_count"],
+            "delegated_count": metrics["delegated_count"],
+            "running_count": metrics["running_count"],
+            "queued_count": metrics["queued_count"],
+            "worker_count": metrics["worker_count"],
+            "handoff_queue_depth": metrics["handoff_queue_depth"],
+            "oldest_blocked_age_s": metrics["oldest_blocked_age_s"],
+            "oldest_running_age_s": metrics["oldest_running_age_s"],
+            "by_worker": metrics["by_worker"],
+            "by_blocked_kind": metrics["by_blocked_kind"],
+            "blockers": metrics["blockers"],
+            "recent_blockers": metrics["recent_blockers"],
             "workers": _coerce_list(workers.get("registry")),
             "recent": [decorate_dashboard_task(task) for task in _coerce_list(tasks.get("recent"))],
             "waiting_approval": [decorate_dashboard_task(task) for task in _coerce_list(tasks.get("waiting_approval"))],
@@ -182,14 +110,14 @@ def enrich_dashboard_payload(
                 operations_summary.get("latest_merge_resolution_policy", ""),
             ),
             "latest_task_id": tasks.get("latest_task_id", operations_summary.get("latest_task_id", "")),
-            "blocked_count": _coerce_int(metrics.get("blocked_count")),
-            "delegated_count": _coerce_int(metrics.get("delegated_count")),
-            "running_count": _coerce_int(metrics.get("running_count")),
-            "queued_count": _coerce_int(metrics.get("queued_count")),
-            "worker_count": _coerce_int(metrics.get("worker_count")),
-            "handoff_queue_depth": _coerce_int(metrics.get("handoff_queue_depth")),
-            "oldest_blocked_age_s": _coerce_int(metrics.get("oldest_blocked_age_s")),
-            "oldest_running_age_s": _coerce_int(metrics.get("oldest_running_age_s")),
+            "blocked_count": metrics["blocked_count"],
+            "delegated_count": metrics["delegated_count"],
+            "running_count": metrics["running_count"],
+            "queued_count": metrics["queued_count"],
+            "worker_count": metrics["worker_count"],
+            "handoff_queue_depth": metrics["handoff_queue_depth"],
+            "oldest_blocked_age_s": metrics["oldest_blocked_age_s"],
+            "oldest_running_age_s": metrics["oldest_running_age_s"],
         }
     )
     payload["workers"] = workers
@@ -201,5 +129,4 @@ def enrich_dashboard_payload(
         "graph": latest_graph,
         "children": latest_children,
     }
-    _update_runtime_segments(payload, metrics=metrics, tasks=tasks)
     return payload

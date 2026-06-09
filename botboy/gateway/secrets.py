@@ -22,6 +22,7 @@ class ApiKey:
     expires_at: Optional[str]
     use_count: int
     revoked: bool
+    org_id: str = "default"
     full_key: Optional[str] = None  # Only set at generation time!
 
     @property
@@ -40,6 +41,7 @@ class Principal:
     created_at: str
     updated_at: str
     disabled: bool = False
+    org_id: str = "default"
 
     @property
     def principal_id(self) -> str:
@@ -103,9 +105,11 @@ CREATE TABLE IF NOT EXISTS api_keys (
     created_at  TEXT NOT NULL,
     expires_at  TEXT,
     use_count   INTEGER NOT NULL DEFAULT 0,
-    revoked     INTEGER NOT NULL DEFAULT 0
+    revoked     INTEGER NOT NULL DEFAULT 0,
+    org_id      TEXT NOT NULL DEFAULT 'default'
 );
 CREATE INDEX IF NOT EXISTS idx_api_keys_revoked ON api_keys(revoked);
+CREATE INDEX IF NOT EXISTS idx_api_keys_org_id ON api_keys(org_id);
 """
 
 _PRINCIPAL_SCHEMA = """
@@ -115,9 +119,11 @@ CREATE TABLE IF NOT EXISTS principals (
     role          TEXT NOT NULL DEFAULT 'user',
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
-    disabled      INTEGER NOT NULL DEFAULT 0
+    disabled      INTEGER NOT NULL DEFAULT 0,
+    org_id        TEXT NOT NULL DEFAULT 'default'
 );
 CREATE INDEX IF NOT EXISTS idx_principals_disabled ON principals(disabled);
+CREATE INDEX IF NOT EXISTS idx_principals_org_id ON principals(org_id);
 """
 
 
@@ -141,6 +147,7 @@ class SecretStore(_SQLiteMixin):
         label: str = "",
         ttl_hours: Optional[float] = None,
         principal_id: Optional[str] = None,
+        org_id: str = "default",
     ) -> ApiKey:
         key_id = _normalize_principal_id(principal_id) if principal_id else secrets.token_hex(8)
         secret = secrets.token_urlsafe(24)
@@ -157,8 +164,8 @@ class SecretStore(_SQLiteMixin):
 
         conn = self._get_conn()
         conn.execute(
-            "INSERT INTO api_keys (key_id, key_hash, role, label, created_at, expires_at) VALUES (?,?,?,?,?,?)",
-            (key_id, key_hash, role, label, now, expires_at),
+            "INSERT INTO api_keys (key_id, key_hash, role, label, created_at, expires_at, org_id) VALUES (?,?,?,?,?,?,?)",
+            (key_id, key_hash, role, label, now, expires_at, org_id),
         )
         conn.commit()
 
@@ -170,6 +177,7 @@ class SecretStore(_SQLiteMixin):
             expires_at=expires_at,
             use_count=0,
             revoked=False,
+            org_id=org_id,
             full_key=full_key,
         )
 
@@ -179,6 +187,7 @@ class SecretStore(_SQLiteMixin):
         role: str = "user",
         label: str = "",
         ttl_hours: Optional[float] = None,
+        org_id: str = "default",
     ) -> ApiKey:
         """Create a credential for a named principal."""
         return self.generate(
@@ -186,6 +195,7 @@ class SecretStore(_SQLiteMixin):
             label=label,
             ttl_hours=ttl_hours,
             principal_id=principal_id,
+            org_id=org_id,
         )
 
     def validate(self, full_key: str) -> Optional[ApiKey]:
@@ -321,15 +331,20 @@ class PrincipalStore(_SQLiteMixin):
 
     @staticmethod
     def _row_to_principal(row) -> Principal:
+        try:
+            org_id = row["org_id"]
+        except (IndexError, KeyError, TypeError):
+            org_id = "default"
         return Principal(
             username=row["username"],
             role=row["role"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             disabled=bool(row["disabled"]),
+            org_id=org_id,
         )
 
-    def upsert_principal(self, username: str, password: str, role: str = "user") -> Principal:
+    def upsert_principal(self, username: str, password: str, role: str = "user", org_id: str = "default") -> Principal:
         username = self._normalize_username(username)
         if not password:
             raise ValueError("password is required")
@@ -342,15 +357,16 @@ class PrincipalStore(_SQLiteMixin):
         created_at = existing["created_at"] if existing else now
         conn.execute(
             """
-            INSERT INTO principals (username, password_hash, role, created_at, updated_at, disabled)
-            VALUES (?, ?, ?, ?, ?, 0)
+            INSERT INTO principals (username, password_hash, role, created_at, updated_at, disabled, org_id)
+            VALUES (?, ?, ?, ?, ?, 0, ?)
             ON CONFLICT(username) DO UPDATE SET
                 password_hash=excluded.password_hash,
                 role=excluded.role,
                 updated_at=excluded.updated_at,
-                disabled=0
+                disabled=0,
+                org_id=excluded.org_id
             """,
-            (username, _hash_key(password), role, created_at, now),
+            (username, _hash_key(password), role, created_at, now, org_id),
         )
         conn.commit()
         row = conn.execute("SELECT * FROM principals WHERE username = ?", (username,)).fetchone()
@@ -407,3 +423,55 @@ class PrincipalStore(_SQLiteMixin):
             "active": row["total"] - (row["disabled_count"] or 0),
             "disabled": row["disabled_count"] or 0,
         }
+
+
+_TOKEN_REVOCATION_SCHEMA = """
+CREATE TABLE IF NOT EXISTS revoked_tokens (
+    jti         TEXT PRIMARY KEY,
+    revoked_at  TEXT NOT NULL,
+    expires_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires_at ON revoked_tokens(expires_at);
+"""
+
+
+class TokenRevocationStore(_SQLiteMixin):
+    """Persistent store for revoked JWT token IDs (jti)."""
+
+    def __init__(self, db_path: str = ":memory:") -> None:
+        self._init_connection_pool(db_path, _TOKEN_REVOCATION_SCHEMA)
+
+    @staticmethod
+    def _now() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def revoke(self, jti: str, exp: int) -> None:
+        """Mark a token ID as revoked."""
+        if not jti:
+            return
+        conn = self._get_conn()
+        conn.execute(
+            "INSERT OR IGNORE INTO revoked_tokens (jti, revoked_at, expires_at) VALUES (?, ?, ?)",
+            (jti, self._now(), exp),
+        )
+        conn.commit()
+
+    def is_revoked(self, jti: str) -> bool:
+        """Check if a token ID is revoked."""
+        if not jti:
+            return False
+        row = self._get_conn().execute(
+            "SELECT 1 FROM revoked_tokens WHERE jti = ?", (jti,)
+        ).fetchone()
+        return bool(row)
+
+    def purge_expired(self) -> int:
+        """Remove tokens from the blacklist that have already expired naturally."""
+        import time
+        now_ts = int(time.time())
+        conn = self._get_conn()
+        cur = conn.execute(
+            "DELETE FROM revoked_tokens WHERE expires_at < ?", (now_ts,)
+        )
+        conn.commit()
+        return cur.rowcount

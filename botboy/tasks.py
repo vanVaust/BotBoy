@@ -4,7 +4,6 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
-import shutil
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -39,6 +38,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     retry_after_s      INTEGER NOT NULL DEFAULT 0,
     payload_json       TEXT NOT NULL DEFAULT '{}',
     result_json        TEXT NOT NULL DEFAULT '{}',
+    org_id             TEXT NOT NULL DEFAULT 'default',
     created_at         TEXT NOT NULL,
     updated_at         TEXT NOT NULL,
     started_at         TEXT NOT NULL DEFAULT '',
@@ -50,6 +50,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_request_id ON tasks(request_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_root_task_id ON tasks(root_task_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_scheduler_task_id ON tasks(scheduler_task_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_org_id ON tasks(org_id);
 
 CREATE TABLE IF NOT EXISTS task_events (
     event_id      TEXT PRIMARY KEY,
@@ -164,6 +165,7 @@ class TaskContext:
     heartbeat_at: str = ""
     attempt_count: int = 0
     retry_after_s: int = 0
+    org_id: str = "default"
 
 
 @dataclass
@@ -192,6 +194,7 @@ class TaskRecord:
     retry_after_s: int
     payload_json: str
     result_json: str
+    org_id: str
     created_at: str
     updated_at: str
     started_at: str
@@ -227,6 +230,7 @@ class TaskRecord:
             heartbeat_at=self.heartbeat_at,
             attempt_count=self.attempt_count,
             retry_after_s=self.retry_after_s,
+            org_id=self.org_id,
         )
 
     def to_dict(self) -> dict:
@@ -253,6 +257,7 @@ class TaskRecord:
             "heartbeat_at": self.heartbeat_at,
             "attempt_count": self.attempt_count,
             "retry_after_s": self.retry_after_s,
+            "org_id": self.org_id,
             "payload": self.payload,
             "result": self.result,
             "created_at": self.created_at,
@@ -416,43 +421,6 @@ class ExecutionQueueRecord:
         }
 
 
-@dataclass
-class QueueLeaseRecord:
-    lease_id: str
-    queue_name: str
-    task_id: str
-    node_id: str
-    lease_status: str
-    lease_expires_at: str
-    metadata_json: str
-    created_at: str
-    updated_at: str
-
-    @property
-    def metadata(self) -> dict:
-        return _safe_json_loads(self.metadata_json)
-
-    def to_dict(self, *, reference_time: Optional[datetime] = None) -> dict:
-        now = reference_time or datetime.now(timezone.utc)
-        expires_at = _safe_parse_datetime(self.lease_expires_at)
-        is_expired = bool(self.lease_status == "active" and expires_at and expires_at <= now)
-        effective_status = "expired" if is_expired else self.lease_status
-        return {
-            "lease_id": self.lease_id,
-            "queue_name": self.queue_name,
-            "task_id": self.task_id,
-            "node_id": self.node_id,
-            "lease_status": effective_status,
-            "stored_lease_status": self.lease_status,
-            "lease_expires_at": self.lease_expires_at,
-            "metadata": self.metadata,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-            "is_expired": is_expired,
-            "is_active": effective_status == "active",
-        }
-
-
 def _safe_json_loads(payload: str) -> dict:
     try:
         value = json.loads(payload or "{}")
@@ -473,10 +441,28 @@ def _safe_parse_datetime(value: str) -> Optional[datetime]:
     return parsed.astimezone(timezone.utc)
 
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
+class AsyncStoreProxy:
+    """Provides an asyncio-compatible interface to a synchronous store by dispatching to threads."""
+    def __init__(self, store: Any):
+        self._store = store
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self._store, name)
+        if callable(attr):
+            async def _async_wrap(*args, **kwargs):
+                return await asyncio.to_thread(attr, *args, **kwargs)
+            return _async_wrap
+        return attr
+
+
 class TaskStore(_SQLiteMixin):
     """SQLite-backed task lifecycle store with filesystem artifact references."""
 
     def __init__(self, db_path: str = ":memory:", artifact_root: str = "") -> None:
+        self._async_proxy = AsyncStoreProxy(self)
         self._init_connection_pool(db_path, _SCHEMA)
         self._ensure_schema()
         root = artifact_root.strip() if artifact_root else ""
@@ -487,6 +473,11 @@ class TaskStore(_SQLiteMixin):
                 root = str((Path(db_path).expanduser().resolve().parent / "artifacts" / "tasks"))
         self.artifact_root = Path(root).expanduser()
         self.artifact_root.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def a(self) -> AsyncStoreProxy:
+        """Access asynchronous versions of all store methods."""
+        return self._async_proxy
 
     def _ensure_schema(self) -> None:
         conn = self._get_conn()
@@ -516,6 +507,7 @@ class TaskStore(_SQLiteMixin):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_delegation_status ON tasks(delegation_status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_delegated_to_worker ON tasks(delegated_to_worker)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_blocked_by_task_id ON tasks(blocked_by_task_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_org_id ON tasks(org_id)")
         conn.commit()
         apply_task_store_migrations(conn)
 
@@ -534,57 +526,6 @@ class TaskStore(_SQLiteMixin):
     @staticmethod
     def _json(value: Optional[dict]) -> str:
         return json.dumps(value or {}, sort_keys=True)
-
-    @staticmethod
-    def _json_hash(value: Optional[dict]) -> str:
-        payload = json.dumps(value or {}, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-    @staticmethod
-    def _path_is_within(path: Path, root: Path) -> bool:
-        try:
-            path.relative_to(root)
-            return True
-        except ValueError:
-            return False
-
-    def _artifact_root_path(self) -> Path:
-        return self.artifact_root.resolve()
-
-    def _artifact_target_path(self, task_id: str, filename: str) -> Path:
-        normalized_filename = str(filename or "").strip()
-        if not normalized_filename:
-            raise ValueError("Missing artifact filename")
-        task_dir = self.task_dir(task_id).resolve()
-        target = (task_dir / normalized_filename).resolve()
-        if not self._path_is_within(target, task_dir):
-            raise ValueError("Artifact path escapes task artifact directory.")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        return target
-
-    def _artifact_storage_path(
-        self,
-        task_id: str,
-        *,
-        category: str,
-        source_path: Path,
-        artifact_id: str,
-        allow_external_source: bool = False,
-    ) -> Path:
-        source = source_path.expanduser().resolve()
-        artifact_root = self._artifact_root_path()
-        if self._path_is_within(source, artifact_root):
-            return source
-        if not allow_external_source:
-            raise ValueError("Artifact source must stay within artifact_root.")
-        safe_category = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in str(category or "").strip())
-        suffix = "".join(source.suffixes) or source.suffix
-        target = self._artifact_target_path(
-            task_id,
-            f"{safe_category or 'artifact'}_{artifact_id}{suffix}",
-        )
-        shutil.copyfile(source, target)
-        return target
 
     def task_dir(self, task_id: str) -> Path:
         path = self.artifact_root / task_id
@@ -617,6 +558,7 @@ class TaskStore(_SQLiteMixin):
         attempt_count: int = 0,
         retry_after_s: int = 0,
         result: Optional[dict] = None,
+        org_id: str = "default",
     ) -> TaskContext:
         task_id = self._new_id("task")
         root_id = root_task_id or task_id
@@ -649,6 +591,7 @@ class TaskStore(_SQLiteMixin):
             int(retry_after_s or 0),
             self._json(payload),
             self._json(result),
+            org_id,
             ts,
             ts,
             ts if status == "running" else "",
@@ -659,9 +602,9 @@ class TaskStore(_SQLiteMixin):
             "INSERT INTO tasks (task_id, root_task_id, parent_task_id, kind, owner, title, summary, status,"
             " principal, request_id, run_id, scheduler_task_id, command, delegation_status,"
             " delegated_to_worker, blocked_by_task_id, blocked_kind, blocked_reason, lease_expires_at,"
-            " heartbeat_at, attempt_count, retry_after_s, payload_json, result_json,"
+            " heartbeat_at, attempt_count, retry_after_s, payload_json, result_json, org_id,"
             " created_at, updated_at, started_at, ended_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             values,
         )
         conn.commit()
@@ -755,6 +698,7 @@ class TaskStore(_SQLiteMixin):
         retry_after_s: Optional[int] = None,
         payload: Optional[dict] = None,
         result: Optional[dict] = None,
+        org_id: Optional[str] = None,
         ended: bool = False,
     ) -> Optional[TaskRecord]:
         assignments = ["updated_at = ?"]
@@ -810,6 +754,9 @@ class TaskStore(_SQLiteMixin):
         if result is not None:
             assignments.append("result_json = ?")
             params.append(self._json(result))
+        if org_id is not None:
+            assignments.append("org_id = ?")
+            params.append(org_id)
         if ended:
             assignments.append("ended_at = ?")
             params.append(self._now())
@@ -1240,24 +1187,12 @@ class TaskStore(_SQLiteMixin):
         normalized_queue_name = str(queue_name or "").strip() or f"{normalized_worker_id}.{normalized_node_id}"
         ttl_seconds = max(30, int(lease_ttl_seconds or LEASE_TTL_SECONDS))
         parallelism = max(1, int(max_parallelism or max_concurrency or 1))
-        existing_record = self._get_worker_node_record(normalized_node_id)
-        existing_queue = self.get_execution_queue(normalized_queue_name)
-        preserved_drain_state = (
-            str(existing_record.drain_state or "").strip()
-            if existing_record and str(existing_record.drain_state or "").strip() in {"draining", "drained"}
-            else "active"
-        )
-        preserved_queue_status = (
-            str((existing_queue or {}).get("queue_status", "") or "").strip()
-            if existing_queue and str((existing_queue or {}).get("queue_status", "") or "").strip() not in {"", "ready"}
-            else "ready"
-        )
         queue_record = self.upsert_execution_queue(
             queue_name=normalized_queue_name,
             worker_id=normalized_worker_id,
             lease_ttl_seconds=ttl_seconds,
             max_parallelism=parallelism,
-            queue_status=preserved_queue_status,
+            queue_status="ready",
             metadata={"source": "worker_node_register"},
         )
         now = self._now()
@@ -1301,8 +1236,8 @@ class TaskStore(_SQLiteMixin):
                 normalized_queue_name,
                 str(display_name or "").strip() or f"{profile['display_name']} Node {normalized_node_id}",
                 str(endpoint or "").strip(),
-                "draining" if preserved_drain_state != "active" else (str(node_status or "ready").strip() or "ready"),
-                preserved_drain_state,
+                str(node_status or "ready").strip() or "ready",
+                "active",
                 str(last_seen_ip or "").strip(),
                 self._json(metadata),
                 self._json(
@@ -1355,12 +1290,6 @@ class TaskStore(_SQLiteMixin):
             merged_metadata["health"] = str(health).strip()
         if load is not None:
             merged_metadata["load"] = float(load)
-        effective_node_status = (
-            "draining"
-            if str(record.drain_state or "").strip() in {"draining", "drained"}
-            else (str(node_status or record.node_status).strip() or record.node_status or "ready")
-        )
-        effective_queue_status = "draining" if effective_node_status == "draining" else "ready"
         conn = self._get_conn()
         conn.execute(
             """
@@ -1369,7 +1298,7 @@ class TaskStore(_SQLiteMixin):
             WHERE node_id = ?
             """,
             (
-                effective_node_status,
+                str(node_status or record.node_status).strip() or record.node_status or "ready",
                 str(last_seen_ip or "").strip() or record.last_seen_ip,
                 self._json(merged_metadata),
                 now,
@@ -1380,7 +1309,7 @@ class TaskStore(_SQLiteMixin):
         )
         conn.execute(
             "UPDATE execution_queues SET queue_status = ?, updated_at = ? WHERE queue_name = ?",
-            (effective_queue_status, now, record.queue_name),
+            ("ready", now, record.queue_name),
         )
         conn.commit()
         return self.get_worker_node(record.node_id)
@@ -1453,7 +1382,6 @@ class TaskStore(_SQLiteMixin):
     def worker_node_summary(self) -> dict:
         nodes = self.list_worker_nodes(include_stale=True)
         queues = self.list_execution_queues()
-        lease_summary = self.queue_summary()
         by_worker: dict[str, int] = {}
         by_effective_status: dict[str, int] = {}
         healthy_count = 0
@@ -1470,6 +1398,9 @@ class TaskStore(_SQLiteMixin):
                 stale_count += 1
             if node.get("effective_status") == "draining":
                 draining_count += 1
+        lease_count = int(
+            self._get_conn().execute("SELECT COUNT(*) FROM queue_leases").fetchone()[0]
+        )
         return {
             "available": True,
             "node_count": len(nodes),
@@ -1477,10 +1408,7 @@ class TaskStore(_SQLiteMixin):
             "stale_count": stale_count,
             "draining_count": draining_count,
             "queue_count": len(queues),
-            "lease_count": lease_summary["lease_count"],
-            "active_lease_count": lease_summary["active_lease_count"],
-            "expired_lease_count": lease_summary["expired_lease_count"],
-            "released_lease_count": lease_summary["released_lease_count"],
+            "lease_count": lease_count,
             "by_worker": dict(sorted(by_worker.items())),
             "by_effective_status": dict(sorted(by_effective_status.items())),
         }
@@ -1559,1028 +1487,6 @@ class TaskStore(_SQLiteMixin):
         )
         return [self._row_to_execution_queue(row).to_dict() for row in rows]
 
-    @staticmethod
-    def _retry_due(record: TaskRecord, *, reference_time: Optional[datetime] = None) -> bool:
-        retry_after_s = int(record.retry_after_s or 0)
-        if retry_after_s <= 0:
-            return True
-        anchor = _safe_parse_datetime(record.updated_at or record.created_at)
-        if not anchor:
-            return True
-        now = reference_time or datetime.now(timezone.utc)
-        return anchor + timedelta(seconds=retry_after_s) <= now
-
-    def _expire_queue_leases(self, *, reference_time: Optional[str] = None) -> int:
-        now = reference_time or self._now()
-        conn = self._get_conn()
-        cursor = conn.execute(
-            """
-            UPDATE queue_leases
-            SET lease_status = 'expired', updated_at = ?
-            WHERE lease_status = 'active'
-              AND lease_expires_at != ''
-              AND lease_expires_at <= ?
-            """,
-            (now, now),
-        )
-        conn.commit()
-        return int(cursor.rowcount or 0)
-
-    def claim_next_queue_lease(
-        self,
-        *,
-        queue_name: str,
-        node_id: str,
-        worker_id: str = "",
-        task_id: str = "",
-        principal: str = "anonymous",
-        request_id: str = "",
-        run_id: str = "",
-        lease_ttl_seconds: int = 0,
-        limit: int = 50,
-        metadata: Optional[dict] = None,
-    ) -> Optional[dict]:
-        normalized_queue_name = str(queue_name or "").strip()
-        normalized_node_id = str(node_id or "").strip()
-        normalized_worker_id = str(worker_id or "").strip().lower()
-        normalized_task_id = str(task_id or "").strip()
-        if not normalized_queue_name:
-            raise ValueError("Missing queue_name")
-        if not normalized_node_id:
-            raise ValueError("Missing node_id")
-
-        queue = self.get_execution_queue(normalized_queue_name)
-        if not queue:
-            raise ValueError(f"Unknown queue_name '{queue_name}'.")
-        node = self.get_worker_node(normalized_node_id)
-        if not node:
-            raise ValueError(f"Unknown worker node '{node_id}'.")
-        node_worker_id = str(node.get("worker_id") or "").strip().lower()
-        if normalized_worker_id and normalized_worker_id != node_worker_id:
-            raise ValueError(f"Node '{node_id}' is registered for worker '{node_worker_id}'.")
-        normalized_worker_id = normalized_worker_id or node_worker_id
-        if node["queue_name"] != normalized_queue_name:
-            raise ValueError(f"Node '{node_id}' is not assigned to queue '{queue_name}'.")
-        if str(queue.get("queue_status", "")).lower() != "ready":
-            raise ValueError(f"Queue '{queue_name}' is not ready.")
-        if node.get("draining") or node.get("effective_status") in {"draining", "drained", "stale"}:
-            raise ValueError(f"Node '{node_id}' cannot claim tasks while {node.get('effective_status')}.")
-
-        now = self._now()
-        now_dt = _safe_parse_datetime(now) or datetime.now(timezone.utc)
-        self._expire_queue_leases(reference_time=now)
-        ttl_seconds = max(30, int(lease_ttl_seconds or queue.get("lease_ttl_seconds") or LEASE_TTL_SECONDS))
-        expires_at = self._expires_at(seconds=ttl_seconds)
-        candidate_limit = max(1, min(int(limit or 50), 500))
-        owner = f"worker:{normalized_worker_id}"
-        conn = self._get_conn()
-        lease_id = self._new_id("lease")
-        chosen: Optional[TaskRecord] = None
-        began = False
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            began = True
-            active_count = int(
-                conn.execute(
-                    """
-                    SELECT COUNT(*) FROM queue_leases
-                    WHERE queue_name = ? AND lease_status = 'active'
-                      AND (lease_expires_at = '' OR lease_expires_at > ?)
-                    """,
-                    (normalized_queue_name, now),
-                ).fetchone()[0]
-            )
-            max_parallelism = max(1, int(queue.get("max_parallelism") or 1))
-            if active_count >= max_parallelism:
-                conn.commit()
-                return None
-            task_filter = "AND task_id = ?" if normalized_task_id else ""
-            params: list[Any] = [TASK_STATUS_QUEUED, normalized_worker_id, owner]
-            if normalized_task_id:
-                params.append(normalized_task_id)
-            params.append(candidate_limit)
-            rows = conn.execute(
-                f"""
-                SELECT * FROM tasks
-                WHERE status = ?
-                  AND (delegated_to_worker = ? OR owner = ?)
-                  {task_filter}
-                ORDER BY updated_at ASC, created_at ASC
-                LIMIT ?
-                """,
-                tuple(params),
-            ).fetchall()
-            for row in rows:
-                record = self._row_to_task(row)
-                if self._retry_due(record, reference_time=now_dt):
-                    chosen = record
-                    break
-            if not chosen:
-                conn.commit()
-                return None
-            fencing_token = self._new_id("fence")
-            payload = {
-                "principal": principal,
-                "request_id": request_id,
-                "run_id": run_id,
-                "claimed_at": now,
-                "lease_ttl_seconds": ttl_seconds,
-                "claim_contract": "claim_next_queue_lease",
-                "fencing_token": fencing_token,
-            }
-            if isinstance(metadata, dict):
-                payload.update(metadata)
-            conn.execute(
-                """
-                INSERT INTO queue_leases (
-                    lease_id, queue_name, task_id, node_id, lease_status,
-                    lease_expires_at, metadata_json, created_at, updated_at
-                )
-                VALUES (?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    lease_id,
-                    normalized_queue_name,
-                    chosen.task_id,
-                    normalized_node_id,
-                    "active",
-                    expires_at,
-                    self._json(payload),
-                    now,
-                    now,
-                ),
-            )
-            cursor = conn.execute(
-                """
-                UPDATE tasks
-                SET status = ?,
-                    owner = ?,
-                    delegated_to_worker = ?,
-                    delegation_status = ?,
-                    lease_expires_at = ?,
-                    heartbeat_at = ?,
-                    retry_after_s = 0,
-                    updated_at = ?
-                WHERE task_id = ? AND status = ?
-                """,
-                (
-                    TASK_STATUS_RUNNING,
-                    owner,
-                    normalized_worker_id,
-                    DELEGATION_STATUS_LEASED,
-                    expires_at,
-                    now,
-                    now,
-                    chosen.task_id,
-                    TASK_STATUS_QUEUED,
-                ),
-            )
-            if cursor.rowcount <= 0:
-                conn.rollback()
-                return None
-            conn.commit()
-        except Exception:
-            if began:
-                conn.rollback()
-            raise
-        self.add_event(
-            chosen.task_id,
-            event_type="queue_lease_claimed",
-            status=TASK_STATUS_RUNNING,
-            message=f"Queue lease {lease_id} claimed by node {normalized_node_id}",
-            principal=principal,
-            request_id=request_id,
-            run_id=run_id,
-            payload_ref=lease_id,
-        )
-        task = self.get_task(chosen.task_id)
-        return {
-            "lease": self.get_queue_lease(lease_id, include_inactive=True),
-            "task": task.to_dict() if task else chosen.to_dict(),
-            "summary": self.queue_summary(),
-        }
-
-    def acquire_queue_lease(
-        self,
-        *,
-        queue_name: str,
-        node_id: str,
-        task_id: str = "",
-        principal: str = "anonymous",
-        request_id: str = "",
-        run_id: str = "",
-        lease_ttl_seconds: int = 0,
-        metadata: Optional[dict] = None,
-    ) -> dict:
-        normalized_queue_name = str(queue_name or "").strip()
-        normalized_node_id = str(node_id or "").strip()
-        normalized_task_id = str(task_id or "").strip()
-        if not normalized_queue_name:
-            raise ValueError("Missing queue_name")
-        if not normalized_node_id:
-            raise ValueError("Missing node_id")
-
-        queue = self.get_execution_queue(normalized_queue_name)
-        if not queue:
-            raise ValueError(f"Unknown queue_name '{queue_name}'.")
-        node = self.get_worker_node(normalized_node_id)
-        if not node:
-            raise ValueError(f"Unknown worker node '{node_id}'.")
-        if node["queue_name"] != normalized_queue_name:
-            raise ValueError(f"Node '{node_id}' is not assigned to queue '{queue_name}'.")
-        if str(queue.get("queue_status", "")).lower() != "ready":
-            raise ValueError(f"Queue '{queue_name}' is not ready.")
-        if node.get("draining") or node.get("effective_status") in {"draining", "drained", "stale"}:
-            raise ValueError(f"Node '{node_id}' cannot acquire new leases while {node.get('effective_status')}.")
-
-        now = self._now()
-        ttl_seconds = max(30, int(lease_ttl_seconds or queue.get("lease_ttl_seconds") or LEASE_TTL_SECONDS))
-        expires_at = self._expires_at(seconds=ttl_seconds)
-        conn = self._get_conn()
-        began = False
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            began = True
-            conn.execute(
-                """
-                UPDATE queue_leases
-                SET lease_status = 'expired', updated_at = ?
-                WHERE lease_status = 'active'
-                  AND lease_expires_at != ''
-                  AND lease_expires_at <= ?
-                """,
-                (now, now),
-            )
-            existing = conn.execute(
-                """
-                SELECT * FROM queue_leases
-                WHERE queue_name = ? AND node_id = ? AND task_id = ? AND lease_status = 'active'
-                ORDER BY updated_at DESC
-                LIMIT 1
-                """,
-                (normalized_queue_name, normalized_node_id, normalized_task_id),
-            ).fetchone()
-            if existing:
-                conn.commit()
-                return self.renew_queue_lease(
-                    existing["lease_id"],
-                    principal=principal,
-                    request_id=request_id,
-                    run_id=run_id,
-                    lease_ttl_seconds=ttl_seconds,
-                    metadata=metadata,
-                    fencing_token=str(_safe_json_loads(existing["metadata_json"]).get("fencing_token", "") or ""),
-                )
-
-            active_count = int(
-                conn.execute(
-                    """
-                    SELECT COUNT(*) FROM queue_leases
-                    WHERE queue_name = ? AND lease_status = 'active' AND (lease_expires_at = '' OR lease_expires_at > ?)
-                    """,
-                    (normalized_queue_name, now),
-                ).fetchone()[0]
-            )
-            max_parallelism = max(1, int(queue.get("max_parallelism") or 1))
-            if active_count >= max_parallelism:
-                conn.rollback()
-                raise ValueError(f"Queue '{queue_name}' is at max_parallelism ({max_parallelism}).")
-
-            lease_id = self._new_id("lease")
-            fencing_token = self._new_id("fence")
-            payload = {
-                "principal": principal,
-                "request_id": request_id,
-                "run_id": run_id,
-                "acquired_at": now,
-                "lease_ttl_seconds": ttl_seconds,
-                "fencing_token": fencing_token,
-            }
-            if isinstance(metadata, dict):
-                payload.update(metadata)
-            conn.execute(
-                """
-                INSERT INTO queue_leases (
-                    lease_id, queue_name, task_id, node_id, lease_status,
-                    lease_expires_at, metadata_json, created_at, updated_at
-                )
-                VALUES (?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    lease_id,
-                    normalized_queue_name,
-                    normalized_task_id,
-                    normalized_node_id,
-                    "active",
-                    expires_at,
-                    self._json(payload),
-                    now,
-                    now,
-                ),
-            )
-            task = self.get_task(normalized_task_id) if normalized_task_id else None
-            if task:
-                if task.status not in {TASK_STATUS_QUEUED, TASK_STATUS_RUNNING}:
-                    conn.rollback()
-                    raise ValueError(
-                        f"Task '{normalized_task_id}' is not leaseable from status '{task.status}'."
-                    )
-                worker_id = str(node.get("worker_id") or "")
-                cursor = conn.execute(
-                    """
-                    UPDATE tasks
-                    SET status = ?,
-                        owner = ?,
-                        delegated_to_worker = ?,
-                        delegation_status = ?,
-                        lease_expires_at = ?,
-                        heartbeat_at = ?,
-                        updated_at = ?
-                    WHERE task_id = ? AND status IN (?, ?)
-                    """,
-                    (
-                        TASK_STATUS_RUNNING,
-                        f"worker:{worker_id}",
-                        worker_id,
-                        DELEGATION_STATUS_LEASED,
-                        expires_at,
-                        now,
-                        now,
-                        normalized_task_id,
-                        TASK_STATUS_QUEUED,
-                        TASK_STATUS_RUNNING,
-                    ),
-                )
-                if cursor.rowcount <= 0:
-                    conn.rollback()
-                    raise ValueError(
-                        f"Task '{normalized_task_id}' could not transition to an active lease."
-                    )
-            conn.commit()
-        except Exception:
-            if began:
-                conn.rollback()
-            raise
-        if task:
-            self.add_event(
-                normalized_task_id,
-                event_type="queue_lease_acquired",
-                status=TASK_STATUS_RUNNING,
-                message=f"Queue lease {lease_id} acquired by node {normalized_node_id}",
-                principal=principal,
-                request_id=request_id,
-                run_id=run_id,
-                payload_ref=lease_id,
-            )
-        return self.get_queue_lease(lease_id)  # type: ignore[return-value]
-
-    def renew_queue_lease(
-        self,
-        lease_id: str,
-        *,
-        principal: str = "anonymous",
-        request_id: str = "",
-        run_id: str = "",
-        lease_ttl_seconds: int = 0,
-        metadata: Optional[dict] = None,
-        fencing_token: str = "",
-    ) -> dict:
-        normalized_lease_id = str(lease_id or "").strip()
-        if not normalized_lease_id:
-            raise ValueError("Missing lease_id")
-        self._expire_queue_leases()
-        lease = self.get_queue_lease(normalized_lease_id, include_inactive=True)
-        if not lease:
-            raise ValueError(f"Unknown queue lease '{lease_id}'.")
-        if lease["lease_status"] != "active":
-            raise ValueError(f"Queue lease '{lease_id}' is {lease['lease_status']}.")
-        normalized_fencing_token = str(fencing_token or "").strip()
-        if normalized_fencing_token:
-            lease_fencing_token = str((lease.get("metadata") or {}).get("fencing_token", "") or "")
-            if lease_fencing_token and normalized_fencing_token != lease_fencing_token:
-                raise ValueError(f"Queue lease '{lease_id}' rejected a stale fencing token.")
-        queue = self.get_execution_queue(lease["queue_name"])
-        ttl_seconds = max(30, int(lease_ttl_seconds or (queue or {}).get("lease_ttl_seconds") or LEASE_TTL_SECONDS))
-        now = self._now()
-        expires_at = self._expires_at(seconds=ttl_seconds)
-        payload = dict(lease.get("metadata") or {})
-        payload.update(
-            {
-                "principal": principal,
-                "request_id": request_id,
-                "run_id": run_id,
-                "renewed_at": now,
-                "lease_ttl_seconds": ttl_seconds,
-            }
-        )
-        if isinstance(metadata, dict):
-            payload.update(metadata)
-        conn = self._get_conn()
-        conn.execute(
-            """
-            UPDATE queue_leases
-            SET lease_expires_at = ?, metadata_json = ?, updated_at = ?
-            WHERE lease_id = ? AND lease_status = 'active'
-            """,
-            (expires_at, self._json(payload), now, normalized_lease_id),
-        )
-        if lease["task_id"] and self.get_task(lease["task_id"]):
-            conn.execute(
-                "UPDATE tasks SET lease_expires_at = ?, heartbeat_at = ?, updated_at = ? WHERE task_id = ?",
-                (expires_at, now, now, lease["task_id"]),
-            )
-        conn.commit()
-        if lease["task_id"] and self.get_task(lease["task_id"]):
-            self.add_event(
-                lease["task_id"],
-                event_type="queue_lease_renewed",
-                status=TASK_STATUS_RUNNING,
-                message=f"Queue lease {normalized_lease_id} renewed",
-                principal=principal,
-                request_id=request_id,
-                run_id=run_id,
-                payload_ref=normalized_lease_id,
-            )
-        return self.get_queue_lease(normalized_lease_id, include_inactive=True)  # type: ignore[return-value]
-
-    def release_queue_lease(
-        self,
-        lease_id: str,
-        *,
-        principal: str = "anonymous",
-        request_id: str = "",
-        run_id: str = "",
-        reason: str = "",
-        metadata: Optional[dict] = None,
-        node_id: str = "",
-        worker_id: str = "",
-        fencing_token: str = "",
-    ) -> dict:
-        normalized_lease_id = str(lease_id or "").strip()
-        if not normalized_lease_id:
-            raise ValueError("Missing lease_id")
-        lease = self.get_queue_lease(normalized_lease_id, include_inactive=True)
-        if not lease:
-            raise ValueError(f"Unknown queue lease '{lease_id}'.")
-        normalized_node_id = str(node_id or "").strip()
-        normalized_worker_id = str(worker_id or "").strip().lower()
-        normalized_fencing_token = str(fencing_token or "").strip()
-        if normalized_node_id and normalized_node_id != str(lease.get("node_id", "")):
-            raise ValueError(f"Queue lease '{lease_id}' is not assigned to node '{normalized_node_id}'.")
-        lease_node = self.get_worker_node(str(lease.get("node_id", "") or ""))
-        if normalized_worker_id and lease_node and normalized_worker_id != str(lease_node.get("worker_id", "")).lower():
-            raise ValueError(f"Queue lease '{lease_id}' is not assigned to worker '{normalized_worker_id}'.")
-        lease_fencing_token = str((lease.get("metadata") or {}).get("fencing_token", "") or "")
-        if normalized_fencing_token and lease_fencing_token and normalized_fencing_token != lease_fencing_token:
-            raise ValueError(f"Queue lease '{lease_id}' rejected a stale fencing token.")
-        now = self._now()
-        payload = dict(lease.get("metadata") or {})
-        payload.update(
-            {
-                "principal": principal,
-                "request_id": request_id,
-                "run_id": run_id,
-                "released_at": now,
-                "release_reason": reason,
-            }
-        )
-        if isinstance(metadata, dict):
-            payload.update(metadata)
-        conn = self._get_conn()
-        conn.execute(
-            """
-            UPDATE queue_leases
-            SET lease_status = 'released', metadata_json = ?, updated_at = ?
-            WHERE lease_id = ?
-            """,
-            (self._json(payload), now, normalized_lease_id),
-        )
-        if lease["task_id"] and self.get_task(lease["task_id"]):
-            conn.execute(
-                "UPDATE tasks SET lease_expires_at = '', heartbeat_at = ?, updated_at = ? WHERE task_id = ?",
-                (now, now, lease["task_id"]),
-            )
-        conn.commit()
-        if lease["task_id"] and self.get_task(lease["task_id"]):
-            self.add_event(
-                lease["task_id"],
-                event_type="queue_lease_released",
-                status="",
-                message=f"Queue lease {normalized_lease_id} released",
-                principal=principal,
-                request_id=request_id,
-                run_id=run_id,
-                payload_ref=normalized_lease_id,
-            )
-        return self.get_queue_lease(normalized_lease_id, include_inactive=True)  # type: ignore[return-value]
-
-    def report_queue_lease_result(
-        self,
-        lease_id: str,
-        *,
-        success: bool,
-        result: Optional[dict] = None,
-        summary: str = "",
-        transient: bool = False,
-        retry_after_s: int = 0,
-        error: str = "",
-        principal: str = "anonymous",
-        request_id: str = "",
-        run_id: str = "",
-        node_id: str = "",
-        worker_id: str = "",
-        idempotency_key: str = "",
-        metadata: Optional[dict] = None,
-        fencing_token: str = "",
-    ) -> dict:
-        normalized_lease_id = str(lease_id or "").strip()
-        if not normalized_lease_id:
-            raise ValueError("Missing lease_id")
-        normalized_node_id = str(node_id or "").strip()
-        normalized_worker_id = str(worker_id or "").strip().lower()
-        normalized_idempotency_key = str(idempotency_key or "").strip()
-        normalized_fencing_token = str(fencing_token or "").strip()
-        report_payload = {
-            "success": bool(success),
-            "transient": bool(transient),
-            "retry_after_s": int(retry_after_s or 0),
-            "summary": str(summary or ""),
-            "error": str(error or ""),
-            "result": result if isinstance(result, dict) else {},
-            "node_id": normalized_node_id,
-            "worker_id": normalized_worker_id,
-            "fencing_token": normalized_fencing_token,
-        }
-        payload_hash = self._json_hash(report_payload)
-        report_metadata = dict(metadata or {})
-        report_metadata["report"] = {
-            "success": bool(success),
-            "transient": bool(transient),
-            "retry_scheduled": bool(transient and not success),
-            "idempotency_key": normalized_idempotency_key,
-            "reported_by_node_id": normalized_node_id,
-            "reported_by_worker_id": normalized_worker_id,
-            "reported_by_principal": principal,
-            "reported_request_id": request_id,
-            "fencing_token": normalized_fencing_token,
-            "payload_hash": payload_hash,
-        }
-        now = self._now()
-        conn = self._get_conn()
-        began = False
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            began = True
-            conn.execute(
-                """
-                UPDATE queue_leases
-                SET lease_status = 'expired', updated_at = ?
-                WHERE lease_status = 'active'
-                  AND lease_expires_at != ''
-                  AND lease_expires_at <= ?
-                """,
-                (now, now),
-            )
-            lease_row = conn.execute(
-                "SELECT * FROM queue_leases WHERE lease_id = ?",
-                (normalized_lease_id,),
-            ).fetchone()
-            if not lease_row:
-                conn.rollback()
-                raise ValueError(f"Unknown queue lease '{lease_id}'.")
-            lease = self._row_to_queue_lease(lease_row).to_dict()
-            lease_metadata = dict(lease.get("metadata") or {})
-            if normalized_node_id and normalized_node_id != str(lease.get("node_id", "")):
-                conn.rollback()
-                raise ValueError(f"Queue lease '{lease_id}' is not assigned to node '{normalized_node_id}'.")
-            lease_node = self.get_worker_node(str(lease.get("node_id", "") or ""))
-            if normalized_worker_id and lease_node and normalized_worker_id != str(lease_node.get("worker_id", "")).lower():
-                conn.rollback()
-                raise ValueError(f"Queue lease '{lease_id}' is not assigned to worker '{normalized_worker_id}'.")
-            lease_fencing_token = str(lease_metadata.get("fencing_token", "") or "")
-            if normalized_fencing_token and lease_fencing_token and normalized_fencing_token != lease_fencing_token:
-                conn.rollback()
-                raise ValueError(f"Queue lease '{lease_id}' rejected a stale fencing token.")
-
-            if normalized_idempotency_key:
-                receipt_row = conn.execute(
-                    """
-                    SELECT payload_hash
-                    FROM queue_lease_receipts
-                    WHERE lease_id = ? AND idempotency_key = ?
-                    """,
-                    (normalized_lease_id, normalized_idempotency_key),
-                ).fetchone()
-                if receipt_row:
-                    stored_hash = str(receipt_row["payload_hash"] or "")
-                    if stored_hash != payload_hash:
-                        conn.rollback()
-                        raise ValueError(f"Queue lease '{lease_id}' was already reported with a different payload for this idempotency key.")
-                    task_id = str(lease.get("task_id", "") or "").strip()
-                    task = self.get_task(task_id) if task_id else None
-                    conn.commit()
-                    return {
-                        "reported": True,
-                        "idempotent": True,
-                        "retry_scheduled": bool((lease_metadata.get("report") or {}).get("retry_scheduled", False)),
-                        "task": task.to_dict() if task else None,
-                        "lease": self.get_queue_lease(normalized_lease_id, include_inactive=True),
-                        "summary": self.queue_summary(),
-                    }
-
-            if lease["lease_status"] != "active":
-                previous_report = dict(lease_metadata.get("report") or {})
-                previous_key = str(previous_report.get("idempotency_key", "") or "")
-                if normalized_idempotency_key and previous_key and normalized_idempotency_key != previous_key:
-                    conn.rollback()
-                    raise ValueError(f"Queue lease '{lease_id}' was already reported with a different idempotency key.")
-                task_id = str(lease.get("task_id", "") or "").strip()
-                task = self.get_task(task_id) if task_id else None
-                conn.commit()
-                if previous_report:
-                    return {
-                        "reported": True,
-                        "idempotent": True,
-                        "retry_scheduled": bool(previous_report.get("retry_scheduled", False)),
-                        "task": task.to_dict() if task else None,
-                        "lease": self.get_queue_lease(normalized_lease_id, include_inactive=True),
-                        "summary": self.queue_summary(),
-                    }
-                raise ValueError(f"Queue lease '{lease_id}' is {lease['lease_status']}.")
-
-            if normalized_idempotency_key:
-                conn.execute(
-                    """
-                    INSERT INTO queue_lease_receipts (
-                        receipt_id, lease_id, idempotency_key, payload_hash,
-                        response_json, created_at, updated_at
-                    )
-                    VALUES (?,?,?,?,?,?,?)
-                    """,
-                    (
-                        self._new_id("receipt"),
-                        normalized_lease_id,
-                        normalized_idempotency_key,
-                        payload_hash,
-                        "{}",
-                        now,
-                        now,
-                    ),
-                )
-
-            task_id = str(lease.get("task_id", "") or "").strip()
-            task = self.get_task(task_id) if task_id else None
-            merged_lease_metadata = dict(lease_metadata)
-            merged_lease_metadata.update(report_metadata)
-
-            if not task:
-                conn.execute(
-                    """
-                    UPDATE queue_leases
-                    SET lease_status = 'released', metadata_json = ?, updated_at = ?
-                    WHERE lease_id = ?
-                    """,
-                    (self._json(merged_lease_metadata), now, normalized_lease_id),
-                )
-                conn.commit()
-                return {
-                    "reported": True,
-                    "task": None,
-                    "lease": self.get_queue_lease(normalized_lease_id, include_inactive=True),
-                    "summary": self.queue_summary(),
-                }
-
-            if transient and not success:
-                retry_delay = max(1, int(retry_after_s or task.retry_after_s or 1))
-                retry_result = dict(result or {})
-                if error:
-                    retry_result.setdefault("error", error)
-                conn.execute(
-                    """
-                    UPDATE tasks
-                    SET status = ?, summary = ?, principal = ?, request_id = ?, run_id = ?,
-                        delegation_status = ?, lease_expires_at = '', heartbeat_at = '',
-                        retry_after_s = ?, result_json = ?, updated_at = ?, ended_at = ''
-                    WHERE task_id = ?
-                    """,
-                    (
-                        TASK_STATUS_QUEUED,
-                        summary or error or "Transient worker failure; retry scheduled",
-                        principal or "anonymous",
-                        request_id or "",
-                        run_id or "",
-                        DELEGATION_STATUS_DELEGATED,
-                        retry_delay,
-                        self._json(retry_result),
-                        now,
-                        task.task_id,
-                    ),
-                )
-                conn.execute(
-                    """
-                    INSERT INTO task_events (
-                        event_id, task_id, event_type, status, message, principal,
-                        request_id, run_id, payload_ref, created_at
-                    )
-                    VALUES (?,?,?,?,?,?,?,?,?,?)
-                    """,
-                    (
-                        self._new_id("evt"),
-                        task.task_id,
-                        "queue_lease_retry_scheduled",
-                        TASK_STATUS_QUEUED,
-                        summary or error or f"Retry scheduled after {retry_delay}s",
-                        principal or "anonymous",
-                        request_id or "",
-                        run_id or "",
-                        normalized_lease_id,
-                        now,
-                    ),
-                )
-                conn.execute(
-                    """
-                    UPDATE queue_leases
-                    SET lease_status = 'released', metadata_json = ?, updated_at = ?
-                    WHERE lease_id = ?
-                    """,
-                    (self._json(merged_lease_metadata), now, normalized_lease_id),
-                )
-                conn.commit()
-                return {
-                    "reported": True,
-                    "retry_scheduled": True,
-                    "idempotent": False,
-                    "retry_after_s": retry_delay,
-                    "task": self.get_task(task.task_id).to_dict() if self.get_task(task.task_id) else None,
-                    "lease": self.get_queue_lease(normalized_lease_id, include_inactive=True),
-                    "summary": self.queue_summary(),
-                }
-
-            status = TASK_STATUS_COMPLETED if success else TASK_STATUS_FAILED
-            event_type = "queue_lease_task_completed" if success else "queue_lease_task_failed"
-            payload = dict(result or {})
-            if error:
-                payload.setdefault("error", error)
-            conn.execute(
-                """
-                UPDATE tasks
-                SET status = ?, summary = ?, principal = ?, request_id = ?, run_id = ?,
-                    result_json = ?, updated_at = ?, ended_at = ?, lease_expires_at = '', heartbeat_at = ?
-                WHERE task_id = ?
-                """,
-                (
-                    status,
-                    summary or error or status,
-                    principal or "anonymous",
-                    request_id or "",
-                    run_id or "",
-                    self._json(payload),
-                    now,
-                    now,
-                    now,
-                    task.task_id,
-                ),
-            )
-            conn.execute(
-                """
-                INSERT INTO task_events (
-                    event_id, task_id, event_type, status, message, principal,
-                    request_id, run_id, payload_ref, created_at
-                )
-                VALUES (?,?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    self._new_id("evt"),
-                    task.task_id,
-                    event_type,
-                    status,
-                    summary or error or status,
-                    principal or "anonymous",
-                    request_id or "",
-                    run_id or "",
-                    normalized_lease_id,
-                    now,
-                ),
-            )
-            conn.execute(
-                """
-                UPDATE queue_leases
-                SET lease_status = 'released', metadata_json = ?, updated_at = ?
-                WHERE lease_id = ?
-                """,
-                (self._json(merged_lease_metadata), now, normalized_lease_id),
-            )
-            conn.commit()
-            updated = self.get_task(task.task_id)
-            return {
-                "reported": True,
-                "retry_scheduled": False,
-                "idempotent": False,
-                "task": updated.to_dict() if updated else None,
-                "lease": self.get_queue_lease(normalized_lease_id, include_inactive=True),
-                "summary": self.queue_summary(),
-            }
-        except Exception:
-            if began:
-                conn.rollback()
-            raise
-
-    def get_queue_lease(self, lease_id: str, *, include_inactive: bool = False) -> Optional[dict]:
-        now = self._now()
-        conditions = ["lease_id = ?"]
-        params: list[Any] = [str(lease_id or "").strip()]
-        if not include_inactive:
-            conditions.append("lease_status = 'active'")
-            conditions.append("(lease_expires_at = '' OR lease_expires_at > ?)")
-            params.append(now)
-        row = self._fetchone(
-            f"SELECT * FROM queue_leases WHERE {' AND '.join(conditions)}",
-            tuple(params),
-        )
-        return self._row_to_queue_lease(row).to_dict() if row else None
-
-    def list_queue_leases(
-        self,
-        *,
-        queue_name: str = "",
-        node_id: str = "",
-        task_id: str = "",
-        include_released: bool = False,
-        include_expired: bool = False,
-        limit: int = 100,
-    ) -> list[dict]:
-        now = self._now()
-        conditions: list[str] = []
-        params: list[Any] = []
-        if queue_name:
-            conditions.append("queue_name = ?")
-            params.append(str(queue_name).strip())
-        if node_id:
-            conditions.append("node_id = ?")
-            params.append(str(node_id).strip())
-        if task_id:
-            conditions.append("task_id = ?")
-            params.append(str(task_id).strip())
-        status_conditions = ["(lease_status = 'active' AND (lease_expires_at = '' OR lease_expires_at > ?))"]
-        params.append(now)
-        if include_released:
-            status_conditions.append("lease_status = 'released'")
-        if include_expired:
-            status_conditions.append("lease_status = 'expired'")
-            status_conditions.append("(lease_status = 'active' AND lease_expires_at != '' AND lease_expires_at <= ?)")
-            params.append(now)
-        conditions.append(f"({' OR '.join(status_conditions)})")
-        params.append(max(1, min(int(limit or 100), 500)))
-        where = f"WHERE {' AND '.join(conditions)}"
-        rows = self._fetchall(
-            f"SELECT * FROM queue_leases {where} ORDER BY updated_at DESC, lease_id ASC LIMIT ?",
-            tuple(params),
-        )
-        return [self._row_to_queue_lease(row).to_dict() for row in rows]
-
-    def queue_summary(self) -> dict:
-        now = self._now()
-        queues = self.list_execution_queues()
-        rows = self._fetchall(
-            """
-            SELECT
-                CASE
-                    WHEN lease_status = 'active' AND lease_expires_at != '' AND lease_expires_at <= ?
-                    THEN 'expired'
-                    ELSE lease_status
-                END AS effective_status,
-                COUNT(*) AS cnt
-            FROM queue_leases
-            GROUP BY effective_status
-            """,
-            (now,),
-        )
-        by_status = {str(row["effective_status"]): int(row["cnt"]) for row in rows}
-        lease_count = sum(by_status.values())
-        queue_depths = {
-            row["queue_name"]: int(row["cnt"])
-            for row in self._fetchall(
-                """
-                SELECT queue_name, COUNT(*) AS cnt
-                FROM queue_leases
-                WHERE lease_status = 'active'
-                  AND (lease_expires_at = '' OR lease_expires_at > ?)
-                GROUP BY queue_name
-                """,
-                (now,),
-            )
-        }
-        return {
-            "available": True,
-            "queue_count": len(queues),
-            "lease_count": lease_count,
-            "active_lease_count": by_status.get("active", 0),
-            "released_lease_count": by_status.get("released", 0),
-            "expired_lease_count": by_status.get("expired", 0),
-            "by_status": dict(sorted(by_status.items())),
-            "queue_depths": dict(sorted(queue_depths.items())),
-            "queues": queues,
-        }
-
-    def record_dispatch_event(
-        self,
-        *,
-        parent_task_id: str,
-        child_task_id: str,
-        worker_id: str,
-        queue_name: str = "",
-        dispatch_status: str = "queued",
-        command_text: str = "",
-        metadata: Optional[dict] = None,
-    ) -> dict:
-        dispatch_id = self._new_id("dispatch")
-        now = self._now()
-        conn = self._get_conn()
-        conn.execute(
-            """
-            INSERT INTO dispatch_events (
-                dispatch_id, parent_task_id, child_task_id, worker_id, queue_name,
-                dispatch_status, command_text, metadata_json, created_at, updated_at
-            )
-            VALUES (?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                dispatch_id,
-                str(parent_task_id or "").strip(),
-                str(child_task_id or "").strip(),
-                str(worker_id or "").strip(),
-                str(queue_name or "").strip(),
-                str(dispatch_status or "queued").strip() or "queued",
-                str(command_text or "").strip(),
-                self._json(metadata),
-                now,
-                now,
-            ),
-        )
-        conn.commit()
-        return self.get_dispatch_event(dispatch_id) or {"dispatch_id": dispatch_id}
-
-    def get_dispatch_event(self, dispatch_id: str) -> Optional[dict]:
-        row = self._fetchone(
-            "SELECT * FROM dispatch_events WHERE dispatch_id = ?",
-            (str(dispatch_id or "").strip(),),
-        )
-        if not row:
-            return None
-        return {
-            "dispatch_id": row["dispatch_id"],
-            "parent_task_id": row["parent_task_id"],
-            "child_task_id": row["child_task_id"],
-            "worker_id": row["worker_id"],
-            "queue_name": row["queue_name"],
-            "dispatch_status": row["dispatch_status"],
-            "command_text": row["command_text"],
-            "metadata": _safe_json_loads(row["metadata_json"]),
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-        }
-
-    def list_dispatch_events(
-        self,
-        *,
-        parent_task_id: str = "",
-        child_task_id: str = "",
-        worker_id: str = "",
-        limit: int = 100,
-    ) -> list[dict]:
-        conditions: list[str] = []
-        params: list[Any] = []
-        if parent_task_id:
-            conditions.append("parent_task_id = ?")
-            params.append(str(parent_task_id).strip())
-        if child_task_id:
-            conditions.append("child_task_id = ?")
-            params.append(str(child_task_id).strip())
-        if worker_id:
-            conditions.append("worker_id = ?")
-            params.append(str(worker_id).strip())
-        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        params.append(max(1, min(int(limit or 100), 500)))
-        rows = self._fetchall(
-            f"SELECT * FROM dispatch_events {where} ORDER BY created_at ASC, dispatch_id ASC LIMIT ?",
-            tuple(params),
-        )
-        return [
-            {
-                "dispatch_id": row["dispatch_id"],
-                "parent_task_id": row["parent_task_id"],
-                "child_task_id": row["child_task_id"],
-                "worker_id": row["worker_id"],
-                "queue_name": row["queue_name"],
-                "dispatch_status": row["dispatch_status"],
-                "command_text": row["command_text"],
-                "metadata": _safe_json_loads(row["metadata_json"]),
-                "created_at": row["created_at"],
-                "updated_at": row["updated_at"],
-            }
-            for row in rows
-        ]
-
     def _get_worker_node_record(self, node_id: str) -> Optional[WorkerNodeRecord]:
         row = self._fetchone("SELECT * FROM worker_nodes WHERE node_id = ?", (str(node_id or "").strip(),))
         return self._row_to_worker_node(row) if row else None
@@ -2655,17 +1561,10 @@ class TaskStore(_SQLiteMixin):
         label: str,
         file_path: str,
         media_type: str = "application/octet-stream",
-        allow_external_source: bool = False,
     ) -> TaskArtifactRecord:
+        path = Path(file_path)
+        data = path.read_bytes()
         artifact_id = self._new_id("art")
-        stored_path = self._artifact_storage_path(
-            task_id,
-            category=category,
-            source_path=Path(file_path),
-            artifact_id=artifact_id,
-            allow_external_source=allow_external_source,
-        )
-        data = stored_path.read_bytes()
         created_at = self._now()
         sha256 = hashlib.sha256(data).hexdigest()
         size_bytes = len(data)
@@ -2678,7 +1577,7 @@ class TaskStore(_SQLiteMixin):
                 task_id,
                 category,
                 label,
-                str(stored_path),
+                str(path),
                 media_type,
                 size_bytes,
                 sha256,
@@ -2691,7 +1590,7 @@ class TaskStore(_SQLiteMixin):
             event_type="artifact_added",
             status="ok",
             message=label,
-            payload_ref=str(stored_path),
+            payload_ref=str(path),
         )
         return self.get_artifacts(task_id, limit=1)[0]
 
@@ -2705,7 +1604,8 @@ class TaskStore(_SQLiteMixin):
         content: str | bytes,
         media_type: str = "application/octet-stream",
     ) -> TaskArtifactRecord:
-        target = self._artifact_target_path(task_id, filename)
+        task_dir = self.task_dir(task_id)
+        target = task_dir / filename
         if isinstance(content, str):
             target.write_text(content, encoding="utf-8")
         else:
@@ -3002,6 +1902,7 @@ class TaskStore(_SQLiteMixin):
             retry_after_s=row["retry_after_s"],
             payload_json=row["payload_json"],
             result_json=row["result_json"],
+            org_id=row["org_id"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             started_at=row["started_at"],
@@ -3064,20 +1965,6 @@ class TaskStore(_SQLiteMixin):
             queue_status=row["queue_status"],
             lease_ttl_seconds=row["lease_ttl_seconds"],
             max_parallelism=row["max_parallelism"],
-            metadata_json=row["metadata_json"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-        )
-
-    @staticmethod
-    def _row_to_queue_lease(row) -> QueueLeaseRecord:
-        return QueueLeaseRecord(
-            lease_id=row["lease_id"],
-            queue_name=row["queue_name"],
-            task_id=row["task_id"],
-            node_id=row["node_id"],
-            lease_status=row["lease_status"],
-            lease_expires_at=row["lease_expires_at"],
             metadata_json=row["metadata_json"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],

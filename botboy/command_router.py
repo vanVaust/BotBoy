@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from botboy.handoff_route_support import handle_handoff_command
 from botboy.intelligence_route_support import handle_intelligence_route
-from botboy.remote_readiness import handle_security_command
 from botboy.runtime_command_support import handle_memory_command as build_memory_command_response
 
 
@@ -44,8 +43,6 @@ async def route_command(
         return bot._handle_contracts(command)
     if first in ("eval", "evals"):
         return await bot._handle_evals(command)
-    if first == "security":
-        return handle_security_command(bot, command)
     if first in ("worker", "workers"):
         return bot._handle_workers(command)
     if first in ("reflect", "reflection"):

@@ -36,10 +36,9 @@ class _SQLiteMixin:
         _LIVE_SQLITE_MIXINS.add(self)
         if self._is_memory:
             self._shared_conn = sqlite3.connect(
-                ":memory:", check_same_thread=False, timeout=30.0
+                ":memory:", check_same_thread=False
             )
             self._shared_conn.row_factory = sqlite3.Row
-            self._shared_conn.execute("PRAGMA busy_timeout=30000")
             self._shared_lock = threading.Lock()
             self._shared_conn.executescript(schema)
             self._shared_conn.commit()
@@ -49,8 +48,7 @@ class _SQLiteMixin:
             self._shared_conn = None
             self._shared_lock = None
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-            init = sqlite3.connect(db_path, timeout=30.0)
-            init.execute("PRAGMA busy_timeout=30000")
+            init = sqlite3.connect(db_path)
             init.execute("PRAGMA journal_mode=WAL")
             init.executescript(schema)
             init.commit()
@@ -66,9 +64,8 @@ class _SQLiteMixin:
         if self._is_memory:
             return self._shared_conn
         if not hasattr(self._local, "conn") or self._local.conn is None:
-            conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30.0)
+            conn = sqlite3.connect(self.db_path, check_same_thread=False)
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA busy_timeout=30000")
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
             self._local.conn = conn

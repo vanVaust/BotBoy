@@ -90,7 +90,7 @@ def handle_task_merge_action(handler, task_id: str, payload: dict) -> None:
             principal=principal,
             request_id=handler.request_id or task.request_id or task_id,
         )
-    except (TypeError, ValueError) as exc:
+    except ValueError as exc:
         handler._json({"error": str(exc)}, 400)
         return
     handler._json(response)
@@ -217,7 +217,7 @@ def handle_worker_node_register(handler, payload: dict) -> None:
             last_seen_ip=handler._client_identity(),
             node_status=str(payload.get("status", "ready")).strip() or "ready",
         )
-    except (TypeError, ValueError) as exc:
+    except ValueError as exc:
         handler._json({"error": str(exc)}, 400)
         return
     handler._json(
@@ -228,187 +228,6 @@ def handle_worker_node_register(handler, payload: dict) -> None:
             "summary": store.worker_node_summary(),
         }
     )
-
-
-def handle_queue_lease_acquire(handler, payload: dict) -> None:
-    principal = handler._ensure_access(require_auth=handler.auth_enabled)
-    if principal is None:
-        return
-    store = handler._task_store()
-    if not store:
-        return
-    metadata = payload.get("metadata")
-    try:
-        lease = store.acquire_queue_lease(
-            queue_name=str(payload.get("queue_name", "")).strip(),
-            node_id=str(payload.get("node_id", "")).strip(),
-            task_id=str(payload.get("task_id", "")).strip(),
-            principal=principal,
-            request_id=handler.request_id or str(payload.get("request_id", "")).strip(),
-            run_id=str(payload.get("run_id", "")).strip(),
-            lease_ttl_seconds=int(payload.get("lease_ttl_seconds", 0) or 0),
-            metadata=metadata if isinstance(metadata, dict) else None,
-        )
-    except (TypeError, ValueError) as exc:
-        handler._json({"error": str(exc)}, 400)
-        return
-    handler._json({"available": True, "acquired": True, "lease": lease, "summary": store.queue_summary()})
-
-
-def handle_queue_lease_claim_next(handler, payload: dict) -> None:
-    principal = handler._ensure_access(require_auth=handler.auth_enabled)
-    if principal is None:
-        return
-    store = handler._task_store()
-    if not store:
-        return
-    metadata = payload.get("metadata")
-    try:
-        claim = store.claim_next_queue_lease(
-            queue_name=str(payload.get("queue_name", "")).strip(),
-            node_id=str(payload.get("node_id", "")).strip(),
-            worker_id=str(payload.get("worker_id", "")).strip(),
-            principal=principal,
-            request_id=handler.request_id or str(payload.get("request_id", "")).strip(),
-            run_id=str(payload.get("run_id", "")).strip(),
-            lease_ttl_seconds=int(payload.get("lease_ttl_seconds", 0) or 0),
-            limit=int(payload.get("limit", 50) or 50),
-            metadata=metadata if isinstance(metadata, dict) else None,
-        )
-    except (TypeError, ValueError) as exc:
-        handler._json({"error": str(exc)}, 400)
-        return
-    handler._json(
-        {
-            "available": True,
-            "claimed": bool(claim),
-            "lease": claim.get("lease") if claim else None,
-            "task": claim.get("task") if claim else None,
-            "summary": claim.get("summary") if claim else store.queue_summary(),
-        }
-    )
-
-
-def handle_queue_lease_renew(handler, lease_id: str, payload: dict) -> None:
-    principal = handler._ensure_access(require_auth=handler.auth_enabled)
-    if principal is None:
-        return
-    store = handler._task_store()
-    if not store:
-        return
-    metadata = payload.get("metadata")
-    fencing_token = str(payload.get("fencing_token", "")).strip()
-    if not fencing_token:
-        handler._json({"error": "Missing fencing_token"}, 400)
-        return
-    try:
-        lease = store.renew_queue_lease(
-            lease_id,
-            principal=principal,
-            request_id=handler.request_id or str(payload.get("request_id", "")).strip(),
-            run_id=str(payload.get("run_id", "")).strip(),
-            lease_ttl_seconds=int(payload.get("lease_ttl_seconds", 0) or 0),
-            metadata=metadata if isinstance(metadata, dict) else None,
-            fencing_token=fencing_token,
-        )
-    except (TypeError, ValueError) as exc:
-        handler._json({"error": str(exc)}, 400)
-        return
-    handler._json({"available": True, "renewed": True, "lease": lease, "summary": store.queue_summary()})
-
-
-def handle_queue_lease_report(handler, lease_id: str, payload: dict) -> None:
-    principal = handler._ensure_access(require_auth=handler.auth_enabled)
-    if principal is None:
-        return
-    store = handler._task_store()
-    if not store:
-        return
-    metadata = payload.get("metadata")
-    result = payload.get("result")
-    node_id_value = str(payload.get("node_id", "")).strip()
-    worker_id_value = str(payload.get("worker_id", "")).strip()
-    fencing_token = str(payload.get("fencing_token", "")).strip()
-    if not node_id_value:
-        handler._json({"error": "Missing node_id"}, 400)
-        return
-    if not worker_id_value:
-        handler._json({"error": "Missing worker_id"}, 400)
-        return
-    if not fencing_token:
-        handler._json({"error": "Missing fencing_token"}, 400)
-        return
-    try:
-        report = store.report_queue_lease_result(
-            lease_id,
-            success=bool(payload.get("success", False)),
-            result=result if isinstance(result, dict) else None,
-            summary=str(payload.get("summary", "")).strip(),
-            transient=bool(payload.get("transient", False)),
-            retry_after_s=int(payload.get("retry_after_s", 0) or 0),
-            error=str(payload.get("error", "")).strip(),
-            principal=principal,
-            request_id=handler.request_id or str(payload.get("request_id", "")).strip(),
-            run_id=str(payload.get("run_id", "")).strip(),
-            node_id=node_id_value,
-            worker_id=worker_id_value,
-            idempotency_key=str(payload.get("idempotency_key", "")).strip(),
-            metadata=metadata if isinstance(metadata, dict) else None,
-            fencing_token=fencing_token,
-        )
-    except (TypeError, ValueError) as exc:
-        handler._json({"error": str(exc)}, 400)
-        return
-    reported_task = report.get("task") if isinstance(report, dict) else None
-    if isinstance(reported_task, dict):
-        task_id = str(reported_task.get("task_id", "") or "").strip()
-        child_record = store.get_task(task_id) if task_id else None
-        sync_parent = getattr(handler.botboy, "_sync_parent_after_child", None)
-        if child_record and child_record.parent_task_id and callable(sync_parent):
-            sync_parent(
-                child_record,
-                principal=principal,
-                request_id=handler.request_id or str(payload.get("request_id", "")).strip(),
-            )
-    handler._json({"available": True, **report})
-
-
-def handle_queue_lease_release(handler, lease_id: str, payload: dict) -> None:
-    principal = handler._ensure_access(require_auth=handler.auth_enabled)
-    if principal is None:
-        return
-    store = handler._task_store()
-    if not store:
-        return
-    metadata = payload.get("metadata")
-    node_id_value = str(payload.get("node_id", "")).strip()
-    worker_id_value = str(payload.get("worker_id", "")).strip()
-    fencing_token = str(payload.get("fencing_token", "")).strip()
-    if not node_id_value:
-        handler._json({"error": "Missing node_id"}, 400)
-        return
-    if not worker_id_value:
-        handler._json({"error": "Missing worker_id"}, 400)
-        return
-    if not fencing_token:
-        handler._json({"error": "Missing fencing_token"}, 400)
-        return
-    try:
-        lease = store.release_queue_lease(
-            lease_id,
-            principal=principal,
-            request_id=handler.request_id or str(payload.get("request_id", "")).strip(),
-            run_id=str(payload.get("run_id", "")).strip(),
-            reason=str(payload.get("reason", "")).strip(),
-            metadata=metadata if isinstance(metadata, dict) else None,
-            node_id=node_id_value,
-            worker_id=worker_id_value,
-            fencing_token=fencing_token,
-        )
-    except (TypeError, ValueError) as exc:
-        handler._json({"error": str(exc)}, 400)
-        return
-    handler._json({"available": True, "released": True, "lease": lease, "summary": store.queue_summary()})
 
 
 def handle_worker_node_heartbeat(handler, payload: dict) -> None:

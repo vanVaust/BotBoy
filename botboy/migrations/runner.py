@@ -45,8 +45,16 @@ def apply_migrations(conn: Connection, namespace: str, migrations: Iterable[Migr
     for migration in sorted(migrations, key=lambda item: item.version):
         if migration.version in applied:
             continue
+        import sqlite3
         for statement in migration.statements:
-            conn.execute(statement)
+            try:
+                conn.execute(statement)
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" in str(e).lower() or "already exists" in str(e).lower():
+                    pass # Schema was already initialized with the latest DDL directly
+                else:
+                    print(f"[BotBoy] Initialisation error: {e} | Statement: {statement}")
+                    raise
         conn.execute(
             "INSERT INTO schema_migrations (namespace, version, name, applied_at) VALUES (?,?,?,?)",
             (namespace, migration.version, migration.name, _now()),

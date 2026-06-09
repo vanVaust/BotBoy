@@ -61,15 +61,6 @@ class GatewayDashboardPayloadTest(unittest.TestCase):
         self.assertEqual(result["tasks"]["children"][0]["task_id"], "task-2")
         self.assertEqual(result["operations_summary"]["worker_count"], 5)
         self.assertEqual(result["handoffs"]["graph"]["focus_task_id"], "task-1")
-        self.assertIn("control_center_contract", result)
-        contract = result["control_center_contract"]
-        self.assertEqual(contract["segment_order"], ["operator_surface", "queue_lease", "replay", "incident"])
-        queue_runtime = contract["segments"]["queue_lease"]["runtime"]
-        self.assertTrue(queue_runtime["available"])
-        self.assertEqual(queue_runtime["handoff_queue_depth"], 6)
-        incident_runtime = contract["segments"]["incident"]["runtime"]
-        self.assertTrue(incident_runtime["available"])
-        self.assertEqual(incident_runtime["blocked_count"], 1)
 
     def test_enrich_dashboard_payload_without_store(self) -> None:
         payload = {}
@@ -87,9 +78,6 @@ class GatewayDashboardPayloadTest(unittest.TestCase):
 
         self.assertEqual(result["workers"]["worker_count"], 5)
         self.assertFalse(result["handoffs"]["available"])
-        self.assertIn("control_center_contract", result)
-        self.assertIn("contract_version", result["control_center_contract"])
-        self.assertIn("segments", result["control_center_contract"])
 
 
 if __name__ == "__main__":
