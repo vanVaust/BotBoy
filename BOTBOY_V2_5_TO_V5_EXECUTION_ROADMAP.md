@@ -15,7 +15,7 @@ BotBoy wird als lokal-first Orchestrator mit stabiler Single-Host-Runtime, Worke
 - v4/v5 Grundlagen sind vorhanden: Governance, Zero-Trust-Modul, Tenant-Sandbox, Replay-Harness und DAG/Mass-Escalation-Strukturen existieren.
 - Dashboard-Payload enthaelt einen `control_center_contract` mit Queue-, Replay- und Incident-Segmenten.
 - GitHub-Publikation ist abgeschlossen: `main` ist ohne Force-Push mit `origin/main` synchron.
-- Release-CI ist auf Node-24-kompatible Action-Majors aktualisiert und der Windows-Runner ist explizit gepinnt: `windows-2025`, `actions/checkout@v6`, `actions/setup-python@v6`.
+- Release-CI ist auf Node-24-kompatible Action-Majors aktualisiert und der Windows-Runner ist explizit stabil gepinnt: `windows-2022`, `actions/checkout@v6`, `actions/setup-python@v6`.
 - Remote-/Team-Betrieb ist fail-closed gehaertet: nicht-lokale Gateway-Binds benoetigen Auth, stabilen JWT-Secret, nicht-wildcard CORS und Rate-Limit; MCP-HTTP benoetigt ein Token.
 
 ## Agenten-Orchestrierung
@@ -70,7 +70,7 @@ BotBoy wird als lokal-first Orchestrator mit stabiler Single-Host-Runtime, Worke
 - Commit auf `main` behalten, kein Force-Push.
 - `git push origin main`.
 - Danach GitHub-Stand mit lokalem Stand vergleichen.
-- Release-CI nach Push muss gruen sein und darf keine kurzfristige Node-20-Action-Deprecation oder `windows-latest`-Runner-Redirect-Notice mehr enthalten.
+- Release-CI nach Push muss gruen sein und darf keine kurzfristige Node-20-Action-Deprecation oder Windows-Runner-Redirect-Notice mehr enthalten.
 
 ### NOW-06: Remote-Deployment-Haertung
 

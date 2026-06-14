@@ -9,7 +9,7 @@ on:
 
 jobs:
   release-verification:
-    runs-on: windows-2025
+    runs-on: windows-2022
 
     steps:
       - name: Checkout
