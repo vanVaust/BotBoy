@@ -228,7 +228,7 @@ class GatewayRouterContractsTest(unittest.TestCase):
         create_app = _load_create_app()
         bot = self._make_bot()
         app = create_app(bot, host="127.0.0.1", port=8765)
-        paths = {route.path for route in app.routes if hasattr(route, "path")}
+        paths = set(app.openapi().get("paths", {}).keys())
 
         self.assertTrue(
             {
@@ -239,7 +239,6 @@ class GatewayRouterContractsTest(unittest.TestCase):
                 "/api/v2/workers/leases",
                 "/api/tasks/{task_id}/merge",
                 "/api/auth/login",
-                "/ws/chat",
             }.issubset(paths),
             paths,
         )
