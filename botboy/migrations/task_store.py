@@ -112,6 +112,30 @@ TASK_STORE_MIGRATIONS = (
             "CREATE INDEX IF NOT EXISTS idx_tasks_org_id ON tasks(org_id)",
         ),
     ),
+    Migration(
+        version=9,
+        name="replay_diffs",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS replay_diffs (
+                report_id             TEXT PRIMARY KEY,
+                expected_run_id       TEXT NOT NULL DEFAULT '',
+                actual_run_id         TEXT NOT NULL DEFAULT '',
+                source                TEXT NOT NULL DEFAULT 'runtime',
+                matches               INTEGER NOT NULL DEFAULT 0,
+                entry_count           INTEGER NOT NULL DEFAULT 0,
+                reason_codes_json     TEXT NOT NULL DEFAULT '[]',
+                categories_json       TEXT NOT NULL DEFAULT '[]',
+                report_json           TEXT NOT NULL DEFAULT '{}',
+                created_at            TEXT NOT NULL,
+                updated_at            TEXT NOT NULL
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_replay_diffs_expected ON replay_diffs(expected_run_id)",
+            "CREATE INDEX IF NOT EXISTS idx_replay_diffs_actual ON replay_diffs(actual_run_id)",
+            "CREATE INDEX IF NOT EXISTS idx_replay_diffs_matches ON replay_diffs(matches)",
+        ),
+    ),
 )
 
 

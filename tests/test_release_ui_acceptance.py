@@ -75,6 +75,8 @@ class ReleaseUiAcceptanceTest(unittest.TestCase):
             'data-smoke="latest-merge-review"',
             "Known Gaps",
             "Latest Merge Review",
+            "Replay diffs",
+            "Replay diff codes",
         ):
             self.assertIn(text, index_html)
 
@@ -84,6 +86,7 @@ class ReleaseUiAcceptanceTest(unittest.TestCase):
             'data-smoke="control-banner"',
             'data-smoke="latest-merge-review"',
             "Operations Control Center",
+            "Replay diffs",
         ):
             self.assertIn(text, renderer_js)
 
@@ -199,6 +202,14 @@ class ReleaseUiAcceptanceTest(unittest.TestCase):
             "traces": payload.get("traces", {}),
             "monitoring": payload.get("monitoring", {}),
         }
+        contract = payload.get("control_center_contract", {})
+        self.assertIn("contract_version", contract)
+        self.assertIn("segments", contract)
+        self.assertIn("write_set", contract)
+        self.assertIn("queue_lease", contract["segments"])
+        self.assertIn("replay", contract["segments"])
+        self.assertIn("incident", contract["segments"])
+        self.assertIn("replay_diff", contract["segments"]["replay"])
         temp_root = (ROOT / ".botboy-runtime" / "ui-acceptance-contracts" / self._testMethodName).resolve()
         temp_root.mkdir(parents=True, exist_ok=True)
         payload_path = temp_root / f"dashboard_payload-{suffix}.json"

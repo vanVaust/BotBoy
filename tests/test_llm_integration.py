@@ -1,79 +1,82 @@
-import pytest
-from botboy.llm.integration import LLMIntegration, MockLLMBackend, LLMResponse
+from __future__ import annotations
 
-@pytest.mark.asyncio
-async def test_mock_llm_backend():
-    backend = MockLLMBackend(response_prefix="[TEST] ")
-    messages = [{"role": "user", "content": "hello"}]
-    
-    # Test chat
-    response = await backend.chat(messages)
-    assert isinstance(response, LLMResponse)
-    assert response.success is True
-    assert response.content == "[TEST] Response to: hello"
-    assert response.backend == "mock"
+import unittest
 
-    # Test stream (split yields words followed by spaces, so there is a trailing space)
-    stream_chunks = []
-    async for chunk in backend.stream(messages):
-        stream_chunks.append(chunk)
-    assert "".join(stream_chunks) == "[TEST] Response to: hello "
+from botboy.llm.integration import LLMIntegration, LLMResponse, MockLLMBackend
 
-@pytest.mark.asyncio
-async def test_llm_integration_chat_and_history():
-    backend = MockLLMBackend()
-    integration = LLMIntegration(backend, system_prompt="Sys prompt", max_history=4)
 
-    # Starts empty
-    assert len(integration._history) == 0
+class LLMIntegrationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_mock_llm_backend(self) -> None:
+        backend = MockLLMBackend(response_prefix="[TEST] ")
+        messages = [{"role": "user", "content": "hello"}]
 
-    # Chat interaction 1
-    response = await integration.chat("ping", use_history=True)
-    assert response.content == "[MOCK] Response to: ping"
-    assert len(integration._history) == 2
-    assert integration._history[0] == {"role": "user", "content": "ping"}
-    assert integration._history[1] == {"role": "assistant", "content": "[MOCK] Response to: ping"}
+        response = await backend.chat(messages)
+        self.assertIsInstance(response, LLMResponse)
+        self.assertTrue(response.success)
+        self.assertEqual(response.content, "[TEST] Response to: hello")
+        self.assertEqual(response.backend, "mock")
 
-    # Chat interaction 2
-    response2 = await integration.chat("pong", use_history=True)
-    assert response2.content == "[MOCK] Response to: pong"
-    # History size should be 4 (max_history)
-    assert len(integration._history) == 4
-    assert integration._history[-2] == {"role": "user", "content": "pong"}
-    assert integration._history[-1] == {"role": "assistant", "content": "[MOCK] Response to: pong"}
+        stream_chunks = []
+        async for chunk in backend.stream(messages):
+            stream_chunks.append(chunk)
+        self.assertEqual("".join(stream_chunks), "[TEST] Response to: hello ")
 
-    # Chat interaction 3 (causes trim)
-    response3 = await integration.chat("hello", use_history=True)
-    assert len(integration._history) == 4
-    # The oldest messages (ping) should be pruned
-    assert integration._history[-4] == {"role": "user", "content": "pong"}
-    assert integration._history[-3] == {"role": "assistant", "content": "[MOCK] Response to: pong"}
-    assert integration._history[-2] == {"role": "user", "content": "hello"}
-    assert integration._history[-1] == {"role": "assistant", "content": "[MOCK] Response to: hello"}
+    async def test_llm_integration_chat_and_history(self) -> None:
+        backend = MockLLMBackend()
+        integration = LLMIntegration(backend, system_prompt="Sys prompt", max_history=4)
 
-    # Test clear_history
-    integration.clear_history()
-    assert len(integration._history) == 0
+        self.assertEqual(len(integration._history), 0)
 
-@pytest.mark.asyncio
-async def test_llm_integration_stream_and_history():
-    backend = MockLLMBackend()
-    integration = LLMIntegration(backend, max_history=2)
+        response = await integration.chat("ping", use_history=True)
+        self.assertEqual(response.content, "[MOCK] Response to: ping")
+        self.assertEqual(len(integration._history), 2)
+        self.assertEqual(integration._history[0], {"role": "user", "content": "ping"})
+        self.assertEqual(integration._history[1], {"role": "assistant", "content": "[MOCK] Response to: ping"})
 
-    stream_chunks = []
-    async for chunk in integration.stream("test stream"):
-        stream_chunks.append(chunk)
-    
-    assert "".join(stream_chunks) == "[MOCK] Response to: test stream "
-    assert len(integration._history) == 2
-    assert integration._history[0] == {"role": "user", "content": "test stream"}
-    assert integration._history[1] == {"role": "assistant", "content": "[MOCK] Response to: test stream "}
+        response2 = await integration.chat("pong", use_history=True)
+        self.assertEqual(response2.content, "[MOCK] Response to: pong")
+        self.assertEqual(len(integration._history), 4)
+        self.assertEqual(integration._history[-2], {"role": "user", "content": "pong"})
+        self.assertEqual(integration._history[-1], {"role": "assistant", "content": "[MOCK] Response to: pong"})
 
-    # Stream again, should trim history to last 2 messages
-    stream_chunks2 = []
-    async for chunk in integration.stream("test stream 2"):
-        stream_chunks2.append(chunk)
+        await integration.chat("hello", use_history=True)
+        self.assertEqual(len(integration._history), 4)
+        self.assertEqual(integration._history[-4], {"role": "user", "content": "pong"})
+        self.assertEqual(integration._history[-3], {"role": "assistant", "content": "[MOCK] Response to: pong"})
+        self.assertEqual(integration._history[-2], {"role": "user", "content": "hello"})
+        self.assertEqual(integration._history[-1], {"role": "assistant", "content": "[MOCK] Response to: hello"})
 
-    assert len(integration._history) == 2
-    assert integration._history[0] == {"role": "user", "content": "test stream 2"}
-    assert integration._history[1] == {"role": "assistant", "content": "[MOCK] Response to: test stream 2 "}
+        integration.clear_history()
+        self.assertEqual(len(integration._history), 0)
+
+    async def test_llm_integration_stream_and_history(self) -> None:
+        backend = MockLLMBackend()
+        integration = LLMIntegration(backend, max_history=2)
+
+        stream_chunks = []
+        async for chunk in integration.stream("test stream"):
+            stream_chunks.append(chunk)
+
+        self.assertEqual("".join(stream_chunks), "[MOCK] Response to: test stream ")
+        self.assertEqual(len(integration._history), 2)
+        self.assertEqual(integration._history[0], {"role": "user", "content": "test stream"})
+        self.assertEqual(
+            integration._history[1],
+            {"role": "assistant", "content": "[MOCK] Response to: test stream "},
+        )
+
+        stream_chunks2 = []
+        async for chunk in integration.stream("test stream 2"):
+            stream_chunks2.append(chunk)
+
+        self.assertEqual("".join(stream_chunks2), "[MOCK] Response to: test stream 2 ")
+        self.assertEqual(len(integration._history), 2)
+        self.assertEqual(integration._history[0], {"role": "user", "content": "test stream 2"})
+        self.assertEqual(
+            integration._history[1],
+            {"role": "assistant", "content": "[MOCK] Response to: test stream 2 "},
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

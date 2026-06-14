@@ -222,6 +222,12 @@
     const traceStatus = snapshot.trace_status || {};
     const uiStatus = snapshot.ui_status || {};
     const evalReplay = snapshot.eval_replay || {};
+    const controlCenterContract = d.control_center_contract || {};
+    const replaySignals = (controlCenterContract.segments || {}).replay || {};
+    const replayDiffSummary = replaySignals.replay_diff || {};
+    const replayDiffCodes = replayDiffSummary.reason_code_counts || {};
+    const replayDiffTotal = replayDiffSummary.total ?? 0;
+    const replayDiffDriftCount = replayDiffSummary.drift_count ?? 0;
     const openPriorities = Array.isArray(snapshot.open_priorities) ? snapshot.open_priorities : [];
     const completedCapabilities = Array.isArray(snapshot.completed_capabilities) ? snapshot.completed_capabilities : [];
     const deferredItems = Array.isArray(snapshot.deferred_items) ? snapshot.deferred_items : [];
@@ -447,6 +453,8 @@
             ${renderControlLine('UI status', summarizeObject(uiStatus))}
             ${renderControlLine('Eval replay', evalReplay.status || '—')}
             ${renderControlLine('Replay focus', summarizeList(evalReplay.focus, 3))}
+            ${renderControlLine('Replay diffs', `${replayDiffTotal} total / ${replayDiffDriftCount} drift`)}
+            ${renderControlLine('Replay diff codes', summarizeObject(replayDiffCodes))}
             ${renderControlLine('Last command', lastCommand ? summarizeObject(lastCommand, 6) : 'none')}
             ${renderControlLine('Recent commands', recentCommands.length)}
           </div>

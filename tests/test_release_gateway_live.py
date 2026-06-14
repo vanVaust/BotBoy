@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import http.client
 import json
+import shutil
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -46,8 +48,10 @@ def _load_fastapi_gateway_factory():
 
 class ReleaseGatewayLiveTest(unittest.TestCase):
     def _make_bot(self) -> BotBoy:
-        temp_root = (ROOT / ".botboy-runtime" / "gateway-live-tests" / self._testMethodName).resolve()
-        temp_root.mkdir(parents=True, exist_ok=True)
+        base_root = (ROOT / ".botboy-runtime" / "gateway-live-tests").resolve()
+        base_root.mkdir(parents=True, exist_ok=True)
+        temp_root = Path(tempfile.mkdtemp(prefix=f"{self._testMethodName}-", dir=base_root)).resolve()
+        self.addCleanup(lambda: shutil.rmtree(temp_root, ignore_errors=True))
         config = BotBoyConfig()
         config.memory.db_path = str(temp_root / "botboy.db")
         config.history.db_path = str(temp_root / "history.db")

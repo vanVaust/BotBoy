@@ -1257,6 +1257,8 @@ function renderControlCenter(d) {
   const traceStatus = snapshot.trace_status || {};
   const uiStatus = snapshot.ui_status || {};
   const evalReplay = snapshot.eval_replay || {};
+  const controlCenterContract = d.control_center_contract || {};
+  const replaySignals = (controlCenterContract.segments || {}).replay || {};
   const openPriorities = Array.isArray(snapshot.open_priorities) ? snapshot.open_priorities : [];
   const completedCapabilities = Array.isArray(snapshot.completed_capabilities) ? snapshot.completed_capabilities : [];
   const deferredItems = Array.isArray(snapshot.deferred_items) ? snapshot.deferred_items : [];
@@ -1377,6 +1379,14 @@ function renderControlCenter(d) {
     : Array.isArray(latestMergeReview.resolved_keys)
       ? latestMergeReview.resolved_keys
       : [];
+  const replayStatus = replaySignals.status || evalReplay.status || 'â€”';
+  const replayFocus = Array.isArray(replaySignals.focus) && replaySignals.focus.length > 0
+    ? replaySignals.focus
+    : evalReplay.focus;
+  const replayDiffSummary = replaySignals.replay_diff || {};
+  const replayDiffCodes = replayDiffSummary.reason_code_counts || {};
+  const replayDiffTotal = replayDiffSummary.total ?? 0;
+  const replayDiffDriftCount = replayDiffSummary.drift_count ?? 0;
   const skillByPhase = agentSkillLibrary.by_phase || {};
   const skillByCategory = agentSkillLibrary.by_category || {};
 
@@ -1583,8 +1593,10 @@ function renderControlCenter(d) {
         <div class="control-lines">
           ${renderControlLine('Gateway modes', summarizeObject(gatewayModes))}
           ${renderControlLine('UI status', summarizeObject(uiStatus))}
-          ${renderControlLine('Eval replay', evalReplay.status || '—')}
-          ${renderControlLine('Replay focus', summarizeList(evalReplay.focus, 3))}
+          ${renderControlLine('Eval replay', replayStatus)}
+          ${renderControlLine('Replay focus', summarizeList(replayFocus, 3))}
+          ${renderControlLine('Replay diffs', `${replayDiffTotal} total / ${replayDiffDriftCount} drift`)}
+          ${renderControlLine('Replay diff codes', summarizeObject(replayDiffCodes))}
           ${renderControlLine('Last command', lastCommand ? summarizeObject(lastCommand, 6) : 'none')}
           ${renderControlLine('Recent commands', recentCommands.length)}
         </div>

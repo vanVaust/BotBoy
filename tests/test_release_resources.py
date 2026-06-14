@@ -52,6 +52,8 @@ class ReleaseResourcesTest(unittest.TestCase):
         self.assertEqual(snapshot["evals"]["command"], "python -m botboy evals --summary")
         self.assertEqual(snapshot["gateway_modes"]["stdlib"], "verified_release_live")
         self.assertEqual(snapshot["gateway_modes"]["fastapi"], "verified_release_live")
+        self.assertIn("v5_replay_diff_persistence_and_dashboard_surface", snapshot["completed_capabilities"])
+        self.assertNotIn("v3_replay_diff_persistence_and_surface", snapshot["open_priorities"])
 
     def test_packaging_config_mentions_runtime_assets(self) -> None:
         setup_text = Path("setup.py").read_text(encoding="utf-8")

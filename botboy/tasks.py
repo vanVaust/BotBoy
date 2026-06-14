@@ -50,7 +50,6 @@ CREATE INDEX IF NOT EXISTS idx_tasks_request_id ON tasks(request_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_root_task_id ON tasks(root_task_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_scheduler_task_id ON tasks(scheduler_task_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id);
-CREATE INDEX IF NOT EXISTS idx_tasks_org_id ON tasks(org_id);
 
 CREATE TABLE IF NOT EXISTS task_events (
     event_id      TEXT PRIMARY KEY,
@@ -495,6 +494,7 @@ class TaskStore(_SQLiteMixin):
             "heartbeat_at": "ALTER TABLE tasks ADD COLUMN heartbeat_at TEXT NOT NULL DEFAULT ''",
             "attempt_count": "ALTER TABLE tasks ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0",
             "retry_after_s": "ALTER TABLE tasks ADD COLUMN retry_after_s INTEGER NOT NULL DEFAULT 0",
+            "org_id": "ALTER TABLE tasks ADD COLUMN org_id TEXT NOT NULL DEFAULT 'default'",
         }
         changed = False
         for name, sql in migrations.items():
