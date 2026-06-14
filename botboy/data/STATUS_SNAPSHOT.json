@@ -148,6 +148,7 @@
     "async_command_support_extraction",
     "runtime_command_support_extraction",
     "ci_release_verification_workflow",
+    "ci_node24_action_compatibility",
     "exception_narrowing_phase_1",
     "gateway_auth_store_fail_closed",
     "fastapi_task_reassign_store_contract",
