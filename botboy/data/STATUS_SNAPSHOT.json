@@ -149,6 +149,7 @@
     "runtime_command_support_extraction",
     "ci_release_verification_workflow",
     "ci_node24_action_compatibility",
+    "ci_windows2025_runner_pin",
     "exception_narrowing_phase_1",
     "gateway_auth_store_fail_closed",
     "fastapi_task_reassign_store_contract",
