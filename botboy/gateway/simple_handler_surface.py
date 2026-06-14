@@ -44,6 +44,7 @@ from botboy.gateway.simple_task_read_handlers import (
     handle_trace_detail as shared_handle_trace_detail,
     handle_traces_get as shared_handle_traces_get,
     handle_worker_detail as shared_handle_worker_detail,
+    handle_worker_leases_get as shared_handle_worker_leases_get,
     handle_worker_nodes_get as shared_handle_worker_nodes_get,
     handle_workers_get as shared_handle_workers_get,
 )
@@ -52,6 +53,9 @@ from botboy.gateway.simple_task_write_handlers import (
     handle_task_merge_action as shared_handle_task_merge_action,
     handle_task_reassign as shared_handle_task_reassign,
     handle_task_resume as shared_handle_task_resume,
+    handle_worker_lease_acquire as shared_handle_worker_lease_acquire,
+    handle_worker_lease_release as shared_handle_worker_lease_release,
+    handle_worker_lease_renew as shared_handle_worker_lease_renew,
     handle_worker_node_drain as shared_handle_worker_node_drain,
     handle_worker_node_heartbeat as shared_handle_worker_node_heartbeat,
     handle_worker_node_register as shared_handle_worker_node_register,
@@ -256,6 +260,9 @@ class SimpleHandlerSurface:
     def _handle_worker_nodes_get(self, params: dict) -> None:
         shared_handle_worker_nodes_get(self, params)
 
+    def _handle_worker_leases_get(self, params: dict) -> None:
+        shared_handle_worker_leases_get(self, params)
+
     def _handle_worker_detail(self, worker_id: str) -> None:
         shared_handle_worker_detail(self, worker_id)
 
@@ -279,6 +286,15 @@ class SimpleHandlerSurface:
 
     def _handle_worker_node_drain(self, node_id: str, payload: dict) -> None:
         shared_handle_worker_node_drain(self, node_id, payload)
+
+    def _handle_worker_lease_acquire(self, payload: dict) -> None:
+        shared_handle_worker_lease_acquire(self, payload)
+
+    def _handle_worker_lease_renew(self, payload: dict) -> None:
+        shared_handle_worker_lease_renew(self, payload)
+
+    def _handle_worker_lease_release(self, payload: dict) -> None:
+        shared_handle_worker_lease_release(self, payload)
 
     def _handle_history_get(self, params: dict) -> None:
         shared_handle_history_get(self, params)

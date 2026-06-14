@@ -1288,6 +1288,10 @@ function renderControlCenter(d) {
   const queuedTaskCount = operationsSummary.queued_count ?? tasks.queued_count ?? workerSummary.queued_count ?? 0;
   const blockedTaskCount = operationsSummary.blocked_count ?? tasks.blocked_count ?? workerSummary.blocked_count ?? blockerEntries.length;
   const handoffQueueDepth = operationsSummary.handoff_queue_depth ?? tasks.handoff_queue_depth ?? workerSummary.handoff_queue_depth ?? 0;
+  const queueLeaseCount = operationsSummary.queue_lease_count ?? tasks.queue_lease_count ?? 0;
+  const activeQueueLeaseCount = operationsSummary.active_queue_lease_count ?? tasks.active_queue_lease_count ?? 0;
+  const expiredQueueLeaseCount = operationsSummary.expired_queue_lease_count ?? tasks.expired_queue_lease_count ?? 0;
+  const recoverableQueueLeaseCount = operationsSummary.recoverable_queue_lease_count ?? tasks.recoverable_queue_lease_count ?? 0;
   const oldestBlockedAge = operationsSummary.oldest_blocked_age_s ?? tasks.oldest_blocked_age_s ?? workerSummary.oldest_blocked_age_s ?? 0;
   const oldestRunningAge = operationsSummary.oldest_running_age_s ?? tasks.oldest_running_age_s ?? workerSummary.oldest_running_age_s ?? 0;
   const summaryTone = controlTone(operationsSummary.overall_status || '');
@@ -1569,6 +1573,9 @@ function renderControlCenter(d) {
           ${renderControlLine('Queued tasks', queuedTaskCount)}
           ${renderControlLine('Blocked tasks', blockedTaskCount)}
           ${renderControlLine('Handoff queue depth', handoffQueueDepth)}
+          ${renderControlLine('Queue leases', `${queueLeaseCount} total / ${activeQueueLeaseCount} active`)}
+          ${renderControlLine('Expired queue leases', expiredQueueLeaseCount)}
+          ${renderControlLine('Recoverable queue leases', recoverableQueueLeaseCount)}
           ${renderControlLine('Oldest running age', runningTaskCount ? `${oldestRunningAge}s` : '0s')}
         </div>
         <div class="worker-grid" style="margin-top:8px">

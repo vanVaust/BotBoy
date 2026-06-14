@@ -9,7 +9,7 @@
   },
   "production_status": {
     "release_level": "v5-local-production-candidate",
-    "v2_5_runtime": "verified",
+    "v2_5_runtime": "queue_lease_api_verified",
     "v3_runtime": "replay_diff_persistence_ported_to_v5",
     "v4_runtime": "governance_and_replay_harness_present",
     "v5_runtime": "local_candidate_verified_pending_github_push"
@@ -105,6 +105,7 @@
   },
   "gate_status": {
     "G1_v2_5_runtime": "verified",
+    "G1_queue_lease_api": "verified",
     "G2_replay_diff_persistence": "verified",
     "G3_dashboard_contract": "verified",
     "G4_v5_go_live": "verified_local_pending_github_push"
@@ -185,6 +186,9 @@
     "worker_node_fastapi_v2_routes",
     "worker_node_stdlib_v2_routes",
     "worker_node_observability",
+    "queue_lease_api_acquire_renew_release",
+    "queue_lease_fastapi_stdlib_v2_routes",
+    "queue_lease_dashboard_operator_signals",
     "v5_governance_engine",
     "v5_zero_trust_module",
     "v5_replay_harness",
@@ -197,7 +201,7 @@
   "known_gaps": [],
   "last_verified_run": {
     "command": "python -m unittest discover -s tests -v",
-    "result": "Ran 197 tests, OK (skipped=1)"
+    "result": "Ran 202 tests, OK"
   },
   "last_verified_acceptance": {
     "build": "Verified inside tests.test_release_build_install via standard unittest full-suite",

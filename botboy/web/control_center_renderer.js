@@ -286,6 +286,10 @@
     const historyTotal = operationsSummary.history_total ?? history.total ?? '—';
     const mergeReviewReadyCount = operationsSummary.merge_review_ready_count ?? 0;
     const mergeConflictTaskCount = operationsSummary.merge_conflict_task_count ?? 0;
+    const queueLeaseCount = operationsSummary.queue_lease_count ?? d.tasks?.queue_lease_count ?? 0;
+    const activeQueueLeaseCount = operationsSummary.active_queue_lease_count ?? d.tasks?.active_queue_lease_count ?? 0;
+    const expiredQueueLeaseCount = operationsSummary.expired_queue_lease_count ?? d.tasks?.expired_queue_lease_count ?? 0;
+    const recoverableQueueLeaseCount = operationsSummary.recoverable_queue_lease_count ?? d.tasks?.recoverable_queue_lease_count ?? 0;
     const mergeResolutionPolicies = operationsSummary.merge_resolution_policies || {};
     const latestMergeResolutionPolicy = operationsSummary.latest_merge_resolution_policy || '—';
     const latestTask = d.tasks?.latest_task || d.tasks?.latest || null;
@@ -364,6 +368,9 @@
             ${renderControlLine('Latest trace run', latestTraceRunId)}
             ${renderControlLine('Metrics commands', metricsTotalCommands)}
             ${renderControlLine('History total', historyTotal)}
+            ${renderControlLine('Queue leases', `${queueLeaseCount} total / ${activeQueueLeaseCount} active`)}
+            ${renderControlLine('Expired queue leases', expiredQueueLeaseCount)}
+            ${renderControlLine('Recoverable queue leases', recoverableQueueLeaseCount)}
             ${renderControlLine('Merge reviews', mergeReviewReadyCount)}
             ${renderControlLine('Merge conflict tasks', mergeConflictTaskCount)}
             ${renderControlLine('Merge policies', summarizeObject(mergeResolutionPolicies))}

@@ -1021,6 +1021,333 @@ class TaskStore(_SQLiteMixin):
             "is_recoverable": bool(record.parent_task_id and is_stale),
         }
 
+    def _row_to_queue_lease(self, row, *, reference_time: Optional[datetime] = None) -> dict:
+        now = reference_time or datetime.now(timezone.utc)
+        expires_at = str(row["lease_expires_at"] or "")
+        expiry = _safe_parse_datetime(expires_at)
+        status = str(row["lease_status"] or "")
+        is_expired = bool(status == "expired" or (status == "active" and expiry and expiry <= now))
+        metadata = _safe_json_loads(row["metadata_json"])
+        return {
+            "lease_id": row["lease_id"],
+            "queue_name": row["queue_name"],
+            "task_id": row["task_id"],
+            "node_id": row["node_id"],
+            "lease_status": "expired" if is_expired else status,
+            "stored_lease_status": status,
+            "lease_expires_at": expires_at,
+            "metadata": metadata,
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "is_expired": is_expired,
+            "is_active": bool(status == "active" and not is_expired),
+            "is_recoverable": bool(is_expired and row["task_id"]),
+        }
+
+    def _expire_queue_leases(self, conn=None, *, reference_time: Optional[datetime] = None) -> int:
+        now = reference_time or datetime.now(timezone.utc)
+        db = conn or self._get_conn()
+        timestamp = now.isoformat()
+        cursor = db.execute(
+            """
+            UPDATE queue_leases
+            SET lease_status = ?, updated_at = ?
+            WHERE lease_status = ? AND lease_expires_at != '' AND lease_expires_at <= ?
+            """,
+            ("expired", timestamp, "active", timestamp),
+        )
+        changed = int(cursor.rowcount or 0)
+        if changed and conn is None:
+            db.commit()
+        return changed
+
+    def _active_queue_lease_count(self, conn, queue_name: str, *, reference_time: Optional[datetime] = None) -> int:
+        self._expire_queue_leases(conn, reference_time=reference_time)
+        row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM queue_leases WHERE queue_name = ? AND lease_status = ?",
+            (queue_name, "active"),
+        ).fetchone()
+        return int(row["cnt"] if row else 0)
+
+    def acquire_queue_lease(
+        self,
+        *,
+        queue_name: str,
+        node_id: str,
+        task_id: str = "",
+        principal: str = "anonymous",
+        request_id: str = "",
+        run_id: str = "",
+        lease_ttl_seconds: Optional[int] = None,
+        metadata: Optional[dict] = None,
+    ) -> Optional[dict]:
+        normalized_queue_name = str(queue_name or "").strip()
+        normalized_node_id = str(node_id or "").strip()
+        normalized_task_id = str(task_id or "").strip()
+        if not normalized_queue_name:
+            raise ValueError("Missing queue_name")
+        if not normalized_node_id:
+            raise ValueError("Missing node_id")
+        conn = self._get_conn()
+        queue_row = conn.execute(
+            "SELECT * FROM execution_queues WHERE queue_name = ?",
+            (normalized_queue_name,),
+        ).fetchone()
+        node_row = conn.execute(
+            "SELECT * FROM worker_nodes WHERE node_id = ?",
+            (normalized_node_id,),
+        ).fetchone()
+        if not queue_row or not node_row:
+            return None
+        queue = self._row_to_execution_queue(queue_row)
+        node = self._row_to_worker_node(node_row)
+        node_payload = node.to_dict(reference_time=datetime.now(timezone.utc))
+        if node.queue_name != normalized_queue_name:
+            return None
+        if queue.queue_status in {"draining", "drained", "disabled"} or node_payload["effective_status"] in {"draining", "drained", "stale"}:
+            return None
+        active_count = self._active_queue_lease_count(conn, normalized_queue_name)
+        if active_count >= max(1, int(queue.max_parallelism or 1)):
+            conn.commit()
+            return None
+        now = self._now()
+        ttl_seconds = max(30, int(lease_ttl_seconds or queue.lease_ttl_seconds or LEASE_TTL_SECONDS))
+        expires_at = self._expires_at(seconds=ttl_seconds)
+        lease_id = self._new_id("ql")
+        payload = {
+            "principal": principal or "anonymous",
+            "request_id": request_id or "",
+            "run_id": run_id or "",
+            "lease_ttl_seconds": ttl_seconds,
+            **(metadata if isinstance(metadata, dict) else {}),
+        }
+        conn.execute(
+            """
+            INSERT INTO queue_leases (
+                lease_id,
+                queue_name,
+                task_id,
+                node_id,
+                lease_status,
+                lease_expires_at,
+                metadata_json,
+                created_at,
+                updated_at
+            )
+            VALUES (?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                lease_id,
+                normalized_queue_name,
+                normalized_task_id,
+                normalized_node_id,
+                "active",
+                expires_at,
+                self._json(payload),
+                now,
+                now,
+            ),
+        )
+        if normalized_task_id and self.get_task(normalized_task_id):
+            conn.execute(
+                """
+                UPDATE tasks
+                SET status = ?, delegation_status = ?, delegated_to_worker = ?, lease_expires_at = ?,
+                    heartbeat_at = ?, updated_at = ?
+                WHERE task_id = ?
+                """,
+                (
+                    TASK_STATUS_RUNNING,
+                    DELEGATION_STATUS_LEASED,
+                    queue.worker_id,
+                    expires_at,
+                    now,
+                    now,
+                    normalized_task_id,
+                ),
+            )
+        conn.commit()
+        return self.get_queue_lease(lease_id)
+
+    def get_queue_lease(self, lease_id: str) -> Optional[dict]:
+        row = self._fetchone("SELECT * FROM queue_leases WHERE lease_id = ?", (str(lease_id or "").strip(),))
+        return self._row_to_queue_lease(row) if row else None
+
+    def renew_queue_lease(
+        self,
+        lease_id: str,
+        *,
+        principal: str = "anonymous",
+        request_id: str = "",
+        run_id: str = "",
+        lease_ttl_seconds: Optional[int] = None,
+    ) -> Optional[dict]:
+        normalized_lease_id = str(lease_id or "").strip()
+        if not normalized_lease_id:
+            raise ValueError("Missing lease_id")
+        conn = self._get_conn()
+        self._expire_queue_leases(conn)
+        row = conn.execute("SELECT * FROM queue_leases WHERE lease_id = ?", (normalized_lease_id,)).fetchone()
+        if not row or str(row["lease_status"] or "") != "active":
+            conn.commit()
+            return None
+        queue = self.get_execution_queue(str(row["queue_name"] or ""))
+        ttl_seconds = max(30, int(lease_ttl_seconds or (queue or {}).get("lease_ttl_seconds", LEASE_TTL_SECONDS)))
+        now = self._now()
+        expires_at = self._expires_at(seconds=ttl_seconds)
+        metadata = _safe_json_loads(row["metadata_json"])
+        metadata.update(
+            {
+                "renewed_by": principal or "anonymous",
+                "renew_request_id": request_id or "",
+                "renew_run_id": run_id or "",
+                "lease_ttl_seconds": ttl_seconds,
+            }
+        )
+        conn.execute(
+            """
+            UPDATE queue_leases
+            SET lease_expires_at = ?, metadata_json = ?, updated_at = ?
+            WHERE lease_id = ?
+            """,
+            (expires_at, self._json(metadata), now, normalized_lease_id),
+        )
+        if row["task_id"]:
+            conn.execute(
+                "UPDATE tasks SET lease_expires_at = ?, heartbeat_at = ?, updated_at = ? WHERE task_id = ?",
+                (expires_at, now, now, row["task_id"]),
+            )
+        conn.commit()
+        return self.get_queue_lease(normalized_lease_id)
+
+    def release_queue_lease(
+        self,
+        lease_id: str,
+        *,
+        principal: str = "anonymous",
+        request_id: str = "",
+        run_id: str = "",
+        reason: str = "",
+    ) -> Optional[dict]:
+        normalized_lease_id = str(lease_id or "").strip()
+        if not normalized_lease_id:
+            raise ValueError("Missing lease_id")
+        conn = self._get_conn()
+        row = conn.execute("SELECT * FROM queue_leases WHERE lease_id = ?", (normalized_lease_id,)).fetchone()
+        if not row:
+            return None
+        metadata = _safe_json_loads(row["metadata_json"])
+        metadata.update(
+            {
+                "released_by": principal or "anonymous",
+                "release_request_id": request_id or "",
+                "release_run_id": run_id or "",
+                "release_reason": reason or "",
+            }
+        )
+        now = self._now()
+        conn.execute(
+            """
+            UPDATE queue_leases
+            SET lease_status = ?, metadata_json = ?, updated_at = ?
+            WHERE lease_id = ?
+            """,
+            ("released", self._json(metadata), now, normalized_lease_id),
+        )
+        if row["task_id"] and self.get_task(row["task_id"]):
+            conn.execute(
+                """
+                UPDATE tasks
+                SET delegation_status = ?, lease_expires_at = ?, heartbeat_at = ?, updated_at = ?
+                WHERE task_id = ?
+                """,
+                (DELEGATION_STATUS_DELEGATED, "", "", now, row["task_id"]),
+            )
+        conn.commit()
+        return self.get_queue_lease(normalized_lease_id)
+
+    def list_queue_leases(
+        self,
+        *,
+        queue_name: str = "",
+        node_id: str = "",
+        task_id: str = "",
+        include_released: bool = False,
+        include_expired: bool = True,
+        limit: int = 100,
+    ) -> list[dict]:
+        conn = self._get_conn()
+        self._expire_queue_leases(conn)
+        conn.commit()
+        conditions: list[str] = []
+        params: list[Any] = []
+        normalized_queue_name = str(queue_name or "").strip()
+        normalized_node_id = str(node_id or "").strip()
+        normalized_task_id = str(task_id or "").strip()
+        if normalized_queue_name:
+            conditions.append("queue_name = ?")
+            params.append(normalized_queue_name)
+        if normalized_node_id:
+            conditions.append("node_id = ?")
+            params.append(normalized_node_id)
+        if normalized_task_id:
+            conditions.append("task_id = ?")
+            params.append(normalized_task_id)
+        statuses = ["active"]
+        if include_released:
+            statuses.append("released")
+        if include_expired:
+            statuses.append("expired")
+        placeholders = ",".join("?" for _ in statuses)
+        conditions.append(f"lease_status IN ({placeholders})")
+        params.extend(statuses)
+        where = f"WHERE {' AND '.join(conditions)}"
+        rows = self._fetchall(
+            f"SELECT * FROM queue_leases {where} ORDER BY updated_at DESC, created_at DESC LIMIT ?",
+            tuple(params + [max(1, min(int(limit or 100), 500))]),
+        )
+        return [self._row_to_queue_lease(row) for row in rows]
+
+    def queue_summary(self) -> dict:
+        conn = self._get_conn()
+        self._expire_queue_leases(conn)
+        conn.commit()
+        queues = self.list_execution_queues()
+        leases = self.list_queue_leases(include_released=True, include_expired=True, limit=500)
+        by_queue: dict[str, dict[str, int]] = {}
+        by_status: dict[str, int] = {}
+        for lease in leases:
+            queue_name = str(lease.get("queue_name", "") or "")
+            status = str(lease.get("lease_status", "") or "unknown")
+            by_status[status] = by_status.get(status, 0) + 1
+            bucket = by_queue.setdefault(
+                queue_name,
+                {"lease_count": 0, "active_count": 0, "expired_count": 0, "released_count": 0},
+            )
+            bucket["lease_count"] += 1
+            if status == "active":
+                bucket["active_count"] += 1
+            elif status == "expired":
+                bucket["expired_count"] += 1
+            elif status == "released":
+                bucket["released_count"] += 1
+        active_count = by_status.get("active", 0)
+        expired_count = by_status.get("expired", 0)
+        released_count = by_status.get("released", 0)
+        return {
+            "available": True,
+            "queue_count": len(queues),
+            "lease_count": len(leases),
+            "active_lease_count": active_count,
+            "expired_lease_count": expired_count,
+            "released_lease_count": released_count,
+            "recoverable_lease_count": sum(1 for lease in leases if lease.get("is_recoverable")),
+            "by_status": dict(sorted(by_status.items())),
+            "by_queue": dict(sorted(by_queue.items())),
+            "queues": queues,
+            "recent_leases": leases[:5],
+        }
+
     def list_worker_leases(
         self,
         *,
@@ -1781,6 +2108,7 @@ class TaskStore(_SQLiteMixin):
         latest = self._row_to_task(latest_row).to_dict() if latest_row else None
         worker_summary = self.worker_summary()
         lease_records = self.list_worker_leases(limit=500)
+        queue_summary = self.queue_summary()
         stale_leases = [item for item in lease_records if item["is_stale"]]
         recoverable_leases = [item for item in stale_leases if item["is_recoverable"]]
         merge_rows = conn.execute(
@@ -1851,6 +2179,11 @@ class TaskStore(_SQLiteMixin):
             "handoff_queue_depth": delegated_queue_depth,
             "stale_lease_count": len(stale_leases),
             "recoverable_lease_count": len(recoverable_leases),
+            "queue_lease_count": int(queue_summary.get("lease_count", 0) or 0),
+            "active_queue_lease_count": int(queue_summary.get("active_lease_count", 0) or 0),
+            "expired_queue_lease_count": int(queue_summary.get("expired_lease_count", 0) or 0),
+            "released_queue_lease_count": int(queue_summary.get("released_lease_count", 0) or 0),
+            "recoverable_queue_lease_count": int(queue_summary.get("recoverable_lease_count", 0) or 0),
             "merge_review_ready_count": merge_review_ready_count,
             "merge_conflict_task_count": merge_conflict_task_count,
             "merge_conflict_total": merge_conflict_total,
@@ -1873,6 +2206,7 @@ class TaskStore(_SQLiteMixin):
             "latest_task_id": latest["task_id"] if latest else "",
             "latest_status": latest["status"] if latest else "",
             "worker_nodes": self.worker_node_summary(),
+            "queue_summary": queue_summary,
         }
 
     @staticmethod

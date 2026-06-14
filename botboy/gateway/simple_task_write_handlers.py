@@ -286,3 +286,76 @@ def handle_worker_node_drain(handler, node_id: str, payload: dict) -> None:
             "summary": store.worker_node_summary(),
         }
     )
+
+
+def handle_worker_lease_acquire(handler, payload: dict) -> None:
+    principal = handler._ensure_access(require_auth=handler.auth_enabled)
+    if principal is None:
+        return
+    store = handler._task_store()
+    if not store:
+        return
+    metadata = payload.get("metadata")
+    try:
+        lease = store.acquire_queue_lease(
+            queue_name=str(payload.get("queue_name", "")).strip(),
+            node_id=str(payload.get("node_id", "")).strip(),
+            task_id=str(payload.get("task_id", "")).strip(),
+            principal=principal,
+            request_id=handler.request_id,
+            lease_ttl_seconds=int(payload.get("lease_ttl_seconds", 0) or 0),
+            metadata=metadata if isinstance(metadata, dict) else None,
+        )
+    except ValueError as exc:
+        handler._json({"error": str(exc)}, 400)
+        return
+    if not lease:
+        handler._json({"error": "Queue lease unavailable"}, 409)
+        return
+    handler._json({"available": True, "acquired": True, "lease": lease, "summary": store.queue_summary()})
+
+
+def handle_worker_lease_renew(handler, payload: dict) -> None:
+    principal = handler._ensure_access(require_auth=handler.auth_enabled)
+    if principal is None:
+        return
+    store = handler._task_store()
+    if not store:
+        return
+    try:
+        lease = store.renew_queue_lease(
+            str(payload.get("lease_id", "")).strip(),
+            principal=principal,
+            request_id=handler.request_id,
+            lease_ttl_seconds=int(payload.get("lease_ttl_seconds", 0) or 0),
+        )
+    except ValueError as exc:
+        handler._json({"error": str(exc)}, 400)
+        return
+    if not lease:
+        handler._json({"error": "Queue lease not renewable"}, 404)
+        return
+    handler._json({"available": True, "renewed": True, "lease": lease, "summary": store.queue_summary()})
+
+
+def handle_worker_lease_release(handler, payload: dict) -> None:
+    principal = handler._ensure_access(require_auth=handler.auth_enabled)
+    if principal is None:
+        return
+    store = handler._task_store()
+    if not store:
+        return
+    try:
+        lease = store.release_queue_lease(
+            str(payload.get("lease_id", "")).strip(),
+            principal=principal,
+            request_id=handler.request_id,
+            reason=str(payload.get("reason", "")).strip(),
+        )
+    except ValueError as exc:
+        handler._json({"error": str(exc)}, 400)
+        return
+    if not lease:
+        handler._json({"error": "Queue lease not found"}, 404)
+        return
+    handler._json({"available": True, "released": True, "lease": lease, "summary": store.queue_summary()})

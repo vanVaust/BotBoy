@@ -77,6 +77,8 @@ class ReleaseUiAcceptanceTest(unittest.TestCase):
             "Latest Merge Review",
             "Replay diffs",
             "Replay diff codes",
+            "Queue leases",
+            "Recoverable queue leases",
         ):
             self.assertIn(text, index_html)
 
@@ -87,6 +89,7 @@ class ReleaseUiAcceptanceTest(unittest.TestCase):
             'data-smoke="latest-merge-review"',
             "Operations Control Center",
             "Replay diffs",
+            "Queue leases",
         ):
             self.assertIn(text, renderer_js)
 

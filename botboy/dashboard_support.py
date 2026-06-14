@@ -54,6 +54,18 @@ def _build_control_center_contract(
         "recoverable_lease_count": _as_int(
             operations_summary.get("recoverable_lease_count", task_summary.get("recoverable_lease_count"))
         ),
+        "queue_lease_count": _as_int(
+            operations_summary.get("queue_lease_count", task_summary.get("queue_lease_count"))
+        ),
+        "active_queue_lease_count": _as_int(
+            operations_summary.get("active_queue_lease_count", task_summary.get("active_queue_lease_count"))
+        ),
+        "expired_queue_lease_count": _as_int(
+            operations_summary.get("expired_queue_lease_count", task_summary.get("expired_queue_lease_count"))
+        ),
+        "released_queue_lease_count": _as_int(
+            operations_summary.get("released_queue_lease_count", task_summary.get("released_queue_lease_count"))
+        ),
         "source": "dashboard_support",
     }
 
@@ -250,6 +262,11 @@ def get_dashboard_payload(bot, mode: str = "local") -> dict[str, Any]:
         "handoff_queue_depth": int(task_summary.get("handoff_queue_depth", 0) or 0),
         "stale_lease_count": int(task_summary.get("stale_lease_count", 0) or 0),
         "recoverable_lease_count": int(task_summary.get("recoverable_lease_count", 0) or 0),
+        "queue_lease_count": int(task_summary.get("queue_lease_count", 0) or 0),
+        "active_queue_lease_count": int(task_summary.get("active_queue_lease_count", 0) or 0),
+        "expired_queue_lease_count": int(task_summary.get("expired_queue_lease_count", 0) or 0),
+        "released_queue_lease_count": int(task_summary.get("released_queue_lease_count", 0) or 0),
+        "recoverable_queue_lease_count": int(task_summary.get("recoverable_queue_lease_count", 0) or 0),
         "merge_review_ready_count": int(task_summary.get("merge_review_ready_count", 0) or 0),
         "merge_conflict_task_count": int(task_summary.get("merge_conflict_task_count", 0) or 0),
         "merge_conflict_total": int(task_summary.get("merge_conflict_total", 0) or 0),

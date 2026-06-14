@@ -132,6 +132,20 @@ class ReleaseGatewayLiveTest(unittest.TestCase):
                 "/api/v2/workers/register",
                 json={"node_id": "node-fastapi", "worker_id": "planner", "health": "unknown"},
             )
+            worker_lease_acquire = client.post(
+                "/api/v2/workers/leases/acquire",
+                json={"queue_name": "planner.node-fastapi", "node_id": "node-fastapi", "task_id": task_id},
+            )
+            lease_id = worker_lease_acquire.json().get("lease", {}).get("lease_id", "")
+            worker_leases = client.get("/api/v2/workers/leases")
+            worker_lease_renew = client.post(
+                "/api/v2/workers/leases/renew",
+                json={"lease_id": lease_id},
+            )
+            worker_lease_release = client.post(
+                "/api/v2/workers/leases/release",
+                json={"lease_id": lease_id, "reason": "release-live-test"},
+            )
             worker_nodes = client.get("/api/v2/workers/nodes")
             worker_node_heartbeat = client.post(
                 "/api/v2/workers/heartbeat",
@@ -169,6 +183,10 @@ class ReleaseGatewayLiveTest(unittest.TestCase):
         self.assertEqual(workers.status_code, 200, workers.text)
         self.assertEqual(worker_detail.status_code, 200, worker_detail.text)
         self.assertEqual(worker_node_register.status_code, 200, worker_node_register.text)
+        self.assertEqual(worker_lease_acquire.status_code, 200, worker_lease_acquire.text)
+        self.assertEqual(worker_leases.status_code, 200, worker_leases.text)
+        self.assertEqual(worker_lease_renew.status_code, 200, worker_lease_renew.text)
+        self.assertEqual(worker_lease_release.status_code, 200, worker_lease_release.text)
         self.assertEqual(worker_nodes.status_code, 200, worker_nodes.text)
         self.assertEqual(worker_node_heartbeat.status_code, 200, worker_node_heartbeat.text)
         self.assertEqual(worker_node_drain.status_code, 200, worker_node_drain.text)
@@ -193,6 +211,10 @@ class ReleaseGatewayLiveTest(unittest.TestCase):
         self.assertIn("worker_count", workers.json())
         self.assertEqual(worker_detail.json()["worker"]["worker_id"], "planner")
         self.assertEqual(worker_node_register.json()["node"]["node_id"], "node-fastapi")
+        self.assertTrue(worker_lease_acquire.json()["acquired"])
+        self.assertGreaterEqual(worker_leases.json()["summary"]["lease_count"], 1)
+        self.assertTrue(worker_lease_renew.json()["renewed"])
+        self.assertEqual(worker_lease_release.json()["lease"]["lease_status"], "released")
         self.assertEqual(worker_nodes.json()["summary"]["node_count"], 1)
         self.assertEqual(worker_node_heartbeat.json()["node"]["health"], "healthy")
         self.assertEqual(worker_node_drain.json()["node"]["effective_status"], "draining")
@@ -265,6 +287,27 @@ class ReleaseGatewayLiveTest(unittest.TestCase):
             headers={"Content-Type": "application/json"},
             body=json.dumps({"node_id": "node-stdlib", "worker_id": "planner"}),
         )
+        worker_lease_acquire_status, _, worker_lease_acquire_body = request(
+            "POST",
+            "/api/v2/workers/leases/acquire",
+            headers={"Content-Type": "application/json"},
+            body=json.dumps({"queue_name": "planner.node-stdlib", "node_id": "node-stdlib", "task_id": task_id}),
+        )
+        worker_lease_acquire_probe = json.loads(worker_lease_acquire_body)
+        stdlib_lease_id = worker_lease_acquire_probe.get("lease", {}).get("lease_id", "")
+        worker_leases_status, _, worker_leases_body = request("GET", "/api/v2/workers/leases")
+        worker_lease_renew_status, _, worker_lease_renew_body = request(
+            "POST",
+            "/api/v2/workers/leases/renew",
+            headers={"Content-Type": "application/json"},
+            body=json.dumps({"lease_id": stdlib_lease_id}),
+        )
+        worker_lease_release_status, _, worker_lease_release_body = request(
+            "POST",
+            "/api/v2/workers/leases/release",
+            headers={"Content-Type": "application/json"},
+            body=json.dumps({"lease_id": stdlib_lease_id, "reason": "release-live-test"}),
+        )
         worker_nodes_status, _, worker_nodes_body = request("GET", "/api/v2/workers/nodes")
         worker_node_heartbeat_status, _, worker_node_heartbeat_body = request(
             "POST",
@@ -307,6 +350,10 @@ class ReleaseGatewayLiveTest(unittest.TestCase):
         workers = json.loads(workers_body)
         worker_detail = json.loads(worker_detail_body)
         worker_node_register = json.loads(worker_node_register_body)
+        worker_lease_acquire = json.loads(worker_lease_acquire_body)
+        worker_leases = json.loads(worker_leases_body)
+        worker_lease_renew = json.loads(worker_lease_renew_body)
+        worker_lease_release = json.loads(worker_lease_release_body)
         worker_nodes = json.loads(worker_nodes_body)
         worker_node_heartbeat = json.loads(worker_node_heartbeat_body)
         worker_node_drain = json.loads(worker_node_drain_body)
@@ -331,6 +378,10 @@ class ReleaseGatewayLiveTest(unittest.TestCase):
         self.assertEqual(workers_status, 200, workers_body)
         self.assertEqual(worker_detail_status, 200, worker_detail_body)
         self.assertEqual(worker_node_register_status, 200, worker_node_register_body)
+        self.assertEqual(worker_lease_acquire_status, 200, worker_lease_acquire_body)
+        self.assertEqual(worker_leases_status, 200, worker_leases_body)
+        self.assertEqual(worker_lease_renew_status, 200, worker_lease_renew_body)
+        self.assertEqual(worker_lease_release_status, 200, worker_lease_release_body)
         self.assertEqual(worker_nodes_status, 200, worker_nodes_body)
         self.assertEqual(worker_node_heartbeat_status, 200, worker_node_heartbeat_body)
         self.assertEqual(worker_node_drain_status, 200, worker_node_drain_body)
@@ -355,6 +406,10 @@ class ReleaseGatewayLiveTest(unittest.TestCase):
         self.assertIn("worker_count", workers)
         self.assertEqual(worker_detail["worker"]["worker_id"], "planner")
         self.assertEqual(worker_node_register["node"]["node_id"], "node-stdlib")
+        self.assertTrue(worker_lease_acquire["acquired"])
+        self.assertGreaterEqual(worker_leases["summary"]["lease_count"], 1)
+        self.assertTrue(worker_lease_renew["renewed"])
+        self.assertEqual(worker_lease_release["lease"]["lease_status"], "released")
         self.assertEqual(worker_nodes["summary"]["node_count"], 1)
         self.assertEqual(worker_node_heartbeat["node"]["health"], "healthy")
         self.assertEqual(worker_node_drain["node"]["effective_status"], "draining")

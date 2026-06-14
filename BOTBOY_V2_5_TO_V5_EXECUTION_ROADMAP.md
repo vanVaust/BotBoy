@@ -1,7 +1,7 @@
 # BotBoy v2.5 bis v5 Execution Roadmap
 
 Letzte Aktualisierung: 2026-06-14  
-Arbeitsstand: v5 local production candidate, Rebase auf GitHub-v5 integriert, Full-Suite lokal gruen.
+Arbeitsstand: v5 local production candidate, Queue-Lease-API abgeschlossen, Full-Suite lokal gruen.
 
 ## Zielbild
 
@@ -10,10 +10,11 @@ BotBoy wird als lokal-first Orchestrator mit stabiler Single-Host-Runtime, Worke
 ## Aktueller Stand
 
 - v2.5 Runtime-Basis ist abgeschlossen: Tasks, Worker-Nodes, Queue-Leases, Gateway-Routen, UI-Control-Center, Release-Smoke und Eval-Assets sind vorhanden.
+- Queue-Leases sind vertikal abgeschlossen: Acquire, Renew, Release, List, Summary, Expiry, Recovery-Signal, Parallelismus-Limit, Drain-Schutz, FastAPI-/stdlib-Routen und Dashboard-Signale sind getestet.
 - v3 Replay-/Trace-Arbeit ist auf v5 portiert: Replay-Diffs sind nicht mehr an entfernte Workflow-IR-Dateien gekoppelt, sondern leben in `botboy.security.replay_diff`.
 - v4/v5 Grundlagen sind vorhanden: Governance, Zero-Trust-Modul, Tenant-Sandbox, Replay-Harness und DAG/Mass-Escalation-Strukturen existieren.
 - Dashboard-Payload enthält einen `control_center_contract` mit Queue-, Replay- und Incident-Segmenten.
-- Offener Gate: normaler Push nach GitHub ohne Force, danach CI-/Remote-Abgleich.
+- Offener Gate: normaler Push nach GitHub ohne Force, danach CI-/Remote-Abgleich und Remote-Deployment-Haertung.
 
 ## Agenten-Orchestrierung
 
@@ -34,22 +35,30 @@ BotBoy wird als lokal-first Orchestrator mit stabiler Single-Host-Runtime, Worke
 - Replay-Diff-Funktion auf v5-Struktur portieren.
 - Verifikation: Der Konfliktmarker-Scan ueber den Arbeitsbaum muss leer sein.
 
-### NOW-02: Replay-Diff-Persistenz final prüfen
+### NOW-02: Queue-Lease-API finalisieren
+
+- Status: abgeschlossen.
+- TaskStore: `acquire_queue_lease`, `renew_queue_lease`, `release_queue_lease`, `list_queue_leases`, `queue_summary`.
+- Semantik: Expiry, recoverable expired leases, max parallelism, drain prevents assignment.
+- Surface: FastAPI und stdlib unter `/api/v2/workers/leases*`.
+- Verifikation: Queue-Lease-Contract, Gateway-Live-Routen, UI-Acceptance und Full-Suite.
+
+### NOW-03: Replay-Diff-Persistenz final prüfen
 
 - `replay_diffs` Migration in TaskStore prüfen.
 - `compare_replay_payloads`, `persist_replay_diff_report`, `load_replay_diff_report`, `list_replay_diff_summaries` und `summarize_replay_diffs` testen.
 - Replay-Harness muss `compare_runs` bereitstellen und bei vorhandenem TaskStore persistieren.
 - Dashboard muss `replay_diff_total`, `replay_diff_drift_count` und `control_center_contract.segments.replay.replay_diff` ausgeben.
 
-### NOW-03: Release-Gates ausführen
+### NOW-04: Release-Gates ausführen
 
 - `python -m py_compile` auf geänderte Python-Dateien.
 - `python -m unittest tests.test_replay_diff tests.test_gateway_dashboard_payload tests.test_release_ui_acceptance tests.test_release_resources -v`.
 - `python -m botboy.release_smoke -v`.
 - `python -m botboy evals --summary`.
-- Ergebnis lokal: `python -m unittest discover -s tests -v` lief mit `Ran 197 tests, OK (skipped=1)`.
+- Ergebnis lokal: `python -m unittest discover -s tests -v` lief mit `Ran 202 tests, OK`.
 
-### NOW-04: GitHub-Veröffentlichung
+### NOW-05: GitHub-Veröffentlichung
 
 - Rebase abschließen.
 - Commit auf `main` behalten, kein Force-Push.

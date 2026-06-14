@@ -23,6 +23,7 @@ GET_EXACT_ROUTES: dict[str, str] = {
     "/api/tasks/blockers": "_handle_task_blockers",
     "/api/workers": "_handle_workers_get",
     "/api/v2/workers/nodes": "_handle_worker_nodes_get",
+    "/api/v2/workers/leases": "_handle_worker_leases_get",
 }
 
 POST_EXACT_ROUTES: dict[str, str] = {
@@ -34,6 +35,9 @@ POST_EXACT_ROUTES: dict[str, str] = {
     "/api/principals": "_handle_principals_post",
     "/api/v2/workers/register": "_handle_worker_node_register",
     "/api/v2/workers/heartbeat": "_handle_worker_node_heartbeat",
+    "/api/v2/workers/leases/acquire": "_handle_worker_lease_acquire",
+    "/api/v2/workers/leases/renew": "_handle_worker_lease_renew",
+    "/api/v2/workers/leases/release": "_handle_worker_lease_release",
 }
 
 

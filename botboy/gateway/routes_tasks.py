@@ -202,6 +202,98 @@ def create_task_router(ctx: GatewayAppContext) -> APIRouter:
             "summary": store.worker_node_summary(),
         }
 
+    @router.get("/api/v2/workers/leases")
+    async def worker_leases_list(
+        request: Request,
+        queue_name: str = "",
+        node_id: str = "",
+        task_id: str = "",
+        include_released: bool = False,
+        include_expired: bool = True,
+        limit: int = 100,
+    ):
+        ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
+        store = ctx.task_store_or_503()
+        return {
+            "available": True,
+            "leases": store.list_queue_leases(
+                queue_name=queue_name,
+                node_id=node_id,
+                task_id=task_id,
+                include_released=include_released,
+                include_expired=include_expired,
+                limit=max(1, min(int(limit or 100), 500)),
+            ),
+            "summary": store.queue_summary(),
+        }
+
+    @router.post("/api/v2/workers/leases/acquire")
+    async def worker_lease_acquire(request: Request):
+        principal = ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
+        store = ctx.task_store_or_503()
+        try:
+            payload = await request.json()
+        except ValueError:
+            payload = {}
+        metadata = payload.get("metadata")
+        try:
+            lease = store.acquire_queue_lease(
+                queue_name=str(payload.get("queue_name", "")).strip(),
+                node_id=str(payload.get("node_id", "")).strip(),
+                task_id=str(payload.get("task_id", "")).strip(),
+                principal=principal or "anonymous",
+                request_id=getattr(request.state, "request_id", ""),
+                lease_ttl_seconds=int(payload.get("lease_ttl_seconds", 0) or 0),
+                metadata=metadata if isinstance(metadata, dict) else None,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not lease:
+            raise HTTPException(status_code=409, detail="Queue lease unavailable")
+        return {"available": True, "acquired": True, "lease": lease, "summary": store.queue_summary()}
+
+    @router.post("/api/v2/workers/leases/renew")
+    async def worker_lease_renew(request: Request):
+        principal = ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
+        store = ctx.task_store_or_503()
+        try:
+            payload = await request.json()
+        except ValueError:
+            payload = {}
+        try:
+            lease = store.renew_queue_lease(
+                str(payload.get("lease_id", "")).strip(),
+                principal=principal or "anonymous",
+                request_id=getattr(request.state, "request_id", ""),
+                lease_ttl_seconds=int(payload.get("lease_ttl_seconds", 0) or 0),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not lease:
+            raise HTTPException(status_code=404, detail="Queue lease not renewable")
+        return {"available": True, "renewed": True, "lease": lease, "summary": store.queue_summary()}
+
+    @router.post("/api/v2/workers/leases/release")
+    async def worker_lease_release(request: Request):
+        principal = ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
+        store = ctx.task_store_or_503()
+        try:
+            payload = await request.json()
+        except ValueError:
+            payload = {}
+        try:
+            lease = store.release_queue_lease(
+                str(payload.get("lease_id", "")).strip(),
+                principal=principal or "anonymous",
+                request_id=getattr(request.state, "request_id", ""),
+                reason=str(payload.get("reason", "")).strip(),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not lease:
+            raise HTTPException(status_code=404, detail="Queue lease not found")
+        return {"available": True, "released": True, "lease": lease, "summary": store.queue_summary()}
+
     @router.post("/api/v2/workers/register")
     async def worker_node_register(request: Request):
         ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)

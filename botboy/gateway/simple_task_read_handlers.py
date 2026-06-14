@@ -245,6 +245,38 @@ def handle_worker_nodes_get(handler, params: dict) -> None:
     )
 
 
+def handle_worker_leases_get(handler, params: dict) -> None:
+    if handler._ensure_access(require_auth=handler.auth_enabled) is None:
+        return
+    store = handler._task_store()
+    if not store:
+        return
+    queue_name = str((params.get("queue_name") or [""])[0] or "").strip()
+    node_id = str((params.get("node_id") or [""])[0] or "").strip()
+    task_id = str((params.get("task_id") or [""])[0] or "").strip()
+    include_released = str((params.get("include_released") or ["false"])[0]).lower() in {"1", "true", "yes"}
+    include_expired = str((params.get("include_expired") or ["true"])[0]).lower() not in {"0", "false", "no"}
+    try:
+        limit = max(1, min(int((params.get("limit") or ["100"])[0] or 100), 500))
+    except (TypeError, ValueError):
+        handler._json({"error": "Invalid limit"}, 400)
+        return
+    handler._json(
+        {
+            "available": True,
+            "leases": store.list_queue_leases(
+                queue_name=queue_name,
+                node_id=node_id,
+                task_id=task_id,
+                include_released=include_released,
+                include_expired=include_expired,
+                limit=limit,
+            ),
+            "summary": store.queue_summary(),
+        }
+    )
+
+
 def handle_worker_detail(handler, worker_id: str) -> None:
     if handler._ensure_access(require_auth=handler.auth_enabled) is None:
         return

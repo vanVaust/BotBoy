@@ -14,6 +14,7 @@ from botboy.gateway.simple_task_read_handlers import (
     handle_trace_detail,
     handle_traces_get,
     handle_worker_detail,
+    handle_worker_leases_get,
     handle_worker_nodes_get,
     handle_workers_get,
 )
@@ -117,6 +118,12 @@ class _FakeStore:
 
     def worker_node_summary(self):
         return {"node_count": 1, "healthy_count": 1, "draining_count": 0, "queue_count": 1}
+
+    def list_queue_leases(self, **kwargs):
+        return [{"lease_id": "ql-1", "queue_name": "planner.node-1", "lease_status": "active"}]
+
+    def queue_summary(self):
+        return {"queue_count": 1, "lease_count": 1, "active_lease_count": 1}
 
 
 class _FakeBot:
@@ -234,12 +241,16 @@ class SimpleTaskReadHandlersTest(unittest.TestCase):
         workers_payload, _ = handler.json_payloads[-1]
         handle_worker_nodes_get(handler, {})
         worker_nodes_payload, _ = handler.json_payloads[-1]
+        handle_worker_leases_get(handler, {"queue_name": ["planner.node-1"]})
+        worker_leases_payload, _ = handler.json_payloads[-1]
         handle_worker_detail(handler, "planner")
         worker_payload, _ = handler.json_payloads[-1]
         self.assertTrue(merge_payload["merge"]["decorated"])
         self.assertEqual(blockers_payload["total"], 1)
         self.assertEqual(workers_payload["worker_count"], 1)
         self.assertEqual(worker_nodes_payload["summary"]["node_count"], 1)
+        self.assertEqual(worker_leases_payload["summary"]["active_lease_count"], 1)
+        self.assertEqual(worker_leases_payload["leases"][0]["lease_id"], "ql-1")
         self.assertEqual(worker_payload["worker"]["worker_id"], "planner")
         self.assertEqual(worker_payload["task_count"], 1)
 
