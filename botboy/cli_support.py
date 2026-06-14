@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -35,6 +36,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     worker_p = subparsers.add_parser("worker", help="Worker and worker-node commands")
     worker_p.add_argument("worker_cmd", nargs="+", help="Worker sub-command to execute")
+
+    security_p = subparsers.add_parser("security", help="Security and deployment readiness checks")
+    security_p.add_argument("security_cmd", choices=("remote-readiness",), help="Security check to run")
+    security_p.add_argument("host", nargs="?", default=default_bind_host(), help="Bind host to assess")
+    security_p.add_argument("--port", type=int, default=8765, help="Bind port to assess")
+    security_p.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
     eval_p = subparsers.add_parser("evals", help="Run eval/replay baseline")
     eval_p.add_argument("--wave", default="", help="Optional eval wave alias, e.g. 1, 2, wave_1, wave_2")
@@ -79,6 +86,14 @@ def build_eval_argv(args: argparse.Namespace) -> list[str]:
     if args.report_json:
         eval_argv.extend(["--report-json", args.report_json])
     return eval_argv
+
+
+def format_security_readiness_output(report: dict, *, as_json: bool = False) -> str:
+    if as_json:
+        return json.dumps(report, indent=2, sort_keys=True)
+    from botboy.gateway.security import format_remote_readiness_report
+
+    return format_remote_readiness_report(report)
 
 
 def resolve_init_config_path() -> Path:

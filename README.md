@@ -56,6 +56,8 @@ Remote-/Auth-Readiness vor einem nicht-lokalen Betrieb:
 python -m botboy security remote-readiness 0.0.0.0
 ```
 
+Ein nicht-lokaler Gateway-Bind wie `0.0.0.0` startet fail-closed, solange Auth, stabiler JWT-Secret, nicht-wildcard CORS und Rate-Limit nicht aktiv sind. MCP-HTTP startet bei nicht-lokalem Bind nur mit `BOTBOY_MCP_HTTP_TOKEN`.
+
 ## Release-Verifikation
 
 Lokaler Release-Smoke:
@@ -153,6 +155,7 @@ Der aktuelle reproduzierbare Release-Stand steht in `botboy/data/STATUS_SNAPSHOT
 - Das Release-Eval-Bundle ist absichtlich klein und dient als reproduzierbarer Smoke, nicht als Dev-Vollsuite.
 - Der Build-/Install-Acceptance-Pfad kann weiterhin direkt ueber `botboy.release_acceptance` oder CI gefahren werden; die normale lokale Vollsuite deckt ihn jetzt ebenfalls mit ab.
 - Login-Endpunkte fallen jetzt fail-closed: es gibt keinen Development-JWT-Fallback mehr, und Credential-/API-Key-Stores weichen bei Oeffnungsfehlern nicht mehr still auf `:memory:` aus.
+- Nicht-lokale Gateway-Binds und MCP-HTTP sind fail-closed: lokale Defaults bleiben entwicklungsfreundlich, Remote-Betrieb muss explizit abgesichert werden.
 - Die UI-Acceptance deckt jetzt zusaetzlich den Live-`/api/dashboard`-Vertrag in FastAPI und stdlib ab; `web/index.html` ist die kanonische Control-Center-Surface, `web/dashboard.html` bleibt die Legacy-Dashboard-Seite.
 - WebSocket- und stdlib-Shutdown-Randpfade sind weiter verengt; `routes_ws.py` behandelt nur noch echte Laufzeit-/Nutzfehler fail-closed, und `simple_server_runtime.py` ruft `shutdown()` nicht mehr unnoetig ohne laufenden Serving-Thread auf.
 - Die erste `v2`-Worker-Fabric-Scheibe ist jetzt vorhanden: additive Task-Store-Migrationen, persistente Worker-Nodes und Execution-Queues, `worker node ...`-CLI-Kommandos sowie versionierte `/api/v2/workers/*`-Endpunkte in FastAPI und stdlib.

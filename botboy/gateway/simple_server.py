@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
-from botboy.gateway.security import default_bind_host, origin_allowed
+from botboy.gateway.security import default_bind_host, origin_allowed, validate_remote_gateway_readiness
 from botboy.gateway.secrets import PrincipalStore, SecretStore
 from botboy.gateway.simple_handler_surface import SimpleHandlerSurface
 from botboy.gateway.simple_routing import (
@@ -196,6 +196,7 @@ class SimpleHTTPServer:
         self.bot = bot
         self.host = host
         self.port = port
+        validate_remote_gateway_readiness(getattr(bot, "config", None), host=self.host, port=self.port, surface="gateway")
         self._runtime = create_simple_server_runtime(
             SimpleAPIHandler,
             host=self.host,

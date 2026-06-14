@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from botboy.gateway.security import default_bind_host, resolve_cors_origins
+from botboy.gateway.security import default_bind_host, resolve_cors_origins, validate_remote_gateway_readiness
 from botboy.gateway.app_context import GatewayAppContext
 from botboy.gateway.dashboard_payload import enrich_dashboard_payload as shared_enrich_dashboard_payload
 from botboy.gateway.merge_actions import (
@@ -167,6 +167,7 @@ def create_app(bot, *, host: str = default_bind_host(), port: int = 8765) -> Any
 
     config = getattr(bot, "config", None)
     security = getattr(config, "security", None)
+    validate_remote_gateway_readiness(config, host=host, port=port, surface="gateway")
     auth_enabled = bool(getattr(security, "enable_auth", False))
 
     jwt_secret = ""

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 from botboy.cli_support import (
     build_eval_argv,
     format_modules_output,
+    format_security_readiness_output,
     resolve_exec_command,
     resolve_init_config_path,
     run_release_smoke,
@@ -53,6 +54,23 @@ def handle_static_command(
 
     if args.command == "test":
         return run_release_smoke(Path(__file__).resolve().parent.parent)
+
+    if args.command == "security":
+        if args.security_cmd == "remote-readiness":
+            from botboy.core.config import BotBoyConfig
+            from botboy.gateway.security import build_remote_readiness_report
+
+            config = BotBoyConfig.load()
+            report = build_remote_readiness_report(
+                config,
+                host=args.host,
+                port=args.port,
+                surface="gateway",
+                require_jwt_secret=True,
+            )
+            print(format_security_readiness_output(report, as_json=args.json))
+            return 0 if report["ok"] else 2
+        return 2
 
     return None
 

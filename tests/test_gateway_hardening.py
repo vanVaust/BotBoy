@@ -51,10 +51,10 @@ def _load_task_router():
     return create_task_router
 
 
-def _make_auth_config(*, enable_auth: bool) -> SimpleNamespace:
+def _make_auth_config(*, enable_auth: bool, rate_limit_enabled: bool = False) -> SimpleNamespace:
     security = SimpleNamespace(
         enable_auth=enable_auth,
-        rate_limit_enabled=False,
+        rate_limit_enabled=rate_limit_enabled,
         auth_api_keys_enabled=True,
         jwt_secret="stable-secret-for-gateway-hardening-0123",
     )
@@ -178,6 +178,33 @@ class GatewayHardeningTest(unittest.TestCase):
         self.assertEqual(api_key_attempts, ["broken-api-keys.db"])
         self.assertEqual(principal_attempts, ["broken-principals.db"])
 
+    def test_fastapi_rejects_nonlocal_bind_without_auth(self) -> None:
+        create_app = _load_create_app()
+        bot = _dummy_gateway_bot(_make_auth_config(enable_auth=False))
+
+        with self.assertRaises(RuntimeError) as ctx:
+            create_app(bot, host="0.0.0.0", port=8765)
+
+        self.assertIn("BotBoy remote readiness: FAIL", str(ctx.exception))
+        self.assertIn("Authentication must be enabled", str(ctx.exception))
+
+    def test_fastapi_rejects_nonlocal_bind_without_rate_limit(self) -> None:
+        create_app = _load_create_app()
+        bot = _dummy_gateway_bot(_make_auth_config(enable_auth=True, rate_limit_enabled=False))
+
+        with self.assertRaises(RuntimeError) as ctx:
+            create_app(bot, host="0.0.0.0", port=8765)
+
+        self.assertIn("rate_limit", str(ctx.exception))
+
+    def test_fastapi_allows_nonlocal_bind_with_remote_policy_satisfied(self) -> None:
+        create_app = _load_create_app()
+        bot = _dummy_gateway_bot(_make_auth_config(enable_auth=True, rate_limit_enabled=True))
+
+        app = create_app(bot, host="0.0.0.0", port=8765)
+
+        self.assertTrue(app.state.security_enabled)
+
     def test_stdlib_store_bootstrap_is_fail_closed_when_auth_enabled(self) -> None:
         bot = _dummy_gateway_bot(_make_auth_config(enable_auth=True))
         api_key_attempts: list[str] = []
@@ -205,6 +232,15 @@ class GatewayHardeningTest(unittest.TestCase):
 
         self.assertEqual(api_key_attempts, ["broken-api-keys.db"])
         self.assertEqual(principal_attempts, ["broken-principals.db"])
+
+    def test_stdlib_rejects_nonlocal_bind_without_auth(self) -> None:
+        bot = _dummy_gateway_bot(_make_auth_config(enable_auth=False))
+
+        with self.assertRaises(RuntimeError) as ctx:
+            SimpleHTTPServer(bot, host="0.0.0.0", port=0)
+
+        self.assertIn("BotBoy remote readiness: FAIL", str(ctx.exception))
+        self.assertIn("Authentication must be enabled", str(ctx.exception))
 
     def test_fastapi_store_bootstrap_does_not_fallback_to_memory_when_auth_disabled(self) -> None:
         create_app = _load_create_app()
