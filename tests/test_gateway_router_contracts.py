@@ -228,7 +228,7 @@ class GatewayRouterContractsTest(unittest.TestCase):
         create_app = _load_create_app()
         bot = self._make_bot()
         app = create_app(bot, host="127.0.0.1", port=8765)
-        paths = {route.path for route in app.routes}
+        paths = {route.path for route in app.routes if hasattr(route, "path")}
 
         self.assertTrue(
             {

@@ -4,6 +4,22 @@ import mimetypes
 from pathlib import Path
 
 
+_MIME_OVERRIDES = {
+    ".css": "text/css",
+    ".html": "text/html",
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+}
+
+
+def _content_type(path: Path) -> str:
+    override = _MIME_OVERRIDES.get(path.suffix.lower())
+    if override:
+        return override
+    mime, _ = mimetypes.guess_type(str(path))
+    return mime or "application/octet-stream"
+
+
 def serve_static(handler, path: str) -> None:
     web_dir = getattr(handler, "web_dir", None)
     if not web_dir:
@@ -17,10 +33,9 @@ def serve_static(handler, path: str) -> None:
     if not requested.is_file():
         handler._json({"error": "Not found"}, 404)
         return
-    mime, _ = mimetypes.guess_type(str(requested))
     handler._bytes(
         requested.read_bytes(),
-        content_type=mime or "application/octet-stream",
+        content_type=_content_type(requested),
         status=200,
     )
 
