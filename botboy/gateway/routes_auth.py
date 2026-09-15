@@ -78,6 +78,33 @@ def create_auth_router(ctx: GatewayAppContext) -> APIRouter:
         token_info = ctx.auth.verify(refresh_token, expected_type="refresh")
         if not token_info:
             raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+        if token_info.credential_source == "secret_store":
+            key_store = ctx.get_api_key_store()
+            active = False
+            if key_store is not None and hasattr(key_store, "_get_conn"):
+                row = key_store._get_conn().execute(
+                    "SELECT role, org_id, expires_at FROM api_keys WHERE key_id = ? AND revoked = 0",
+                    (token_info.principal_id,),
+                ).fetchone()
+                if row:
+                    active = True
+                    expires_at = row["expires_at"]
+                    if expires_at:
+                        try:
+                            from datetime import datetime, timezone
+                            expiry = datetime.fromisoformat(str(expires_at))
+                            if expiry.tzinfo is None:
+                                expiry = expiry.replace(tzinfo=timezone.utc)
+                            active = expiry > datetime.now(timezone.utc)
+                        except ValueError:
+                            active = False
+                    if active and str(row["org_id"] or "default") != str(token_info.org_id or "default"):
+                        active = False
+                    if active and str(row["role"] or "") not in {str(role) for role in token_info.roles}:
+                        active = False
+            if not active:
+                ctx.auth.revoke_token(refresh_token)
+                raise HTTPException(status_code=401, detail="API credential is revoked or expired")
         principal_store = ctx.bootstrap_principal_store()
         if principal_store:
             principal_record = principal_store.get_principal(token_info.principal_id)
@@ -127,7 +154,8 @@ def create_auth_router(ctx: GatewayAppContext) -> APIRouter:
         if ctx.auth_enabled and not _is_system():
             org_id = current_gateway_org()
             principals = [principal for principal in principals if str(getattr(principal, "org_id", "default") or "default") == org_id]
-        return {"principals": [ctx.principal_payload(principal) for principal in principals], "total": len(principals), "stats": store.stats()}
+        stats = store.stats() if (not ctx.auth_enabled or _is_system()) else {"total": len(principals), "active": sum(1 for p in principals if not p.disabled), "disabled": sum(1 for p in principals if p.disabled)}
+        return {"principals": [ctx.principal_payload(principal) for principal in principals], "total": len(principals), "stats": stats}
 
     @router.post("/api/principals")
     async def principal_upsert(request: Request):
