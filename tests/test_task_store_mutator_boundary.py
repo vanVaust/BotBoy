@@ -33,6 +33,11 @@ class TaskStoreMutatorBoundaryTests(unittest.TestCase):
         _current_roles.reset(self.roles_token)
         _current_principal.reset(self.principal_token)
 
+    def test_gateway_boundary_patches_are_installed(self):
+        for name in ("start_task", "finish_task", "add_event", "add_artifact", "link_artifacts_from_task"):
+            with self.subTest(name=name):
+                self.assertNotEqual(getattr(type(self.proxy), name).__module__, "botboy.gateway.app_context")
+
     def test_raw_artifact_mutators_are_blocked(self):
         for name in ("add_artifact", "link_artifacts_from_task"):
             with self.subTest(name=name):
