@@ -26,7 +26,7 @@ def _collect_package_data(relative_root: str) -> list[str]:
             continue
         if file_path.name in IGNORED_PACKAGE_FILENAMES:
             continue
-        if file_path.suffix in IGNORED_PACKAGE_SUFFIXES:
+        if file_path.suffix in IGNO_PACKAGE_SUFFIXES:
             continue
         package_files.append(str(relative).replace("\\", "/"))
     return package_files
@@ -48,11 +48,9 @@ setup(
     install_requires=["pyyaml>=6.0"],
     extras_require={
         "standard": [
-            # FastAPI 0.140.x is currently incompatible with BotBoy's
-            # dynamically-created route functions and postponed annotations;
-            # keep the known-good 0.139.x line until the route annotations
-            # are made runtime-resolvable without ForwardRef failures.
-            "fastapi>=0.109.0,<0.140.0",
+            # 0.139.x is the latest FastAPI line before the OpenAPI/ForwardRef
+            # regression observed with BotBoy's postponed route annotations.
+            "fastapi>=0.109.0,<0.139.0",
             "uvicorn[standard]>=0.27.0",
             "websockets>=12.0",
             "aiohttp>=3.9.0",
