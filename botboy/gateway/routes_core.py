@@ -198,14 +198,9 @@ def create_core_router(ctx: GatewayAppContext) -> APIRouter:
         if _is_system(roles):
             records, total = bot.trace_store.list_runs(limit=safe_limit, offset=safe_offset, principal=principal, request_id=request_id, status=status)
             return {"runs": [record.to_dict() for record in records], "total": total, "limit": safe_limit, "offset": safe_offset}
-
         if "admin" not in roles:
             records, total = bot.trace_store.list_runs(limit=safe_limit, offset=safe_offset, principal=current_principal, request_id=request_id, status=status)
             return {"runs": [record.to_dict() for record in records], "total": total, "limit": safe_limit, "offset": safe_offset}
-
-        # Tenant admins need cross-principal visibility within their tenant, but
-        # TraceStore itself is not yet tenant-aware. Fetch a bounded candidate
-        # window, then authorize each trace through the task-store tenant boundary.
         candidates, _candidate_total = bot.trace_store.list_runs(limit=500, offset=0, principal=None, request_id=request_id, status=status)
         visible = []
         for record in candidates:
@@ -264,9 +259,10 @@ def create_core_router(ctx: GatewayAppContext) -> APIRouter:
         if not name or not schedule:
             raise HTTPException(status_code=400, detail="Missing 'name' or 'schedule'")
         scoped_payload = dict(payload.get("payload") or {})
-        scoped_payload["_botboy_security"] = {"principal_id": principal, "org_id": org}
+        scoped_payload.pop("_botboy_security", None)
+        security_context = {"principal_id": principal, "org_id": org}
         try:
-            task_id = bot.scheduler.add(name=name, schedule=schedule, task_type=payload.get("task_type", "generic"), payload=scoped_payload)
+            task_id = bot.scheduler.add(name=name, schedule=schedule, task_type=payload.get("task_type", "generic"), payload=scoped_payload, security_context=security_context)
             return {"task_id": task_id, "name": name, "schedule": schedule}
         except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
             raise HTTPException(status_code=400, detail=str(exc))
