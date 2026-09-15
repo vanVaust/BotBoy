@@ -66,6 +66,85 @@ class TaskSecurityStoreTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def _context(self, task_id: str, **changes) -> SecurityContext:
+        values = {
+            "principal_id": "alice",
+            "org_id": "org-a",
+            "roles": frozenset({"operator"}),
+            "scopes": frozenset({"tasks:read"}),
+            "capabilities": frozenset({"task.read", "task.execute"}),
+            "task_id": task_id,
+            "authorization_version": "1",
+        }
+        values.update(changes)
+        return SecurityContext(**values)
+
+    def test_existing_context_cannot_change_owner_or_tenant(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TaskStore(db_path=f"{tmp}/botboy.db")
+            try:
+                task = store.create_task(title="security test", principal="alice", org_id="org-a")
+                security = TaskSecurityStore(store)
+                security.save(self._context(task.task_id))
+                with self.assertRaises(ValueError):
+                    security.save(self._context(task.task_id, principal_id="bob"))
+                with self.assertRaises(ValueError):
+                    security.save(self._context(task.task_id, org_id="org-b"))
+            finally:
+                store.close()
+
+    def test_existing_context_cannot_gain_privileges(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TaskStore(db_path=f"{tmp}/botboy.db")
+            try:
+                task = store.create_task(title="security test", principal="alice", org_id="org-a")
+                security = TaskSecurityStore(store)
+                security.save(self._context(task.task_id))
+                with self.assertRaises(ValueError):
+                    security.save(self._context(task.task_id, capabilities=frozenset({"task.read", "task.execute", "admin"})))
+                with self.assertRaises(ValueError):
+                    security.save(self._context(task.task_id, roles=frozenset({"operator", "admin"})))
+                with self.assertRaises(ValueError):
+                    security.save(self._context(task.task_id, scopes=frozenset({"tasks:read", "tasks:write"})))
+            finally:
+                store.close()
+
+    def test_authorization_version_cannot_move_backwards(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TaskStore(db_path=f"{tmp}/botboy.db")
+            try:
+                task = store.create_task(title="security test", principal="alice", org_id="org-a")
+                security = TaskSecurityStore(store)
+                security.save(self._context(task.task_id, authorization_version="7"))
+                with self.assertRaises(ValueError):
+                    security.save(self._context(task.task_id, authorization_version="6"))
+            finally:
+                store.close()
+
+    def test_existing_approval_binding_cannot_be_replaced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TaskStore(db_path=f"{tmp}/botboy.db")
+            try:
+                task = store.create_task(title="security test", principal="alice", org_id="org-a")
+                security = TaskSecurityStore(store)
+                security.save(
+                    self._context(
+                        task.task_id,
+                        approval_id="approval-a",
+                        approval_scope=frozenset({"task.execute"}),
+                    )
+                )
+                with self.assertRaises(ValueError):
+                    security.save(
+                        self._context(
+                            task.task_id,
+                            approval_id="approval-b",
+                            approval_scope=frozenset({"task.execute"}),
+                        )
+                    )
+            finally:
+                store.close()
+
 
 if __name__ == "__main__":
     unittest.main()
