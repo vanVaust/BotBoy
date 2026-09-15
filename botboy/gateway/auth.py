@@ -217,6 +217,14 @@ class JWTAuth:
         self.revoke_jti(jti, payload.get("exp", 0))
         return True
 
+    @staticmethod
+    def _validated_org_id(payload: dict) -> Optional[str]:
+        """Return only an explicit, non-empty tenant claim; never infer one."""
+        org_id = payload.get("org_id")
+        if not isinstance(org_id, str) or not org_id.strip():
+            return None
+        return org_id.strip()
+
     def verify(self, token: str, expected_type: str = "access") -> Optional[TokenInfo]:
         payload = self._decode(token)
         if not payload:
@@ -235,8 +243,8 @@ class JWTAuth:
         roles = payload.get("roles", [])
         if not isinstance(roles, list):
             return None
-        org_id = payload.get("org_id", "default")
-        if not isinstance(org_id, str) or not org_id:
+        org_id = self._validated_org_id(payload)
+        if org_id is None:
             return None
         return TokenInfo(
             principal_id=principal_id,
@@ -262,14 +270,17 @@ class JWTAuth:
         if jti and self.is_revoked(jti):
             return None
         principal_id = payload.get("sub")
-        org_id = payload.get("org_id", "default")
-        if not isinstance(principal_id, str) or not principal_id or not isinstance(org_id, str) or not org_id:
+        org_id = self._validated_org_id(payload)
+        if not isinstance(principal_id, str) or not principal_id or org_id is None:
+            return None
+        roles = payload.get("roles", ["user"])
+        if not isinstance(roles, list):
             return None
         self.revoke_jti(jti, payload.get("exp", 0))
         return self.create_pair(
             AuthPrincipal(
                 principal_id=principal_id,
-                roles=list(payload.get("roles", ["user"])),
+                roles=list(roles),
                 principal_type=payload.get("ptype", "user"),
                 credential_source=payload.get("src", "jwt"),
                 display_name=payload.get("name", ""),
