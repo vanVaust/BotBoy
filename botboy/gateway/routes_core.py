@@ -13,73 +13,43 @@ def create_core_router(ctx: GatewayAppContext) -> APIRouter:
     bot = ctx.bot
 
     def _tenant_context(request: Request) -> tuple[str, str, set[str]]:
-        principal, roles = ctx.authorize_with_roles(
-            request.headers,
-            request.client.host if request.client else "",
-            require_auth=ctx.auth_enabled,
-        )
+        principal, roles = ctx.authorize_with_roles(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
         return str(principal or ""), current_gateway_org(), {str(role).lower() for role in (roles or [])}
 
-    def _is_tenant_admin(roles: set[str]) -> bool:
-        return "system" in roles or "admin" in roles
+    def _is_system(roles: set[str]) -> bool:
+        return "system" in roles
 
     def _memory_visible(memory: Any, *, principal: str, org: str, roles: set[str]) -> bool:
-        if _is_tenant_admin(roles):
-            return True
         metadata = getattr(memory, "metadata", None) or {}
         security = metadata.get("_botboy_security") if isinstance(metadata, dict) else None
         if not isinstance(security, dict):
             return False
-        return str(security.get("org_id", "")) == org and str(security.get("principal_id", "")) == principal
+        if str(security.get("org_id", "")) != org:
+            return _is_system(roles)
+        if _is_system(roles) or "admin" in roles:
+            return True
+        return str(security.get("principal_id", "")) == principal
 
     def _scoped_memory_metadata(metadata: Any, *, principal: str, org: str) -> dict:
         result = dict(metadata) if isinstance(metadata, dict) else {}
-        result["_botboy_security"] = {
-            "principal_id": principal,
-            "org_id": org,
-        }
+        result["_botboy_security"] = {"principal_id": principal, "org_id": org}
         return result
 
     def _scheduler_visible(task: Any, *, principal: str, org: str, roles: set[str]) -> bool:
-        if _is_tenant_admin(roles):
-            return True
         payload = dict(getattr(task, "payload", {}) or {})
         security = payload.get("_botboy_security")
         if not isinstance(security, dict):
-            return False
-        return str(security.get("org_id", "")) == org and str(security.get("principal_id", "")) == principal
+            return _is_system(roles)
+        if str(security.get("org_id", "")) != org:
+            return _is_system(roles)
+        return _is_system(roles) or "admin" in roles or str(security.get("principal_id", "")) == principal
 
     @router.get("/health")
     async def health():
-        response = {
-            "status": "healthy",
-            "version": bot.VERSION,
-            "mode": "fastapi",
-            "uptime_s": round(time.time() - getattr(bot, "_start_time", time.time()), 1),
-            "components": {
-                "memory": bool(bot.memory),
-                "skills": bool(bot.skills),
-                "cache": bool(bot.cache),
-                "scheduler": bool(bot.scheduler),
-                "history": bool(bot.history),
-                "trace_store": bool(getattr(bot, "trace_store", None)),
-                "llm": bool(bot.llm),
-                "router": bool(bot.router),
-                "archetypes": bool(bot.archetypes),
-            },
-            "security": {
-                "enable_auth": ctx.auth_enabled,
-                "rate_limit_enabled": bool(ctx.rate_limiter),
-                "auth_api_keys_enabled": bool(getattr(ctx.security, "auth_api_keys_enabled", True)),
-            },
-        }
+        response = {"status": "healthy", "version": bot.VERSION, "mode": "fastapi", "uptime_s": round(time.time() - getattr(bot, "_start_time", time.time()), 1), "components": {"memory": bool(bot.memory), "skills": bool(bot.skills), "cache": bool(bot.cache), "scheduler": bool(bot.scheduler), "history": bool(bot.history), "trace_store": bool(getattr(bot, "trace_store", None)), "llm": bool(bot.llm), "router": bool(bot.router), "archetypes": bool(bot.archetypes)}, "security": {"enable_auth": ctx.auth_enabled, "rate_limit_enabled": bool(ctx.rate_limiter), "auth_api_keys_enabled": bool(getattr(ctx.security, "auth_api_keys_enabled", True))}}
         if bot.cache:
             stats = bot.cache.stats()
-            response["cache"] = {
-                "hit_rate": round(stats.hit_rate, 3),
-                "size": stats.size,
-                "capacity": stats.capacity,
-            }
+            response["cache"] = {"hit_rate": round(stats.hit_rate, 3), "size": stats.size, "capacity": stats.capacity}
         return response
 
     @router.get("/metrics")
@@ -212,7 +182,7 @@ def create_core_router(ctx: GatewayAppContext) -> APIRouter:
         principal, org, roles = _tenant_context(request)
         if not bot.history:
             raise HTTPException(status_code=503, detail="History not available")
-        scoped_principal = None if _is_tenant_admin(roles) else principal
+        scoped_principal = None if ("system" in roles or "admin" in roles) else principal
         records, total = bot.history.list(limit=min(limit, 200), offset=offset, search=search, success=success, request_id=request_id, principal=scoped_principal, org_id=org)
         return {"records": [record.to_dict() for record in records], "total": total, "limit": limit, "offset": offset}
 
@@ -221,7 +191,7 @@ def create_core_router(ctx: GatewayAppContext) -> APIRouter:
         principal, org, roles = _tenant_context(request)
         if not bot.history:
             raise HTTPException(status_code=503, detail="History not available")
-        scoped_principal = None if _is_tenant_admin(roles) else principal
+        scoped_principal = None if ("system" in roles or "admin" in roles) else principal
         return bot.history.stats(principal=scoped_principal, org_id=org)
 
     @router.get("/api/scheduler")
