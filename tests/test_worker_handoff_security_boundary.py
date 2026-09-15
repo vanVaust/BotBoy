@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from botboy.gateway import app_context
+from botboy.gateway.app_context import _TaskStoreAuthorizationProxy
 from botboy.gateway.recovery_security import _secure_worker_child_creation
 from botboy.security_context import SecurityContext
 from botboy.task_security import TaskSecurityStore
@@ -96,6 +97,16 @@ class WorkerHandoffSecurityBoundaryTests(unittest.TestCase):
             self.assertEqual(getattr(ctx.exception, "status_code", None), 404)
         finally:
             app_context._current_principal.reset(token)
+
+    def test_authenticated_proxy_cannot_forward_raw_task_store_mutators(self) -> None:
+        proxy = _TaskStoreAuthorizationProxy(self.store, auth_enabled=True)
+        with self.assertRaises(Exception) as create_error:
+            proxy.create_task(title="forbidden", principal="attacker", org_id="tenant-a")
+        self.assertEqual(getattr(create_error.exception, "status_code", None), 403)
+
+        with self.assertRaises(Exception) as update_error:
+            proxy.update_task("missing", title="forbidden")
+        self.assertEqual(getattr(update_error.exception, "status_code", None), 403)
 
 
 if __name__ == "__main__":
