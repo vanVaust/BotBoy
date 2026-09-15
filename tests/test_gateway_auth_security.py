@@ -12,7 +12,6 @@ class GatewayAuthSecurityTest(unittest.TestCase):
     def test_jwt_verify_returns_none_for_invalid_base64_payload(self) -> None:
         auth = JWTAuth("x" * 32)
         token = "header.invalid***.sig"
-
         self.assertIsNone(auth.verify(token))
 
     def test_jwt_verify_returns_none_for_invalid_json_payload(self) -> None:
@@ -20,7 +19,6 @@ class GatewayAuthSecurityTest(unittest.TestCase):
         header = _b64url_encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
         payload = _b64url_encode(base64.urlsafe_b64encode(b"not-json"))
         token = f"{header}.{payload}.{auth._sign(header, payload)}"
-
         self.assertIsNone(auth.verify(token))
 
     def test_jwt_verify_returns_none_for_non_object_json_payload(self) -> None:
@@ -28,7 +26,6 @@ class GatewayAuthSecurityTest(unittest.TestCase):
         header = _b64url_encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
         payload = _b64url_encode(json.dumps(["not", "an", "object"]).encode())
         token = f"{header}.{payload}.{auth._sign(header, payload)}"
-
         self.assertIsNone(auth.verify(token))
 
     def test_verify_key_returns_false_for_malformed_hash_material(self) -> None:
@@ -39,7 +36,6 @@ class GatewayAuthSecurityTest(unittest.TestCase):
     def test_secret_store_validate_returns_none_for_non_string_key(self) -> None:
         store = SecretStore()
         self.addCleanup(store.close)
-
         self.assertIsNone(store.validate(None))  # type: ignore[arg-type]
         self.assertIsNone(store.validate("bbk_only_two_parts"))
 
@@ -50,7 +46,6 @@ class GatewayAuthSecurityTest(unittest.TestCase):
         conn = store._get_conn()
         conn.execute("UPDATE api_keys SET expires_at = ? WHERE key_id = ?", ("not-a-timestamp", key.key_id))
         conn.commit()
-
         self.assertIsNone(store.validate(key.full_key))
 
     def test_secret_store_rotate_returns_none_for_malformed_expiry(self) -> None:
@@ -60,27 +55,37 @@ class GatewayAuthSecurityTest(unittest.TestCase):
         conn = store._get_conn()
         conn.execute("UPDATE api_keys SET expires_at = ? WHERE key_id = ?", ("not-a-timestamp", key.key_id))
         conn.commit()
-
         self.assertIsNone(store.rotate(key.key_id))
+
+    def test_secret_store_validate_preserves_org_id(self) -> None:
+        store = SecretStore()
+        self.addCleanup(store.close)
+        key = store.generate(org_id="tenant-a")
+        validated = store.validate(key.full_key)
+        self.assertIsNotNone(validated)
+        self.assertEqual(validated.org_id, "tenant-a")
+
+    def test_secret_store_rotate_is_atomic_and_preserves_security_scope(self) -> None:
+        store = SecretStore()
+        self.addCleanup(store.close)
+        key = store.generate(role="worker", label="original", ttl_hours=1, org_id="tenant-a")
+        rotated = store.rotate(key.key_id, label="replacement")
+        self.assertIsNotNone(rotated)
+        self.assertNotEqual(rotated.key_id, key.key_id)
+        self.assertEqual(rotated.role, "worker")
+        self.assertEqual(rotated.org_id, "tenant-a")
+        self.assertIsNone(store.validate(key.full_key))
+        replacement = store.validate(rotated.full_key)
+        self.assertIsNotNone(replacement)
+        self.assertEqual(replacement.org_id, "tenant-a")
+        self.assertEqual(replacement.role, "worker")
 
     def test_jwt_revocation(self) -> None:
         auth = JWTAuth("x" * 32)
         pair = auth.create_pair("admin")
-        
-        # Verify works normally
         self.assertIsNotNone(auth.verify(pair.access_token))
-        
-        # Revoke the token
         self.assertTrue(auth.revoke_token(pair.access_token))
-        
-        # Verify should now fail (return None)
         self.assertIsNone(auth.verify(pair.access_token))
-        
-        # Verify works normally for refresh token
         self.assertIsNotNone(auth.refresh(pair.refresh_token))
-        
-        # Revoke the refresh token
         self.assertTrue(auth.revoke_token(pair.refresh_token))
-        
-        # Refresh should now fail
         self.assertIsNone(auth.refresh(pair.refresh_token))
