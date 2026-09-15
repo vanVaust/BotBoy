@@ -130,19 +130,16 @@ class GatewayAppContext:
             return principal, roles
 
         def scoped_approval_context(*args, **kwargs):
-            """Build approval context without trusting a client payload boolean.
+            """Reject client-payload approval while preserving explicit approval.
 
-            Gateway callers may still use an explicit approval header or an
-            authorized admin role. A route cannot manufacture approval merely
-            by passing {"approval": true} internally; this closes the task
-            resume path that previously did exactly that.
+            A route must not manufacture approval by passing {"approval": true}
+            internally. Explicit approval via the gateway approval header, or
+            an authorized admin role, remains supported.
             """
             context = dict(original_approval_context(*args, **kwargs) or {})
-            payload = args[1] if len(args) > 1 else kwargs.get("payload")
-            roles = current_gateway_roles()
-            admin = "admin" in {str(role).lower() for role in roles}
-            payload_granted = isinstance(payload, dict) and bool(payload.get("approval"))
-            if payload_granted and not admin:
+            if context.get("reason") == "payload" and "admin" not in {
+                str(role).lower() for role in current_gateway_roles()
+            }:
                 context["granted"] = False
                 context["explicit"] = False
                 context["reason"] = "payload_approval_rejected"
