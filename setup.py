@@ -48,7 +48,7 @@ setup(
     install_requires=["pyyaml>=6.0"],
     extras_require={
         "standard": [
-            "fastapi>=0.109.0,<0.141.0",
+            "fastapi>=0.109.0,<0.140.0",
             "uvicorn[standard]>=0.27.0",
             "websockets>=12.0",
             "aiohttp>=3.9.0",
