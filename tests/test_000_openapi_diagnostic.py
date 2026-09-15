@@ -1,3 +1,4 @@
+import inspect
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -29,22 +30,32 @@ class OpenAPIDiagnosticTest(unittest.TestCase):
         self.assertTrue(bot.initialize())
         try:
             app = create_app(bot, host="127.0.0.1", port=8765)
-            import fastapi.openapi.utils as openapi_utils
+            import fastapi.routing as routing
 
-            original = openapi_utils.get_definitions
+            original = routing._build_dependant_with_parameterless_dependencies
             offenders = []
 
-            def debug_get_definitions(*, fields, **kwargs):
+            def debug_build(*, path, call, dependencies):
+                dependant = original(path=path, call=call, dependencies=dependencies)
+                fields = list(dependant.path_params) + list(dependant.query_params) + list(dependant.header_params) + list(dependant.cookie_params) + list(dependant.body_params)
                 for field in fields:
-                    text = repr(field)
-                    if "Request" in text or "ForwardRef" in text:
-                        offenders.append((getattr(field, "name", ""), text))
-                return original(fields=fields, **kwargs)
+                    if getattr(field, "name", None) == "request":
+                        offenders.append({
+                            "path": path,
+                            "endpoint": getattr(call, "__qualname__", repr(call)),
+                            "module": getattr(call, "__module__", None),
+                            "annotations": repr(getattr(call, "__annotations__", {})),
+                            "signature": repr(inspect.signature(call, eval_str=False)),
+                            "type_": repr(getattr(field, "type_", None)),
+                            "annotation": repr(getattr(field, "annotation", None)),
+                            "field_info_annotation": repr(getattr(getattr(field, "field_info", None), "annotation", None)),
+                        })
+                return dependant
 
-            with patch.object(openapi_utils, "get_definitions", side_effect=debug_get_definitions):
+            with patch.object(routing, "_build_dependant_with_parameterless_dependencies", side_effect=debug_build):
                 try:
                     app.openapi()
                 except Exception as exc:
-                    self.fail(f"OpenAPI failed; candidate fields={offenders!r}; exception={exc!r}")
+                    self.fail(f"OpenAPI failed; request fields={offenders!r}; exception={exc!r}")
         finally:
             bot.shutdown()
