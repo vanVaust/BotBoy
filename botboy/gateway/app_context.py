@@ -50,11 +50,19 @@ class _TaskStoreAuthorizationProxy:
         return bool(self._roles() & {"admin", "system"})
 
     def _authorized(self, record: Any) -> bool:
-        if record is None or self._is_admin():
-            return record is not None
-        principal = current_gateway_principal()
+        if record is None:
+            return False
+        if not self._auth_enabled:
+            return True
+        roles = self._roles()
         org_id = current_gateway_org()
-        return bool(principal) and str(getattr(record, "principal", "")) == principal and str(getattr(record, "org_id", "default") or "default") == org_id
+        record_org = str(getattr(record, "org_id", "default") or "default")
+        if "system" in roles:
+            return True
+        if "admin" in roles:
+            return record_org == org_id
+        principal = current_gateway_principal()
+        return bool(principal) and str(getattr(record, "principal", "")) == principal and record_org == org_id
 
     def _require_worker_control(self) -> None:
         if not self._is_worker():
@@ -77,14 +85,18 @@ class _TaskStoreAuthorizationProxy:
         return record if self._authorized(record) else None
 
     def list_tasks(self, **kwargs):
-        if not self._auth_enabled or self._is_admin():
+        if not self._auth_enabled:
             return self._store.list_tasks(**kwargs)
-        principal = current_gateway_principal()
+        roles = self._roles()
+        if "system" in roles:
+            return self._store.list_tasks(**kwargs)
         org_id = current_gateway_org()
+        principal = current_gateway_principal()
         if not principal:
             return [], 0
         scoped = dict(kwargs)
-        scoped["principal"] = principal
+        if "admin" not in roles:
+            scoped["principal"] = principal
         records, total = self._store.list_tasks(**scoped)
         records = [record for record in records if str(getattr(record, "org_id", "default") or "default") == org_id]
         return records, len(records) if total != len(records) else total
@@ -133,11 +145,8 @@ class _TaskStoreAuthorizationProxy:
         metadata = node.get("metadata") or {}
         owner = str(metadata.get("owner_principal", "") or "")
         worker_id = str(node.get("worker_id", "") or "")
-        # A node registered/reassigned by an administrator remains operable by
-        # the worker identity it is bound to. The explicit owner principal is
-        # still authoritative for non-worker identities, while worker_id binds
-        # the actual worker process to its assigned node.
-        return bool(principal) and (owner == principal or worker_id == principal)
+        node_org = str(metadata.get("org_id", "default") or "default")
+        return bool(principal) and node_org == current_gateway_org() and (owner == principal or worker_id == principal)
 
     def register_worker_node(self, *args, **kwargs):
         self._require_worker_control()
@@ -154,6 +163,7 @@ class _TaskStoreAuthorizationProxy:
         metadata = kwargs.get("metadata")
         metadata = dict(metadata) if isinstance(metadata, dict) else {}
         metadata.setdefault("owner_principal", current_gateway_principal())
+        metadata.setdefault("org_id", current_gateway_org())
         kwargs["metadata"] = metadata
         return self._store.register_worker_node(*args, **kwargs)
 
@@ -164,6 +174,11 @@ class _TaskStoreAuthorizationProxy:
             return None
         if not self._is_admin() and not self._node_owned_by_current_principal(node):
             return None
+        if self._is_admin() and not self._auth_enabled:
+            return self._store.heartbeat_worker_node(node_id, *args, **kwargs)
+        metadata = node.get("metadata") or {}
+        if "system" not in self._roles() and str(metadata.get("org_id", "default") or "default") != current_gateway_org():
+            return None
         return self._store.heartbeat_worker_node(node_id, *args, **kwargs)
 
     def drain_worker_node(self, node_id: str, *args, **kwargs):
@@ -172,6 +187,9 @@ class _TaskStoreAuthorizationProxy:
         if node is None:
             return None
         if not self._is_admin() and not self._node_owned_by_current_principal(node):
+            return None
+        metadata = node.get("metadata") or {}
+        if self._auth_enabled and "system" not in self._roles() and str(metadata.get("org_id", "default") or "default") != current_gateway_org():
             return None
         return self._store.drain_worker_node(node_id, *args, **kwargs)
 
@@ -203,6 +221,10 @@ class _TaskStoreAuthorizationProxy:
 
     def list_worker_nodes(self, *args, **kwargs):
         self._require_worker_control()
+        if self._auth_enabled and "system" not in self._roles():
+            records = self._store.list_worker_nodes(*args, **kwargs)
+            org_id = current_gateway_org()
+            return [node for node in records if str((node.get("metadata") or {}).get("org_id", "default") or "default") == org_id]
         return self._store.list_worker_nodes(*args, **kwargs)
 
     def list_execution_queues(self, *args, **kwargs):
@@ -264,7 +286,21 @@ class GatewayAppContext:
         original_approval_context = self.approval_context
         original_store_factory = self.task_store_or_503
 
-        def resolve_org(principal: str) -> str:
+        def _headers_from_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+            if args:
+                return args[0]
+            return kwargs.get("headers")
+
+        def resolve_org(principal: str, headers: Any = None) -> str:
+            if principal and headers is not None:
+                try:
+                    token_value = headers.get("authorization") or headers.get("Authorization") or ""
+                    token = self.auth.extract_bearer_token(token_value)
+                    token_info = self.auth.verify(token) if token else None
+                    if token_info and token_info.principal_id == principal:
+                        return token_info.org_id
+                except Exception:
+                    pass
             try:
                 store = self.get_api_key_store()
                 if store is not None and hasattr(store, "_get_conn"):
@@ -283,14 +319,14 @@ class GatewayAppContext:
             principal = original_authorize(*args, **kwargs)
             _current_principal.set(str(principal or ""))
             _current_roles.set(())
-            _current_org.set(resolve_org(str(principal or "")))
+            _current_org.set(resolve_org(str(principal or ""), _headers_from_args(args, kwargs)))
             return principal
 
         def scoped_authorize_with_roles(*args, **kwargs):
             principal, roles = original_authorize_with_roles(*args, **kwargs)
             _current_principal.set(str(principal or ""))
             _current_roles.set(tuple(str(role) for role in (roles or [])))
-            _current_org.set(resolve_org(str(principal or "")))
+            _current_org.set(resolve_org(str(principal or ""), _headers_from_args(args, kwargs)))
             return principal, roles
 
         def scoped_approval_context(*args, **kwargs):
