@@ -24,10 +24,10 @@ class _Store:
 
 def _service(records, children=None):
     config = SimpleNamespace(security=SimpleNamespace(enable_auth=True))
-    bot = SimpleNamespace(config=config)
+    store = _Store(records, children)
+    bot = SimpleNamespace(config=config, task_store=store)
     service = object.__new__(TaskMergeService)
     service.bot = bot
-    service._task_store = _Store(records, children)
     return service
 
 
