@@ -13,7 +13,12 @@ from botboy.security_context import SecurityContext
 
 
 class TaskSecurityStore:
-    """Persist and reconstruct SecurityContext records using the task DB."""
+    """Persist and reconstruct SecurityContext records using the task DB.
+
+    Existing security state is monotonic: a later write may retain or reduce
+    privileges, but it may not silently change task ownership/tenant or expand
+    roles, scopes, capabilities, or approval scope.
+    """
 
     def __init__(self, task_store: Any) -> None:
         self.task_store = task_store
@@ -32,12 +37,53 @@ class TaskSecurityStore:
         )
         conn.commit()
 
+    @staticmethod
+    def _validate_transition(previous: SecurityContext, current: SecurityContext) -> None:
+        if previous.task_id != current.task_id:
+            raise ValueError("SecurityContext task_id cannot change")
+        if previous.principal_id != current.principal_id:
+            raise ValueError("SecurityContext principal cannot change")
+        if previous.org_id != current.org_id:
+            raise ValueError("SecurityContext org cannot change")
+        if not previous.roles.issuperset(current.roles):
+            raise ValueError("SecurityContext roles cannot be expanded")
+        if not previous.scopes.issuperset(current.scopes):
+            raise ValueError("SecurityContext scopes cannot be expanded")
+        if not previous.capabilities.issuperset(current.capabilities):
+            raise ValueError("SecurityContext capabilities cannot be expanded")
+        if not previous.approval_scope.issuperset(current.approval_scope):
+            raise ValueError("SecurityContext approval scope cannot be expanded")
+        try:
+            previous_version = int(previous.authorization_version)
+            current_version = int(current.authorization_version)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("SecurityContext authorization_version must be numeric") from exc
+        if current_version < previous_version:
+            raise ValueError("SecurityContext authorization version cannot decrease")
+
+        # An approval is a separate, server-issued grant. Persisting a context
+        # must never manufacture one or replace one with a different grant.
+        if previous.approval_id and current.approval_id != previous.approval_id:
+            raise ValueError("Existing approval binding cannot be replaced")
+
     def save(self, context: SecurityContext) -> None:
         if not context.task_id:
             raise ValueError("SecurityContext.task_id is required for persistence")
+        conn = self.task_store._get_conn()
+        existing = conn.execute(
+            "SELECT security_context_json FROM task_security_contexts WHERE task_id = ?",
+            (context.task_id,),
+        ).fetchone()
+        if existing:
+            try:
+                payload = json.loads(existing["security_context_json"])
+                previous = SecurityContext.from_dict(payload)
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise ValueError("Stored SecurityContext is invalid") from exc
+            self._validate_transition(previous, context)
+
         payload = json.dumps(context.to_dict(), sort_keys=True)
         now = self.task_store._now()
-        conn = self.task_store._get_conn()
         conn.execute(
             """INSERT INTO task_security_contexts
                (task_id, security_context_json, created_at, updated_at)
