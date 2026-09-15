@@ -7,7 +7,6 @@ from typing import Any, Callable
 
 from fastapi import HTTPException
 
-
 _current_principal: ContextVar[str] = ContextVar("botboy_gateway_principal", default="")
 _current_roles: ContextVar[tuple[str, ...]] = ContextVar("botboy_gateway_roles", default=())
 _current_org: ContextVar[str] = ContextVar("botboy_gateway_org", default="default")
@@ -45,23 +44,23 @@ class _TaskStoreAuthorizationProxy:
             return True
         return bool(self._roles() & {"admin", "worker", "system"})
 
+    def _is_system_or_admin(self) -> bool:
+        if not self._auth_enabled:
+            return True
+        return bool(self._roles() & {"admin", "system"})
+
     def _authorized(self, record: Any) -> bool:
         if record is None or self._is_admin():
             return record is not None
         principal = current_gateway_principal()
         org_id = current_gateway_org()
-        return (
-            bool(principal)
-            and str(getattr(record, "principal", "")) == principal
-            and str(getattr(record, "org_id", "default") or "default") == org_id
-        )
+        return bool(principal) and str(getattr(record, "principal", "")) == principal and str(getattr(record, "org_id", "default") or "default") == org_id
 
     def _require_worker_control(self) -> None:
         if not self._is_worker():
             raise HTTPException(status_code=403, detail="Worker control requires worker or admin authorization")
 
     def _authorized_artifact_path(self, task_id: str, file_path: str) -> Path:
-        """Allow artifact registration only for files inside the task artifact root."""
         task = self._store.get_task(task_id)
         if not self._authorized(task):
             raise HTTPException(status_code=404, detail="Task not found")
@@ -102,7 +101,7 @@ class _TaskStoreAuthorizationProxy:
 
     def add_artifact_file(self, task_id: str, *args, **kwargs):
         file_path = kwargs.get("file_path")
-        if file_path is None and len(args) >= 1:
+        if file_path is None and args:
             file_path = args[0]
         self._authorized_artifact_path(task_id, str(file_path or ""))
         return self._store.add_artifact_file(task_id, *args, **kwargs)
@@ -113,8 +112,6 @@ class _TaskStoreAuthorizationProxy:
         filename = str(kwargs.get("filename", ""))
         if not filename and len(args) >= 4:
             filename = str(args[3])
-        # Resolve the target exactly as TaskStore will, but reject traversal and
-        # absolute paths before the underlying implementation writes anything.
         root = Path(self._store.artifact_root).expanduser().resolve()
         task_dir = (root / task_id).resolve()
         target = (task_dir / filename).resolve()
@@ -129,16 +126,46 @@ class _TaskStoreAuthorizationProxy:
             return None
         return self._store.cancel_task(task_id, *args, **kwargs)
 
+    def _node_owned_by_current_principal(self, node: Any) -> bool:
+        if node is None:
+            return False
+        owner = str((node.get("metadata") or {}).get("owner_principal", "") or "")
+        return bool(owner) and owner == current_gateway_principal()
+
     def register_worker_node(self, *args, **kwargs):
         self._require_worker_control()
+        if not self._is_system_or_admin():
+            raise HTTPException(status_code=403, detail="Worker-node registration requires system or admin authorization")
+        node_id = str(kwargs.get("node_id", args[0] if args else "")).strip()
+        if not node_id:
+            raise HTTPException(status_code=400, detail="Missing node_id")
+        existing = self._store.get_worker_node(node_id)
+        if existing is not None and not self._is_admin():
+            owner = str((existing.get("metadata") or {}).get("owner_principal", "") or "")
+            if owner and owner != current_gateway_principal():
+                raise HTTPException(status_code=403, detail="Worker node is owned by another principal")
+        metadata = kwargs.get("metadata")
+        metadata = dict(metadata) if isinstance(metadata, dict) else {}
+        metadata.setdefault("owner_principal", current_gateway_principal())
+        kwargs["metadata"] = metadata
         return self._store.register_worker_node(*args, **kwargs)
 
     def heartbeat_worker_node(self, node_id: str, *args, **kwargs):
         self._require_worker_control()
+        node = self._store.get_worker_node(node_id)
+        if node is None:
+            return None
+        if not self._is_admin() and not self._node_owned_by_current_principal(node):
+            return None
         return self._store.heartbeat_worker_node(node_id, *args, **kwargs)
 
     def drain_worker_node(self, node_id: str, *args, **kwargs):
         self._require_worker_control()
+        node = self._store.get_worker_node(node_id)
+        if node is None:
+            return None
+        if not self._is_admin() and not self._node_owned_by_current_principal(node):
+            return None
         return self._store.drain_worker_node(node_id, *args, **kwargs)
 
     def acquire_queue_lease(self, *args, **kwargs):
@@ -231,7 +258,6 @@ class GatewayAppContext:
         original_store_factory = self.task_store_or_503
 
         def resolve_org(principal: str) -> str:
-            """Resolve tenant from server-side credential stores, never client data."""
             if not principal:
                 return "default"
             try:
@@ -244,10 +270,7 @@ class GatewayAppContext:
             try:
                 store = self.get_api_key_store()
                 if store and hasattr(store, "_get_conn"):
-                    row = store._get_conn().execute(
-                        "SELECT org_id FROM api_keys WHERE key_id = ? AND revoked = 0",
-                        (principal,),
-                    ).fetchone()
+                    row = store._get_conn().execute("SELECT org_id FROM api_keys WHERE key_id = ? AND revoked = 0", (principal,)).fetchone()
                     if row:
                         return str(row["org_id"] or "default")
             except Exception:
@@ -269,11 +292,8 @@ class GatewayAppContext:
             return principal, roles
 
         def scoped_approval_context(*args, **kwargs):
-            """Reject client-payload approval while preserving explicit approval."""
             context = dict(original_approval_context(*args, **kwargs) or {})
-            if context.get("reason") == "payload" and "admin" not in {
-                str(role).lower() for role in current_gateway_roles()
-            }:
+            if context.get("reason") == "payload" and "admin" not in {str(role).lower() for role in current_gateway_roles()}:
                 context["granted"] = False
                 context["explicit"] = False
                 context["reason"] = "payload_approval_rejected"
