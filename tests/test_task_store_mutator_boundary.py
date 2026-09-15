@@ -3,6 +3,8 @@ from types import SimpleNamespace
 
 from fastapi import HTTPException
 
+# Import the gateway package so its security boundary patches are installed.
+import botboy.gateway  # noqa: F401,E402
 from botboy.gateway.app_context import _TaskStoreAuthorizationProxy, _current_principal, _current_roles
 
 
