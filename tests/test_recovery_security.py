@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -10,14 +11,14 @@ from botboy.gateway.app_context import (
 )
 from botboy.security_context import SecurityContext
 from botboy.task_security import TaskSecurityStore
-from botboy.tasks import TaskStore, TASK_STATUS_RUNNING
+from botboy.tasks import TASK_STATUS_RUNNING, TaskStore
 
 
 class RecoverySecurityTests(unittest.TestCase):
     def setUp(self):
-        self.db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        self.db.close()
-        self.store = TaskStore(self.db.name)
+        fd, self.db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.store = TaskStore(self.db_path)
         self.tokens = []
 
     def tearDown(self):
@@ -26,6 +27,10 @@ class RecoverySecurityTests(unittest.TestCase):
         try:
             self.store._get_conn().close()
         except Exception:
+            pass
+        try:
+            os.remove(self.db_path)
+        except FileNotFoundError:
             pass
 
     def set_identity(self, principal, org, roles):
@@ -44,12 +49,21 @@ class RecoverySecurityTests(unittest.TestCase):
             parent_task_id=parent,
             delegated_to_worker=worker,
             status=status,
-            heartbeat_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat() if status == TASK_STATUS_RUNNING else "",
+            heartbeat_at=(
+                datetime.now(timezone.utc) - timedelta(hours=1)
+            ).isoformat()
+            if status == TASK_STATUS_RUNNING
+            else "",
         )
 
     def test_foreign_tenant_stale_task_cannot_be_recovered(self):
         parent = self.create_task(principal="alice", org="tenant-b")
-        child = self.create_task(principal="alice", org="tenant-b", parent=parent.task_id, status=TASK_STATUS_RUNNING)
+        child = self.create_task(
+            principal="alice",
+            org="tenant-b",
+            parent=parent.task_id,
+            status=TASK_STATUS_RUNNING,
+        )
         self.set_identity("alice", "tenant-a", ["worker"])
 
         result = self.proxy().recover_stale_worker_task(child.task_id, principal="alice")
@@ -58,7 +72,12 @@ class RecoverySecurityTests(unittest.TestCase):
 
     def test_recovery_cannot_spoof_event_principal(self):
         parent = self.create_task(principal="alice", org="tenant-a")
-        child = self.create_task(principal="alice", org="tenant-a", parent=parent.task_id, status=TASK_STATUS_RUNNING)
+        child = self.create_task(
+            principal="alice",
+            org="tenant-a",
+            parent=parent.task_id,
+            status=TASK_STATUS_RUNNING,
+        )
         self.set_identity("alice", "tenant-a", ["worker"])
 
         result = self.proxy().recover_stale_worker_task(child.task_id, principal="attacker")
