@@ -80,6 +80,34 @@ class GatewayAuthSecurityTest(unittest.TestCase):
         self.assertEqual(replacement.org_id, "tenant-a")
         self.assertEqual(replacement.role, "worker")
 
+    def test_jwt_round_trip_preserves_org_id(self) -> None:
+        auth = JWTAuth("x" * 32)
+        pair = auth.create_pair("alice", ["user"], org_id="tenant-a")
+        info = auth.verify(pair.access_token)
+        self.assertIsNotNone(info)
+        self.assertEqual(info.org_id, "tenant-a")
+
+        refreshed = auth.refresh(pair.refresh_token)
+        self.assertIsNotNone(refreshed)
+        refreshed_info = auth.verify(refreshed.access_token)
+        self.assertIsNotNone(refreshed_info)
+        self.assertEqual(refreshed_info.org_id, "tenant-a")
+
+    def test_jwt_rejects_missing_or_invalid_org_id_claim(self) -> None:
+        auth = JWTAuth("x" * 32)
+        pair = auth.create_pair("alice", ["user"], org_id="tenant-a")
+        header, payload, _sig = pair.access_token.split(".")
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        claims.pop("org_id", None)
+        mutated_payload = _b64url_encode(json.dumps(claims).encode())
+        mutated = f"{header}.{mutated_payload}.{auth._sign(header, mutated_payload)}"
+        self.assertIsNone(auth.verify(mutated))
+
+        claims["org_id"] = ""
+        mutated_payload = _b64url_encode(json.dumps(claims).encode())
+        mutated = f"{header}.{mutated_payload}.{auth._sign(header, mutated_payload)}"
+        self.assertIsNone(auth.verify(mutated))
+
     def test_jwt_revocation(self) -> None:
         auth = JWTAuth("x" * 32)
         pair = auth.create_pair("admin")
