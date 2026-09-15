@@ -13,6 +13,7 @@ from fastapi import HTTPException
 
 from botboy.gateway.app_context import (
     _TaskStoreAuthorizationProxy,
+    current_gateway_org,
     current_gateway_principal,
 )
 from botboy.security_context import SecurityContext
@@ -65,9 +66,6 @@ def _create_child_task(
         **kwargs,
     )
 
-    # TaskStore.create_child_task predates tenant-aware authorization and
-    # defaults to the default tenant. Correct it under the authorized parent
-    # boundary; callers cannot choose this value.
     if str(getattr(child, "org_id", "default") or "default") != org_id:
         child = proxy._store.update_task(child.task_id, org_id=org_id)
 
@@ -148,10 +146,6 @@ def _reassign_task(
     )
 
 
-# A worker handoff may carry a parent approval context for observability, but a
-# server-issued approval must never become authorization for the child task.
-# Legacy/manual contexts are retained for compatibility because the execution
-# boundary already rejects them as non-server-issued authorization.
 def _build_child_approval_context(self, approval_context):
     context = dict(approval_context or {})
     is_server_approval = bool(
@@ -178,18 +172,103 @@ def _build_child_approval_context(self, approval_context):
     return context
 
 
+def _secure_worker_child_creation(original):
+    """Wrap raw WorkerHandoffService child creation at the gateway boundary.
+
+    Some internal handoff paths receive a raw TaskStore rather than the
+    gateway authorization proxy. When gateway authentication is active, the
+    parent task remains the authority for principal/tenant identity and the
+    caller cannot substitute a different principal through the handoff API.
+    """
+    def _wrapped(self, *, parent_task, worker, delegated_command, principal, child_request_id, attempt_count):
+        store = self.task_store
+        if store is None:
+            return original(
+                self,
+                parent_task=parent_task,
+                worker=worker,
+                delegated_command=delegated_command,
+                principal=principal,
+                child_request_id=child_request_id,
+                attempt_count=attempt_count,
+            )
+
+        parent = store.get_task(parent_task.task_id)
+        if parent is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        auth_enabled = bool(getattr(getattr(self, "bot", None), "config", None)) and bool(
+            getattr(getattr(getattr(self, "bot", None), "config", None), "security", None)
+            and getattr(getattr(self.bot.config, "security", None), "enable_auth", False)
+        )
+        gateway_principal = current_gateway_principal()
+        gateway_org = current_gateway_org()
+        parent_org = str(getattr(parent, "org_id", "default") or "default")
+
+        if auth_enabled:
+            if not gateway_principal:
+                raise HTTPException(status_code=403, detail="Worker handoff requires an authenticated principal")
+            if parent_org != gateway_org:
+                raise HTTPException(status_code=404, detail="Task not found")
+            if str(getattr(parent, "principal", "")) != gateway_principal and "admin" not in {
+                role.lower() for role in getattr(__import__("botboy.gateway.app_context", fromlist=["current_gateway_roles"]), "current_gateway_roles")()
+            } and "system" not in {
+                role.lower() for role in getattr(__import__("botboy.gateway.app_context", fromlist=["current_gateway_roles"]), "current_gateway_roles")()
+            }:
+                raise HTTPException(status_code=404, detail="Task not found")
+
+        security = TaskSecurityStore(store).load(parent.task_id)
+        effective_principal = str(
+            security.principal_id if security is not None else getattr(parent, "principal", "anonymous")
+        )
+        effective_org = str(
+            security.org_id if security is not None else getattr(parent, "org_id", "default") or "default"
+        )
+
+        child = original(
+            self,
+            parent_task=parent_task,
+            worker=worker,
+            delegated_command=delegated_command,
+            principal=effective_principal,
+            child_request_id=child_request_id,
+            attempt_count=attempt_count,
+        )
+        if str(getattr(child, "org_id", "default") or "default") != effective_org:
+            child = store.update_task(child.task_id, org_id=effective_org).to_context()
+
+        child_security = replace(
+            security,
+            task_id=child.task_id,
+            parent_task_id=parent.task_id,
+            approval_id="",
+            approval_scope=frozenset(),
+            approval_expires_at=None,
+        ) if security is not None else SecurityContext.from_legacy(
+            principal=effective_principal,
+            org_id=effective_org,
+            roles=[],
+            request_id=str(getattr(child, "request_id", "") or ""),
+            task_id=child.task_id,
+            parent_task_id=parent.task_id,
+            auth_source="task_parent",
+        )
+        TaskSecurityStore(store).save(child_security)
+        return child
+
+    return _wrapped
+
+
 _TaskStoreAuthorizationProxy.create_child_task = _create_child_task
 _TaskStoreAuthorizationProxy.recover_stale_worker_task = _recover_stale_worker_task
 _TaskStoreAuthorizationProxy.reassign_task = _reassign_task
 
-# WorkerHandoffService currently receives a task store directly in some
-# internal paths, so secure its child-approval transformation independently
-# of whether the task-store proxy is present.
 try:
     from botboy.worker_handoff_service import WorkerHandoffService
 
     WorkerHandoffService._build_child_approval_context = _build_child_approval_context
+    WorkerHandoffService._create_worker_child_task = _secure_worker_child_creation(
+        WorkerHandoffService._create_worker_child_task
+    )
 except ImportError:
-    # The gateway remains importable in minimal installations where the
-    # optional handoff service is not packaged.
     pass
