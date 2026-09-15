@@ -28,6 +28,12 @@ def _org() -> str:
     return str(current_gateway_org() or "default")
 
 
+def _require_mutation_context(proxy: Any) -> None:
+    """Authenticated proxy mutations require a gateway-established identity context."""
+    if proxy._auth_enabled and not current_gateway_principal():
+        raise HTTPException(status_code=403, detail="Task-store mutation requires an authenticated gateway context")
+
+
 def _visible_task(proxy: Any, task_id: str) -> Any:
     task = proxy._store.get_task(str(task_id or ""))
     if task is None or not proxy._authorized(task):
@@ -116,6 +122,7 @@ def _install() -> None:
         return self.worker_summary(*args, **kwargs)["workers"]
 
     def add_event(self, task_id: str, *args, **kwargs):
+        _require_mutation_context(self)
         if _visible_task(self, task_id) is None:
             return None
         if self._auth_enabled and not _system():
@@ -123,11 +130,13 @@ def _install() -> None:
         return self._store.add_event(task_id, *args, **kwargs)
 
     def add_artifact(self, task_id: str, *args, **kwargs):
+        _require_mutation_context(self)
         if _visible_task(self, task_id) is None:
             return None
         return self._store.add_artifact(task_id, *args, **kwargs)
 
     def link_artifacts_from_task(self, target_task_id: str, source_task_id: str, *args, **kwargs):
+        _require_mutation_context(self)
         target = _visible_task(self, target_task_id)
         source = _visible_task(self, source_task_id)
         if target is None or source is None:
@@ -137,6 +146,7 @@ def _install() -> None:
         return self._store.link_artifacts_from_task(target_task_id, source_task_id, *args, **kwargs)
 
     def update_task(self, task_id: str, *args, **kwargs):
+        _require_mutation_context(self)
         task = _visible_task(self, task_id)
         if task is None:
             return None
@@ -149,6 +159,7 @@ def _install() -> None:
         return self._store.update_task(task_id, *args, **kwargs)
 
     def start_task(self, task_id: str, *args, **kwargs):
+        _require_mutation_context(self)
         if _visible_task(self, task_id) is None:
             return None
         if self._auth_enabled and not _system():
@@ -156,6 +167,7 @@ def _install() -> None:
         return self._store.start_task(task_id, *args, **kwargs)
 
     def finish_task(self, task_id: str, *args, **kwargs):
+        _require_mutation_context(self)
         if _visible_task(self, task_id) is None:
             return None
         if self._auth_enabled and not _system():
@@ -163,6 +175,7 @@ def _install() -> None:
         return self._store.finish_task(task_id, *args, **kwargs)
 
     def update_status(self, task_id: str, *args, **kwargs):
+        _require_mutation_context(self)
         if _visible_task(self, task_id) is None:
             return None
         if self._auth_enabled and not _system():
@@ -170,11 +183,13 @@ def _install() -> None:
         return self._store.update_status(task_id, *args, **kwargs)
 
     def attach_run(self, task_id: str, *args, **kwargs):
+        _require_mutation_context(self)
         if _visible_task(self, task_id) is None:
             return None
         return self._store.attach_run(task_id, *args, **kwargs)
 
     def mark_running(self, task_id: str, *args, **kwargs):
+        _require_mutation_context(self)
         if _visible_task(self, task_id) is None:
             return None
         if self._auth_enabled and not _system():
@@ -182,6 +197,7 @@ def _install() -> None:
         return self._store.mark_running(task_id, *args, **kwargs)
 
     def cancel(self, task_id: str, *args, **kwargs):
+        _require_mutation_context(self)
         if _visible_task(self, task_id) is None:
             return None
         if self._auth_enabled and not _system():
