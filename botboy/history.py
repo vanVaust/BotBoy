@@ -1,5 +1,4 @@
 """TaskHistory — persistent command history with pagination and stats."""
-from __future__ import annotations
 
 import sqlite3
 import threading
