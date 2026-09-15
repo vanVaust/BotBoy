@@ -22,6 +22,7 @@ class AuthPrincipal:
     principal_type: str = "user"
     credential_source: str = "bootstrap"
     display_name: str = ""
+    org_id: str = "default"
     metadata: dict = field(default_factory=dict)
 
 
@@ -42,6 +43,7 @@ class TokenInfo:
     token_id: str
     principal_type: str = "user"
     credential_source: str = "jwt"
+    org_id: str = "default"
 
     @property
     def user_id(self) -> str:
@@ -88,6 +90,7 @@ class JWTAuth:
         roles: Optional[List[str]] = None,
         principal_type: Optional[str] = None,
         credential_source: str = "bootstrap",
+        org_id: str = "default",
     ) -> AuthPrincipal:
         if isinstance(principal, AuthPrincipal):
             merged_roles = list(principal.roles or roles or ["user"])
@@ -97,6 +100,7 @@ class JWTAuth:
                 principal_type=principal.principal_type,
                 credential_source=principal.credential_source,
                 display_name=principal.display_name,
+                org_id=principal.org_id or "default",
                 metadata=dict(principal.metadata or {}),
             )
         return AuthPrincipal(
@@ -104,6 +108,7 @@ class JWTAuth:
             roles=list(roles or ["user"]),
             principal_type=principal_type or "user",
             credential_source=credential_source,
+            org_id=org_id or "default",
         )
 
     def _sign(self, header_b64: str, payload_b64: str) -> str:
@@ -142,6 +147,7 @@ class JWTAuth:
         *,
         principal_type: Optional[str] = None,
         credential_source: str = "bootstrap",
+        org_id: str = "default",
     ) -> TokenPair:
         now = int(time.time())
         tid = secrets.token_hex(8)
@@ -150,6 +156,7 @@ class JWTAuth:
             roles=roles,
             principal_type=principal_type,
             credential_source=credential_source,
+            org_id=org_id,
         )
         access_payload = {
             "sub": principal_obj.principal_id,
@@ -161,6 +168,7 @@ class JWTAuth:
             "ptype": principal_obj.principal_type,
             "src": principal_obj.credential_source,
             "name": principal_obj.display_name,
+            "org_id": principal_obj.org_id,
         }
         refresh_payload = {
             "sub": principal_obj.principal_id,
@@ -172,6 +180,7 @@ class JWTAuth:
             "ptype": principal_obj.principal_type,
             "src": principal_obj.credential_source,
             "name": principal_obj.display_name,
+            "org_id": principal_obj.org_id,
         }
         return TokenPair(
             access_token=self._encode(access_payload),
@@ -220,14 +229,24 @@ class JWTAuth:
         jti = payload.get("jti", "")
         if jti and self.is_revoked(jti):
             return None
+        principal_id = payload.get("sub")
+        if not isinstance(principal_id, str) or not principal_id:
+            return None
+        roles = payload.get("roles", [])
+        if not isinstance(roles, list):
+            return None
+        org_id = payload.get("org_id", "default")
+        if not isinstance(org_id, str) or not org_id:
+            return None
         return TokenInfo(
-            principal_id=payload["sub"],
-            roles=payload.get("roles", []),
+            principal_id=principal_id,
+            roles=roles,
             issued_at=payload.get("iat", 0),
             expires_at=payload.get("exp", 0),
             token_id=jti,
             principal_type=payload.get("ptype", "user"),
             credential_source=payload.get("src", "jwt"),
+            org_id=org_id,
         )
 
     def refresh(self, refresh_token: str) -> Optional[TokenPair]:
@@ -242,10 +261,18 @@ class JWTAuth:
         jti = payload.get("jti", "")
         if jti and self.is_revoked(jti):
             return None
+        principal_id = payload.get("sub")
+        org_id = payload.get("org_id", "default")
+        if not isinstance(principal_id, str) or not principal_id or not isinstance(org_id, str) or not org_id:
+            return None
         self.revoke_jti(jti, payload.get("exp", 0))
         return self.create_pair(
-            payload["sub"],
-            payload.get("roles", ["user"]),
-            principal_type=payload.get("ptype", "user"),
-            credential_source=payload.get("src", "jwt"),
+            AuthPrincipal(
+                principal_id=principal_id,
+                roles=list(payload.get("roles", ["user"])),
+                principal_type=payload.get("ptype", "user"),
+                credential_source=payload.get("src", "jwt"),
+                display_name=payload.get("name", ""),
+                org_id=org_id,
+            )
         )
