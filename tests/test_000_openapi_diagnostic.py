@@ -30,32 +30,26 @@ class OpenAPIDiagnosticTest(unittest.TestCase):
         self.assertTrue(bot.initialize())
         try:
             app = create_app(bot, host="127.0.0.1", port=8765)
-            import fastapi.routing as routing
+            import fastapi.dependencies.utils as dependency_utils
 
-            original = routing._build_dependant_with_parameterless_dependencies
-            offenders = []
+            original = dependency_utils.get_typed_signature
+            candidates = []
 
-            def debug_build(*, path, call, dependencies):
-                dependant = original(path=path, call=call, dependencies=dependencies)
-                fields = list(dependant.path_params) + list(dependant.query_params) + list(dependant.header_params) + list(dependant.cookie_params) + list(dependant.body_params)
-                for field in fields:
-                    if getattr(field, "name", None) == "request":
-                        offenders.append({
-                            "path": path,
-                            "endpoint": getattr(call, "__qualname__", repr(call)),
-                            "module": getattr(call, "__module__", None),
-                            "annotations": repr(getattr(call, "__annotations__", {})),
-                            "signature": repr(inspect.signature(call, eval_str=False)),
-                            "type_": repr(getattr(field, "type_", None)),
-                            "annotation": repr(getattr(field, "annotation", None)),
-                            "field_info_annotation": repr(getattr(getattr(field, "field_info", None), "annotation", None)),
-                        })
-                return dependant
+            def debug_signature(call):
+                annotations = getattr(call, "__annotations__", {}) or {}
+                if any(name == "request" and (value == "Request" or "Request" in repr(value)) for name, value in annotations.items()):
+                    candidates.append({
+                        "endpoint": getattr(call, "__qualname__", repr(call)),
+                        "module": getattr(call, "__module__", None),
+                        "annotations": repr(annotations),
+                        "signature": repr(inspect.signature(call, eval_str=False)),
+                    })
+                return original(call)
 
-            with patch.object(routing, "_build_dependant_with_parameterless_dependencies", side_effect=debug_build):
+            with patch.object(dependency_utils, "get_typed_signature", side_effect=debug_signature):
                 try:
                     app.openapi()
                 except Exception as exc:
-                    self.fail(f"OpenAPI failed; request fields={offenders!r}; exception={exc!r}")
+                    self.fail(f"OpenAPI failed; Request candidates={candidates!r}; exception={exc!r}")
         finally:
             bot.shutdown()
