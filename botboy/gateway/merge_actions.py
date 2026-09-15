@@ -2,11 +2,88 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
+from fastapi import HTTPException
+
+from botboy.gateway.app_context import current_gateway_org, current_gateway_principal, current_gateway_roles
+
 
 class GatewayMergeActionError(ValueError):
     def __init__(self, message: str, *, status_code: int = 400) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+class _AuthorizedMergeBotView:
+    """Expose merge operations only after gateway task/family authorization."""
+
+    def __init__(self, bot: Any, store: Any, task_id: str) -> None:
+        self._bot = bot
+        self._store = store
+        self._task_id = str(task_id or "")
+        self._authorize_task_family()
+
+    def _raw_store(self) -> Any:
+        return getattr(self._store, "_store", self._store)
+
+    def _authorized(self, record: Any) -> bool:
+        if record is None:
+            return False
+        if not bool(getattr(self._store, "_auth_enabled", False)):
+            return True
+        roles = {str(role).lower() for role in current_gateway_roles()}
+        if "system" in roles:
+            return True
+        org_id = current_gateway_org()
+        record_org = str(getattr(record, "org_id", "default") or "default")
+        if record_org != org_id:
+            return False
+        if "admin" in roles:
+            return True
+        principal = current_gateway_principal()
+        return bool(principal) and str(getattr(record, "principal", "")) == principal
+
+    def _authorize_task_family(self) -> None:
+        task = self._store.get_task(self._task_id)
+        if not task or not self._authorized(task):
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        # Merge results aggregate child data. Do not let a malformed or manually
+        # corrupted parent/child relation cross the authenticated security boundary.
+        raw_store = self._raw_store()
+        list_children = getattr(raw_store, "list_children", None)
+        if not callable(list_children):
+            return
+        pending = [self._task_id]
+        seen: set[str] = set()
+        while pending:
+            parent_id = pending.pop()
+            if parent_id in seen:
+                continue
+            seen.add(parent_id)
+            try:
+                children = list_children(parent_id, limit=200) or []
+            except (AttributeError, TypeError, ValueError):
+                children = []
+            for child in children:
+                if not self._authorized(child):
+                    raise HTTPException(status_code=404, detail="Task not found")
+                child_id = str(getattr(child, "task_id", "") or "")
+                if child_id:
+                    pending.append(child_id)
+
+    def get_task_merge_payload(self, task_id: str, *, record: Any = None) -> dict[str, Any]:
+        if str(task_id or "") != self._task_id:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return self._bot.get_task_merge_payload(task_id, record=record)
+
+    def apply_task_merge_review_action(self, task_id: str, **kwargs: Any):
+        if str(task_id or "") != self._task_id:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return self._bot.apply_task_merge_review_action(task_id, **kwargs)
+
+
+def authorized_merge_bot_view(bot: Any, store: Any, task_id: str) -> _AuthorizedMergeBotView:
+    return _AuthorizedMergeBotView(bot, store, task_id)
 
 
 def _operation_results(items: list[dict[str, str]]) -> list[dict[str, Any]]:
@@ -63,10 +140,10 @@ def build_merge_action_payload(
     preset: str = "",
     decorate_merge_payload: Callable[[dict[str, Any]], dict[str, Any]],
     task_records_by_root: Callable[[Any, str], list[Any]],
-    decorate_task_record: Callable[[Any, Any, Optional[list[Any]]], dict[str, Any]],
 ) -> dict[str, Any]:
     if not store:
         raise GatewayMergeActionError("Task store not available", status_code=503)
+    authorized_bot = authorized_merge_bot_view(bot, store, task_id)
     task = store.get_task(task_id)
     if not task:
         raise GatewayMergeActionError("Task not found", status_code=404)
@@ -81,14 +158,16 @@ def build_merge_action_payload(
         failed_count: Optional[int] = None,
         preset_name: str = "",
     ) -> dict[str, Any]:
-        merge = decorate_merge_payload(bot.get_task_merge_payload(task_id, record=refreshed))
+        merge = decorate_merge_payload(authorized_bot.get_task_merge_payload(task_id, record=refreshed))
         response = {
             "available": True,
             "task_id": task_id,
             "action": normalized_action,
-            "task": decorate_task_record(store, refreshed, root_records) if refreshed else None,
+            "task": None,
             "merge": merge,
         }
+        if refreshed is not None and store.get_task(task_id) is not None:
+            response["task"] = refreshed
         if bulk_results is not None:
             response["bulk_results"] = bulk_results
             response["applied_count"] = int(applied_count or 0)
@@ -99,7 +178,7 @@ def build_merge_action_payload(
 
     def apply_action(**action_kwargs: Any):
         try:
-            return bot.apply_task_merge_review_action(task_id, **action_kwargs)
+            return authorized_bot.apply_task_merge_review_action(task_id, **action_kwargs)
         except ValueError as exc:
             raise GatewayMergeActionError(str(exc), status_code=400) from exc
 
@@ -163,7 +242,7 @@ def build_merge_action_payload(
             request_id=request_id or task.request_id or task_id,
         )
         refreshed = updated or store.get_task(task_id)
-        merge = decorate_merge_payload(bot.get_task_merge_payload(task_id, record=refreshed))
+        merge = decorate_merge_payload(authorized_bot.get_task_merge_payload(task_id, record=refreshed))
         resolved_keys = requested_keys or [
             str(item).strip()
             for item in (merge.get("configured_resolution_overrides", {}) or {}).keys()
@@ -183,7 +262,7 @@ def build_merge_action_payload(
             raise GatewayMergeActionError("apply_preset requires a preset", status_code=400)
         normalized_preset = preset_name.lower().replace("-", "_")
         if normalized_preset == "clear_overrides":
-            merge = decorate_merge_payload(bot.get_task_merge_payload(task_id, record=task))
+            merge = decorate_merge_payload(authorized_bot.get_task_merge_payload(task_id, record=task))
             override_keys = list(
                 dict.fromkeys(
                     [
