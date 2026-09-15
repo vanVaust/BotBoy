@@ -5,12 +5,49 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 
-from botboy.gateway.app_context import GatewayAppContext
+from botboy.gateway.app_context import GatewayAppContext, current_gateway_org, current_gateway_principal, current_gateway_roles
 
 
 def create_core_router(ctx: GatewayAppContext) -> APIRouter:
     router = APIRouter()
     bot = ctx.bot
+
+    def _tenant_context(request: Request) -> tuple[str, str, set[str]]:
+        principal, roles = ctx.authorize_with_roles(
+            request.headers,
+            request.client.host if request.client else "",
+            require_auth=ctx.auth_enabled,
+        )
+        return str(principal or ""), current_gateway_org(), {str(role).lower() for role in (roles or [])}
+
+    def _is_tenant_admin(roles: set[str]) -> bool:
+        return "system" in roles or "admin" in roles
+
+    def _memory_visible(memory: Any, *, principal: str, org: str, roles: set[str]) -> bool:
+        if _is_tenant_admin(roles):
+            return True
+        metadata = getattr(memory, "metadata", None) or {}
+        security = metadata.get("_botboy_security") if isinstance(metadata, dict) else None
+        if not isinstance(security, dict):
+            return False
+        return str(security.get("org_id", "")) == org and str(security.get("principal_id", "")) == principal
+
+    def _scoped_memory_metadata(metadata: Any, *, principal: str, org: str) -> dict:
+        result = dict(metadata) if isinstance(metadata, dict) else {}
+        result["_botboy_security"] = {
+            "principal_id": principal,
+            "org_id": org,
+        }
+        return result
+
+    def _scheduler_visible(task: Any, *, principal: str, org: str, roles: set[str]) -> bool:
+        if _is_tenant_admin(roles):
+            return True
+        payload = dict(getattr(task, "payload", {}) or {})
+        security = payload.get("_botboy_security")
+        if not isinstance(security, dict):
+            return False
+        return str(security.get("org_id", "")) == org and str(security.get("principal_id", "")) == principal
 
     @router.get("/health")
     async def health():
@@ -92,16 +129,18 @@ def create_core_router(ctx: GatewayAppContext) -> APIRouter:
 
     @router.get("/api/memories")
     async def list_memories(request: Request, limit: int = 20, offset: int = 0):
-        ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
+        principal, org, roles = _tenant_context(request)
         if not bot.memory:
             raise HTTPException(status_code=503, detail="Memory not available")
-        memories = bot.memory.list_all(limit=min(limit, 100), offset=offset)
-        stats = bot.memory.get_stats()
-        return {"memories": [item.to_dict() for item in memories], "total": stats["total"], "limit": limit, "offset": offset}
+        fetch_limit = min(max(limit + offset, 1), 500)
+        memories = bot.memory.list_all(limit=fetch_limit, offset=0)
+        visible = [item for item in memories if _memory_visible(item, principal=principal, org=org, roles=roles)]
+        page = visible[offset:offset + min(limit, 100)]
+        return {"memories": [item.to_dict() for item in page], "total": len(visible), "limit": limit, "offset": offset}
 
     @router.post("/api/memories")
     async def create_memory(request: Request):
-        ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
+        principal, org, _roles = _tenant_context(request)
         if not bot.memory:
             raise HTTPException(status_code=503, detail="Memory not available")
         try:
@@ -111,15 +150,16 @@ def create_core_router(ctx: GatewayAppContext) -> APIRouter:
         content = payload.get("content", "").strip()
         if not content:
             raise HTTPException(status_code=400, detail="Missing 'content'")
-        memory_id = bot.memory.store(content, payload.get("metadata"))
+        memory_id = bot.memory.store(content, _scoped_memory_metadata(payload.get("metadata"), principal=principal, org=org))
         return {"id": memory_id, "content": content, "success": True}
 
     @router.get("/api/memories/search")
     async def search_memories(request: Request, q: str, limit: int = 10):
-        ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
+        principal, org, roles = _tenant_context(request)
         if not bot.memory:
             raise HTTPException(status_code=503, detail="Memory not available")
-        results = bot.memory.search(q, limit=min(limit, 50))
+        candidates = bot.memory.search(q, limit=min(max(limit * 5, 50), 250))
+        results = [item for item in candidates if _memory_visible(item, principal=principal, org=org, roles=roles)][:min(limit, 50)]
         return {"results": [item.to_dict() for item in results], "query": q, "count": len(results)}
 
     @router.get("/api/skills")
@@ -169,30 +209,32 @@ def create_core_router(ctx: GatewayAppContext) -> APIRouter:
 
     @router.get("/api/history")
     async def history_list(request: Request, limit: int = 20, offset: int = 0, search: Optional[str] = None, success: Optional[bool] = None, request_id: Optional[str] = None):
-        ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
+        principal, org, roles = _tenant_context(request)
         if not bot.history:
             raise HTTPException(status_code=503, detail="History not available")
-        records, total = bot.history.list(limit=min(limit, 200), offset=offset, search=search, success=success, request_id=request_id)
+        scoped_principal = None if _is_tenant_admin(roles) else principal
+        records, total = bot.history.list(limit=min(limit, 200), offset=offset, search=search, success=success, request_id=request_id, principal=scoped_principal, org_id=org)
         return {"records": [record.to_dict() for record in records], "total": total, "limit": limit, "offset": offset}
 
     @router.get("/api/history/stats")
     async def history_stats(request: Request):
-        ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
+        principal, org, roles = _tenant_context(request)
         if not bot.history:
             raise HTTPException(status_code=503, detail="History not available")
-        return bot.history.stats()
+        scoped_principal = None if _is_tenant_admin(roles) else principal
+        return bot.history.stats(principal=scoped_principal, org_id=org)
 
     @router.get("/api/scheduler")
     async def scheduler_list(request: Request):
-        ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
+        principal, org, roles = _tenant_context(request)
         if not bot.scheduler:
             raise HTTPException(status_code=503, detail="Scheduler not available")
-        tasks = bot.scheduler.list_tasks()
-        return {"tasks": [task.to_dict() for task in tasks], "stats": bot.scheduler.stats()}
+        tasks = [task for task in bot.scheduler.list_tasks() if _scheduler_visible(task, principal=principal, org=org, roles=roles)]
+        return {"tasks": [task.to_dict() for task in tasks], "stats": {"total": len(tasks), "active": sum(1 for task in tasks if task.enabled), "total_runs": sum(task.run_count for task in tasks)}}
 
     @router.post("/api/scheduler")
     async def scheduler_add(request: Request):
-        ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
+        principal, org, _roles = _tenant_context(request)
         if not bot.scheduler:
             raise HTTPException(status_code=503, detail="Scheduler not available")
         try:
@@ -203,17 +245,22 @@ def create_core_router(ctx: GatewayAppContext) -> APIRouter:
         schedule = payload.get("schedule", "").strip()
         if not name or not schedule:
             raise HTTPException(status_code=400, detail="Missing 'name' or 'schedule'")
+        scoped_payload = dict(payload.get("payload") or {})
+        scoped_payload["_botboy_security"] = {"principal_id": principal, "org_id": org}
         try:
-            task_id = bot.scheduler.add(name=name, schedule=schedule, task_type=payload.get("task_type", "generic"), payload=payload.get("payload"))
+            task_id = bot.scheduler.add(name=name, schedule=schedule, task_type=payload.get("task_type", "generic"), payload=scoped_payload)
             return {"task_id": task_id, "name": name, "schedule": schedule}
         except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
     @router.delete("/api/scheduler/{task_id}")
     async def scheduler_cancel(request: Request, task_id: str):
-        ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
+        principal, org, roles = _tenant_context(request)
         if not bot.scheduler:
             raise HTTPException(status_code=503, detail="Scheduler not available")
+        task = next((item for item in bot.scheduler.list_tasks(enabled_only=False) if item.task_id == task_id), None)
+        if not task or not _scheduler_visible(task, principal=principal, org=org, roles=roles):
+            raise HTTPException(status_code=404, detail="Scheduled task not found")
         bot.scheduler.cancel(task_id)
         return {"cancelled": task_id}
 
