@@ -3,6 +3,7 @@ import unittest
 from botboy.gateway.app_context import (
     GatewayAppContext,
     _TaskStoreAuthorizationProxy,
+    _current_org,
     _current_principal,
     _current_roles,
 )
@@ -14,12 +15,12 @@ class _FakeStore:
         self.leases = {
             "lease-1": {
                 "lease_id": "lease-1",
-                "metadata": {"principal": "alice"},
+                "metadata": {"principal": "alice", "org_id": "default"},
             }
         }
 
     def get_task(self, task_id):
-        return type("Task", (), {"principal": "alice"})()
+        return type("Task", (), {"principal": "alice", "org_id": "default"})()
 
     def get_queue_lease(self, lease_id):
         return self.leases.get(lease_id)
@@ -40,6 +41,7 @@ class _FakeStore:
 class GatewayWorkerAuthorizationTests(unittest.TestCase):
     def setUp(self):
         self.store = _FakeStore()
+        _current_org.set("default")
 
     def _proxy(self, principal, roles):
         _current_principal.set(principal)
