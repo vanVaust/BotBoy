@@ -103,10 +103,27 @@ class GatewayAuthSecurityTest(unittest.TestCase):
         mutated = f"{header}.{mutated_payload}.{auth._sign(header, mutated_payload)}"
         self.assertIsNone(auth.verify(mutated))
 
-        claims["org_id"] = ""
-        mutated_payload = _b64url_encode(json.dumps(claims).encode())
-        mutated = f"{header}.{mutated_payload}.{auth._sign(header, mutated_payload)}"
-        self.assertIsNone(auth.verify(mutated))
+        for invalid_org_id in ("", "   ", 123, [], {}, None):
+            claims["org_id"] = invalid_org_id
+            mutated_payload = _b64url_encode(json.dumps(claims).encode())
+            mutated = f"{header}.{mutated_payload}.{auth._sign(header, mutated_payload)}"
+            self.assertIsNone(auth.verify(mutated))
+
+    def test_jwt_refresh_rejects_missing_or_invalid_org_id_claim(self) -> None:
+        auth = JWTAuth("x" * 32)
+        pair = auth.create_pair("alice", ["user"], org_id="tenant-a")
+        header, payload, _sig = pair.refresh_token.split(".")
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+
+        for invalid_org_id in (None, "", "   ", 123, [], {}):
+            mutated_claims = dict(claims)
+            if invalid_org_id is None:
+                mutated_claims.pop("org_id", None)
+            else:
+                mutated_claims["org_id"] = invalid_org_id
+            mutated_payload = _b64url_encode(json.dumps(mutated_claims).encode())
+            mutated = f"{header}.{mutated_payload}.{auth._sign(header, mutated_payload)}"
+            self.assertIsNone(auth.refresh(mutated))
 
     def test_jwt_revocation(self) -> None:
         auth = JWTAuth("x" * 32)
