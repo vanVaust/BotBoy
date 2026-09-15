@@ -141,10 +141,10 @@ def build_merge_action_payload(
 ) -> dict[str, Any]:
     if not store:
         raise GatewayMergeActionError("Task store not available", status_code=503)
-    authorized_bot = authorized_merge_bot_view(bot, store, task_id)
     task = store.get_task(task_id)
     if not task:
         raise GatewayMergeActionError("Task not found", status_code=404)
+    authorized_bot = authorized_merge_bot_view(bot, store, task_id)
     normalized_action = str(action or "").strip().lower().replace("-", "_")
     root_records = task_records_by_root(store, task.root_task_id)
 
@@ -179,15 +179,8 @@ def build_merge_action_payload(
             raise GatewayMergeActionError(str(exc), status_code=400) from exc
 
     if normalized_action in {
-        "resolve",
-        "override",
-        "resolve_key",
-        "clear",
-        "clear_resolution",
-        "clear_override",
-        "reapply",
-        "refresh",
-        "apply_policy",
+        "resolve", "override", "resolve_key", "clear", "clear_resolution",
+        "clear_override", "reapply", "refresh", "apply_policy",
     }:
         if normalized_action in {"resolve", "override", "resolve_key", "clear", "clear_resolution", "clear_override"} and not key:
             raise GatewayMergeActionError("Missing merge key", status_code=400)
@@ -217,12 +210,7 @@ def build_merge_action_payload(
         updated = apply_action(**action_kwargs)
         refreshed = store.get_task(task_id)
         results = _operation_results(operation_items)
-        return build_response(
-            updated or refreshed,
-            bulk_results=results,
-            applied_count=len(results),
-            failed_count=0,
-        )
+        return build_response(updated or refreshed, bulk_results=results, applied_count=len(results), failed_count=0)
 
     if normalized_action == "resolve_all_by_source":
         if not source:
@@ -240,17 +228,10 @@ def build_merge_action_payload(
         refreshed = updated or store.get_task(task_id)
         merge = decorate_merge_payload(authorized_bot.get_task_merge_payload(task_id, record=refreshed))
         resolved_keys = requested_keys or [
-            str(item).strip()
-            for item in (merge.get("configured_resolution_overrides", {}) or {}).keys()
-            if str(item).strip()
+            str(item).strip() for item in (merge.get("configured_resolution_overrides", {}) or {}).keys() if str(item).strip()
         ]
         operation_items = [{"key": item_key, "source": source} for item_key in resolved_keys]
-        return build_response(
-            refreshed,
-            bulk_results=_operation_results(operation_items),
-            applied_count=len(operation_items),
-            failed_count=0,
-        )
+        return build_response(refreshed, bulk_results=_operation_results(operation_items), applied_count=len(operation_items), failed_count=0)
 
     if normalized_action == "apply_preset":
         preset_name = str(preset or "").strip()
@@ -259,27 +240,13 @@ def build_merge_action_payload(
         normalized_preset = preset_name.lower().replace("-", "_")
         if normalized_preset == "clear_overrides":
             merge = decorate_merge_payload(authorized_bot.get_task_merge_payload(task_id, record=task))
-            override_keys = list(
-                dict.fromkeys(
-                    [
-                        str(item).strip()
-                        for item in merge.get("configured_resolution_overrides", {}).keys()
-                        if str(item).strip()
-                    ]
-                )
-            )
+            override_keys = list(dict.fromkeys([
+                str(item).strip() for item in merge.get("configured_resolution_overrides", {}).keys() if str(item).strip()
+            ]))
             if not override_keys:
-                refreshed = task
-                return build_response(
-                    refreshed,
-                    bulk_results=[],
-                    applied_count=0,
-                    failed_count=0,
-                    preset_name=normalized_preset,
-                )
+                return build_response(task, bulk_results=[], applied_count=0, failed_count=0, preset_name=normalized_preset)
             updated = apply_action(
-                action="clear_many",
-                keys=override_keys,
+                action="clear_many", keys=override_keys,
                 principal=principal or task.principal,
                 request_id=request_id or task.request_id or task_id,
             )
@@ -287,23 +254,14 @@ def build_merge_action_payload(
             return build_response(
                 refreshed,
                 bulk_results=_operation_results([{"key": item_key, "source": ""} for item_key in override_keys]),
-                applied_count=len(override_keys),
-                failed_count=0,
-                preset_name=normalized_preset,
+                applied_count=len(override_keys), failed_count=0, preset_name=normalized_preset,
             )
         updated = apply_action(
-            action=normalized_action,
-            preset=normalized_preset,
+            action=normalized_action, preset=normalized_preset,
             principal=principal or task.principal,
             request_id=request_id or task.request_id or task_id,
         )
         refreshed = updated or store.get_task(task_id)
-        return build_response(
-            refreshed,
-            bulk_results=[],
-            applied_count=1,
-            failed_count=0,
-            preset_name=normalized_preset,
-        )
+        return build_response(refreshed, bulk_results=[], applied_count=1, failed_count=0, preset_name=normalized_preset)
 
     raise GatewayMergeActionError(f"Unsupported merge action '{action}'", status_code=400)
