@@ -28,8 +28,14 @@ def authorize_context(
     require_approval: bool = False,
     now: datetime | None = None,
 ) -> AuthorizationDecision:
-    """Central deny-by-default object-level authorization decision."""
-    if not context.principal_id:
+    """Central deny-by-default object-level authorization decision.
+
+    ``anonymous`` is the canonical unauthenticated principal and therefore
+    cannot authorize security-sensitive operations.  Trusted local/system
+    execution must use an explicit non-anonymous principal rather than relying
+    on the absence of authentication to bypass this gate.
+    """
+    if not context.principal_id or context.principal_id == "anonymous":
         return AuthorizationDecision(False, "missing_principal")
     if principal_id is not None and context.principal_id != principal_id:
         return AuthorizationDecision(False, "principal_mismatch")
