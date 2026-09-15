@@ -18,28 +18,20 @@ from botboy.task_security import TaskSecurityStore
 
 _BLOCKED_PROXY_MUTATORS = frozenset(
     {
-        "create_task",
-        "create_child_task",
-        "update_task",
-        "start_task",
-        "mark_running",
-        "finish_task",
-        "update_status",
-        "attach_run",
-        "cancel_task",
-        "add_event",
-        "add_artifact_file",
-        "write_artifact",
-        "recover_stale_worker_task",
-        "reassign_task",
-        "acquire_queue_lease",
-        "renew_queue_lease",
-        "release_queue_lease",
-        "register_worker_node",
-        "heartbeat_worker_node",
-        "drain_worker_node",
+        "create_task", "create_child_task", "update_task", "start_task", "mark_running",
+        "finish_task", "update_status", "attach_run", "cancel_task", "add_event",
+        "add_artifact_file", "write_artifact", "recover_stale_worker_task", "reassign_task",
+        "acquire_queue_lease", "renew_queue_lease", "release_queue_lease", "register_worker_node",
+        "heartbeat_worker_node", "drain_worker_node",
     }
 )
+
+
+def _security_store(store: Any) -> TaskSecurityStore | None:
+    """Return the persisted security store only for SQLite-backed TaskStore implementations."""
+    if not hasattr(store, "_get_conn"):
+        return None
+    return TaskSecurityStore(store)
 
 
 def _authorized_record(proxy: _TaskStoreAuthorizationProxy, task_id: str) -> Any:
@@ -56,7 +48,8 @@ def _require_authorized_task(proxy: _TaskStoreAuthorizationProxy, task_id: str) 
 
 def _create_child_task(proxy: _TaskStoreAuthorizationProxy, parent_task_id: str, *, worker_id: str, title: str, **kwargs: Any):
     parent = _require_authorized_task(proxy, parent_task_id)
-    parent_security = TaskSecurityStore(proxy._store).load(parent.task_id)
+    store = _security_store(proxy._store)
+    parent_security = store.load(parent.task_id) if store else None
     principal = str(parent_security.principal_id if parent_security else getattr(parent, "principal", "anonymous"))
     org_id = str(parent_security.org_id if parent_security else getattr(parent, "org_id", "default") or "default")
     kwargs.pop("principal", None)
@@ -64,26 +57,16 @@ def _create_child_task(proxy: _TaskStoreAuthorizationProxy, parent_task_id: str,
     child = proxy._store.create_child_task(parent_task_id, worker_id=worker_id, title=title, principal=principal, **kwargs)
     if str(getattr(child, "org_id", "default") or "default") != org_id:
         child = proxy._store.update_task(child.task_id, org_id=org_id)
-    if parent_security is not None:
-        child_security = replace(
-            parent_security,
-            task_id=child.task_id,
-            parent_task_id=parent.task_id,
-            approval_id="",
-            approval_scope=frozenset(),
-            approval_expires_at=None,
-        )
-    else:
-        child_security = SecurityContext.from_legacy(
-            principal=principal,
-            org_id=org_id,
-            roles=list(proxy._roles()),
-            request_id=str(getattr(child, "request_id", "") or ""),
-            task_id=child.task_id,
-            parent_task_id=parent.task_id,
-            auth_source="task_parent",
-        )
-    TaskSecurityStore(proxy._store).save(child_security)
+    if store:
+        if parent_security is not None:
+            child_security = replace(parent_security, task_id=child.task_id, parent_task_id=parent.task_id, approval_id="", approval_scope=frozenset(), approval_expires_at=None)
+        else:
+            child_security = SecurityContext.from_legacy(
+                principal=principal, org_id=org_id, roles=list(proxy._roles()),
+                request_id=str(getattr(child, "request_id", "") or ""), task_id=child.task_id,
+                parent_task_id=parent.task_id, auth_source="task_parent",
+            )
+        store.save(child_security)
     return child
 
 
@@ -145,19 +128,21 @@ def _secure_worker_child_creation(original):
                 raise HTTPException(status_code=404, detail="Task not found")
             if str(getattr(parent, "principal", "")) != gateway_principal and not (roles & {"admin", "system"}):
                 raise HTTPException(status_code=404, detail="Task not found")
-        parent_security = TaskSecurityStore(store).load(parent.task_id)
+        security_store = _security_store(store)
+        parent_security = security_store.load(parent.task_id) if security_store else None
         effective_principal = str(parent_security.principal_id if parent_security is not None else getattr(parent, "principal", "anonymous"))
         effective_org = str(parent_security.org_id if parent_security is not None else getattr(parent, "org_id", "default") or "default")
         child = original(self, parent_task=parent_task, worker=worker, delegated_command=delegated_command, principal=effective_principal, child_request_id=child_request_id, attempt_count=attempt_count)
         child_record = store.get_task(child.task_id)
         if child_record is not None and str(getattr(child_record, "org_id", "default") or "default") != effective_org:
             child = store.update_task(child.task_id, org_id=effective_org).to_context()
-        child_security = (
-            replace(parent_security, task_id=child.task_id, parent_task_id=parent.task_id, approval_id="", approval_scope=frozenset(), approval_expires_at=None)
-            if parent_security is not None
-            else SecurityContext.from_legacy(principal=effective_principal, org_id=effective_org, roles=[], request_id=str(getattr(child, "request_id", "") or ""), task_id=child.task_id, parent_task_id=parent.task_id, auth_source="task_parent")
-        )
-        TaskSecurityStore(store).save(child_security)
+        if security_store:
+            child_security = (
+                replace(parent_security, task_id=child.task_id, parent_task_id=parent_task.task_id, approval_id="", approval_scope=frozenset(), approval_expires_at=None)
+                if parent_security is not None
+                else SecurityContext.from_legacy(principal=effective_principal, org_id=effective_org, roles=[], request_id=str(getattr(child, "request_id", "") or ""), task_id=child.task_id, parent_task_id=parent_task.task_id, auth_source="task_parent")
+            )
+            security_store.save(child_security)
         return child
     return _wrapped
 
