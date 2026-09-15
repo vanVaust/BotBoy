@@ -20,9 +20,9 @@ _BLOCKED_PROXY_MUTATORS = frozenset(
     {
         "create_task", "create_child_task", "update_task", "start_task", "mark_running",
         "finish_task", "update_status", "attach_run", "cancel_task", "add_event",
-        "add_artifact_file", "write_artifact", "recover_stale_worker_task", "reassign_task",
-        "acquire_queue_lease", "renew_queue_lease", "release_queue_lease", "register_worker_node",
-        "heartbeat_worker_node", "drain_worker_node",
+        "add_artifact_file", "add_artifact", "write_artifact", "link_artifacts_from_task",
+        "recover_stale_worker_task", "reassign_task", "acquire_queue_lease", "renew_queue_lease",
+        "release_queue_lease", "register_worker_node", "heartbeat_worker_node", "drain_worker_node",
     }
 )
 
