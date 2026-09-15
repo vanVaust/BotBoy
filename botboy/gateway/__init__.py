@@ -6,3 +6,4 @@ from botboy.gateway import queue_security as _queue_security  # noqa: F401,E402
 from botboy.gateway import task_boundary as _task_boundary  # noqa: F401,E402
 from botboy.gateway import recovery_security as _recovery_security  # noqa: F401,E402
 from botboy.gateway import task_summary_security as _task_summary_security  # noqa: F401,E402
+from botboy.gateway import merge_security as _merge_security  # noqa: F401,E402
