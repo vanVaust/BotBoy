@@ -48,6 +48,10 @@ setup(
     install_requires=["pyyaml>=6.0"],
     extras_require={
         "standard": [
+            # FastAPI 0.140.x is currently incompatible with BotBoy's
+            # dynamically-created route functions and postponed annotations;
+            # keep the known-good 0.139.x line until the route annotations
+            # are made runtime-resolvable without ForwardRef failures.
             "fastapi>=0.109.0,<0.140.0",
             "uvicorn[standard]>=0.27.0",
             "websockets>=12.0",
