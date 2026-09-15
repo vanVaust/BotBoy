@@ -46,6 +46,21 @@ class GatewayTaskAuthorizationTest(unittest.TestCase):
         def authorize_with_roles(*_args, **_kwargs):
             return "alice", list(roles)
 
+        def approval_context(headers, payload, approval_roles):
+            header_value = str(headers.get("x-botboy-approval", "")).lower() if headers else ""
+            header_granted = header_value in {"1", "true", "approved"}
+            payload_granted = bool(payload.get("approval")) if isinstance(payload, dict) else False
+            admin_granted = "admin" in [str(role).lower() for role in approval_roles or []]
+            if admin_granted:
+                reason = "admin_role"
+            elif payload_granted:
+                reason = "payload"
+            elif header_granted:
+                reason = "header"
+            else:
+                reason = "none"
+            return {"granted": admin_granted or payload_granted or header_granted, "explicit": payload_granted or header_granted, "reason": reason}
+
         return GatewayAppContext(
             bot=SimpleNamespace(),
             host="127.0.0.1",
@@ -57,7 +72,7 @@ class GatewayTaskAuthorizationTest(unittest.TestCase):
             security=None,
             authorize=authorize,
             authorize_with_roles=authorize_with_roles,
-            approval_context=lambda *_args, **_kwargs: {},
+            approval_context=approval_context,
             require_admin=lambda *_args, **_kwargs: None,
             get_api_key_store=lambda: None,
             bootstrap_principal_store=lambda: None,
@@ -131,3 +146,21 @@ class GatewayTaskAuthorizationTest(unittest.TestCase):
         rows, total = scoped.list_tasks(principal="bob")
         self.assertEqual([row.task_id for row in rows], ["task-b"])
         self.assertEqual(total, 1)
+
+    def test_non_admin_payload_approval_is_rejected(self):
+        ctx = self._context(FakeStore())
+        ctx.authorize_with_roles({}, "127.0.0.1", require_auth=True)
+
+        result = ctx.approval_context({}, {"approval": True}, [])
+
+        self.assertFalse(result["granted"])
+        self.assertEqual(result["reason"], "payload_approval_rejected")
+
+    def test_explicit_header_approval_is_preserved(self):
+        ctx = self._context(FakeStore())
+        ctx.authorize_with_roles({"x-botboy-approval": "approved"}, "127.0.0.1", require_auth=True)
+
+        result = ctx.approval_context({"x-botboy-approval": "approved"}, {"approval": False}, [])
+
+        self.assertTrue(result["granted"])
+        self.assertEqual(result["reason"], "header")
