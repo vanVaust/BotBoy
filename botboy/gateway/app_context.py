@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 _current_principal: ContextVar[str] = ContextVar("botboy_gateway_principal", default="")
 _current_roles: ContextVar[tuple[str, ...]] = ContextVar("botboy_gateway_roles", default=())
+_current_org: ContextVar[str] = ContextVar("botboy_gateway_org", default="default")
 
 
 def current_gateway_principal() -> str:
@@ -18,6 +19,10 @@ def current_gateway_principal() -> str:
 
 def current_gateway_roles() -> tuple[str, ...]:
     return _current_roles.get()
+
+
+def current_gateway_org() -> str:
+    return _current_org.get()
 
 
 class _TaskStoreAuthorizationProxy:
@@ -44,7 +49,12 @@ class _TaskStoreAuthorizationProxy:
         if record is None or self._is_admin():
             return record is not None
         principal = current_gateway_principal()
-        return bool(principal) and str(getattr(record, "principal", "")) == principal
+        org_id = current_gateway_org()
+        return (
+            bool(principal)
+            and str(getattr(record, "principal", "")) == principal
+            and str(getattr(record, "org_id", "default") or "default") == org_id
+        )
 
     def _require_worker_control(self) -> None:
         if not self._is_worker():
@@ -58,11 +68,17 @@ class _TaskStoreAuthorizationProxy:
         if not self._auth_enabled or self._is_admin():
             return self._store.list_tasks(**kwargs)
         principal = current_gateway_principal()
+        org_id = current_gateway_org()
         if not principal:
             return [], 0
         scoped = dict(kwargs)
         scoped["principal"] = principal
-        return self._store.list_tasks(**scoped)
+        # TaskStore supports org_id as a persisted field even though older
+        # callers did not expose it in its public list signature. Apply the
+        # tenant filter defensively at the proxy boundary after retrieval.
+        records, total = self._store.list_tasks(**scoped)
+        records = [record for record in records if str(getattr(record, "org_id", "default") or "default") == org_id]
+        return records, len(records) if total != len(records) else total
 
     def get_events(self, task_id: str, *args, **kwargs):
         if self.get_task(task_id) is None:
@@ -79,9 +95,6 @@ class _TaskStoreAuthorizationProxy:
             return None
         return self._store.cancel_task(task_id, *args, **kwargs)
 
-    # Worker/fleet operations are privileged function-level operations.  The
-    # route layer may authenticate a caller, but authentication alone must not
-    # grant the ability to register, mutate, or drain execution infrastructure.
     def register_worker_node(self, *args, **kwargs):
         self._require_worker_control()
         return self._store.register_worker_node(*args, **kwargs)
@@ -183,16 +196,42 @@ class GatewayAppContext:
         original_approval_context = self.approval_context
         original_store_factory = self.task_store_or_503
 
+        def resolve_org(principal: str) -> str:
+            """Resolve tenant from server-side credential stores, never client data."""
+            if not principal:
+                return "default"
+            try:
+                store = self.bootstrap_principal_store()
+                record = store.get_principal(principal) if store else None
+                if record:
+                    return str(record.org_id or "default")
+            except Exception:
+                pass
+            try:
+                store = self.get_api_key_store()
+                if store and hasattr(store, "_get_conn"):
+                    row = store._get_conn().execute(
+                        "SELECT org_id FROM api_keys WHERE key_id = ? AND revoked = 0",
+                        (principal,),
+                    ).fetchone()
+                    if row:
+                        return str(row["org_id"] or "default")
+            except Exception:
+                pass
+            return "default"
+
         def scoped_authorize(*args, **kwargs):
             principal = original_authorize(*args, **kwargs)
             _current_principal.set(str(principal or ""))
             _current_roles.set(())
+            _current_org.set(resolve_org(str(principal or "")))
             return principal
 
         def scoped_authorize_with_roles(*args, **kwargs):
             principal, roles = original_authorize_with_roles(*args, **kwargs)
             _current_principal.set(str(principal or ""))
             _current_roles.set(tuple(str(role) for role in (roles or [])))
+            _current_org.set(resolve_org(str(principal or "")))
             return principal, roles
 
         def scoped_approval_context(*args, **kwargs):
