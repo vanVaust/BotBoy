@@ -9,3 +9,4 @@ from botboy.gateway import task_summary_security as _task_summary_security  # no
 from botboy.gateway import merge_security as _merge_security  # noqa: F401,E402
 from botboy.gateway import store_read_security as _store_read_security  # noqa: F401,E402
 from botboy.gateway import task_store_surface_security as _task_store_surface_security  # noqa: F401,E402
+from botboy.gateway import worker_read_security as _worker_read_security  # noqa: F401,E402
