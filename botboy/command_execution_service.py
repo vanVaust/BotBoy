@@ -6,6 +6,7 @@ import time
 from typing import Optional
 
 from botboy.tasks import TASK_STATUS_COMPLETED, TASK_STATUS_FAILED, TaskContext
+from botboy.security_context import SecurityContext
 
 OPTIONAL_ROUTE_ERRORS = (
     RuntimeError,
@@ -43,6 +44,22 @@ class CommandExecutionService:
             "reason": "local_default",
             "source": "local",
         }
+
+    @staticmethod
+    def _cache_security_scope(security_context: SecurityContext) -> str:
+        """Stable scope boundary for cached command results.
+
+        At minimum, cached results must not cross principal/tenant boundaries.
+        A future authorization-version change can invalidate old scopes by
+        changing the version carried in SecurityContext.
+        """
+        roles = ",".join(sorted(security_context.roles))
+        return (
+            f"v={security_context.authorization_version}"
+            f"|org={security_context.org_id}"
+            f"|principal={security_context.principal_id}"
+            f"|roles={roles}"
+        )
 
     def _cache_allowed(self, raw_command: str) -> bool:
         normalized_command = raw_command.strip().lower()
@@ -321,6 +338,7 @@ class CommandExecutionService:
         roles: Optional[list[str]] = None,
         approval_context: Optional[dict] = None,
         task_context: Optional[TaskContext] = None,
+        security_context: Optional[SecurityContext] = None,
     ) -> dict:
         if not raw_command or not raw_command.strip():
             return {"success": False, "output": "Empty command.", "type": "error"}
@@ -329,10 +347,23 @@ class CommandExecutionService:
         stripped_command = raw_command.strip()
         principal_id = principal or (task_context.principal if task_context else "") or "anonymous"
         trace_request_id = request_id or (task_context.request_id if task_context else "") or ""
+        roles = roles or []
+        security_context = security_context or SecurityContext.from_legacy(
+            principal=principal_id,
+            org_id=task_context.org_id if task_context else "default",
+            roles=roles,
+            request_id=trace_request_id,
+            task_id=task_context.task_id if task_context else "",
+            parent_task_id=task_context.parent_task_id if task_context else "",
+            auth_source="legacy",
+        )
+        principal_id = security_context.principal_id
+        trace_request_id = security_context.request_id or trace_request_id
+        cache_scope = self._cache_security_scope(security_context)
+
         effective_approval_context = dict(approval_context or {})
         if approval_context is None:
             effective_approval_context = self._default_approval_context()
-        roles = roles or []
         cache_allowed = self._cache_allowed(stripped_command)
 
         task_ctx = self.bot._create_task_context(
@@ -341,6 +372,18 @@ class CommandExecutionService:
             request_id=trace_request_id,
             task_context=task_context,
         )
+        security_context = security_context.with_task(
+            task_ctx.task_id if task_ctx else security_context.task_id,
+            task_ctx.parent_task_id if task_ctx else security_context.parent_task_id,
+        )
+        self._mark_task_running(
+            task_ctx,
+            raw_command=stripped_command,
+            principal_id=principal_id,
+            request_id=trace_request_id,
+            trace_ctx=None,
+        )
+
         trace_ctx, root_span_id, trace_token = self.bot._start_trace_run(
             stripped_command,
             principal_id,
@@ -356,7 +399,7 @@ class CommandExecutionService:
         )
 
         if self.bot.cache and cache_allowed:
-            cached = self.bot.cache.get(raw_command)
+            cached = self.bot.cache.get(raw_command, security_scope=cache_scope)
             if cached is not None:
                 return self._record_cache_hit(
                     cached,
@@ -389,7 +432,7 @@ class CommandExecutionService:
         result = await self._run_route(
             command,
             principal_id=principal_id,
-            roles=roles,
+            roles=list(security_context.roles),
             approval_context=effective_approval_context,
             request_id=trace_request_id,
             task_ctx=task_ctx,
@@ -406,7 +449,7 @@ class CommandExecutionService:
         task_status = self.bot._infer_task_status(result)
 
         if self.bot.cache and cache_allowed:
-            self.bot.cache.set(raw_command, result)
+            self.bot.cache.set(raw_command, result, security_scope=cache_scope)
 
         self._record_history_and_metrics(
             command=command,
@@ -458,6 +501,7 @@ async def process_command(
     roles: Optional[list[str]] = None,
     approval_context: Optional[dict] = None,
     task_context: Optional[TaskContext] = None,
+    security_context: Optional[SecurityContext] = None,
 ) -> dict:
     return await CommandExecutionService(bot).process_command(
         raw_command,
@@ -466,4 +510,5 @@ async def process_command(
         roles=roles,
         approval_context=approval_context,
         task_context=task_context,
+        security_context=security_context,
     )
