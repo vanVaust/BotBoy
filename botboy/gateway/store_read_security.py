@@ -1,10 +1,6 @@
 """Tenant-safe guards for relationship reads exposed by the gateway task-store proxy."""
 from __future__ import annotations
 
-from typing import Any
-
-from fastapi import HTTPException
-
 from botboy.gateway.app_context import (
     _TaskStoreAuthorizationProxy,
     current_gateway_roles,
