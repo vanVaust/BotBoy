@@ -26,7 +26,7 @@ def _collect_package_data(relative_root: str) -> list[str]:
             continue
         if file_path.name in IGNORED_PACKAGE_FILENAMES:
             continue
-        if file_path.suffix in IGNO_PACKAGE_SUFFIXES:
+        if file_path.suffix in IGNORED_PACKAGE_SUFFIXES:
             continue
         package_files.append(str(relative).replace("\\", "/"))
     return package_files
