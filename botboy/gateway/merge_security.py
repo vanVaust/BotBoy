@@ -35,6 +35,12 @@ def _authorized_record(service: TaskMergeService, record: Any) -> bool:
 
 
 def _family_authorized(service: TaskMergeService, task_id: str) -> bool:
+    # Merge-service unit tests and local/auth-disabled runtimes may construct a
+    # service without a backing task store. In that mode there is no security
+    # boundary to enforce here; production/auth-enabled instances fail closed.
+    if not _auth_enabled(service):
+        return True
+
     store = getattr(service, "task_store", None)
     if store is None:
         store = getattr(getattr(service, "bot", None), "task_store", None)
