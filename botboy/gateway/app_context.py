@@ -129,8 +129,15 @@ class _TaskStoreAuthorizationProxy:
     def _node_owned_by_current_principal(self, node: Any) -> bool:
         if node is None:
             return False
-        owner = str((node.get("metadata") or {}).get("owner_principal", "") or "")
-        return bool(owner) and owner == current_gateway_principal()
+        principal = current_gateway_principal()
+        metadata = node.get("metadata") or {}
+        owner = str(metadata.get("owner_principal", "") or "")
+        worker_id = str(node.get("worker_id", "") or "")
+        # A node registered/reassigned by an administrator remains operable by
+        # the worker identity it is bound to. The explicit owner principal is
+        # still authoritative for non-worker identities, while worker_id binds
+        # the actual worker process to its assigned node.
+        return bool(principal) and (owner == principal or worker_id == principal)
 
     def register_worker_node(self, *args, **kwargs):
         self._require_worker_control()
@@ -258,21 +265,16 @@ class GatewayAppContext:
         original_store_factory = self.task_store_or_503
 
         def resolve_org(principal: str) -> str:
-            if not principal:
-                return "default"
-            try:
-                store = self.bootstrap_principal_store()
-                record = store.get_principal(principal) if store else None
-                if record:
-                    return str(record.org_id or "default")
-            except Exception:
-                pass
             try:
                 store = self.get_api_key_store()
-                if store and hasattr(store, "_get_conn"):
-                    row = store._get_conn().execute("SELECT org_id FROM api_keys WHERE key_id = ? AND revoked = 0", (principal,)).fetchone()
-                    if row:
-                        return str(row["org_id"] or "default")
+                if store is not None and hasattr(store, "_get_conn"):
+                    with store._get_conn() as conn:
+                        row = conn.execute(
+                            "SELECT org_id FROM api_keys WHERE principal = ? AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1",
+                            (principal,),
+                        ).fetchone()
+                        if row:
+                            return str(row["org_id"] or "default")
             except Exception:
                 pass
             return "default"
@@ -292,8 +294,11 @@ class GatewayAppContext:
             return principal, roles
 
         def scoped_approval_context(*args, **kwargs):
+            """Reject client-payload approval while preserving explicit approval."""
             context = dict(original_approval_context(*args, **kwargs) or {})
-            if context.get("reason") == "payload" and "admin" not in {str(role).lower() for role in current_gateway_roles()}:
+            if context.get("reason") == "payload" and "admin" not in {
+                str(role).lower() for role in current_gateway_roles()
+            }:
                 context["granted"] = False
                 context["explicit"] = False
                 context["reason"] = "payload_approval_rejected"
