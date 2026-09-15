@@ -25,9 +25,9 @@ def authorize_context(
     org_id: str | None = None,
     task_id: str | None = None,
     require_approval: bool = False,
-    now: float | None = None,
+    now: object | None = None,
 ) -> AuthorizationDecision:
-    """Central, deny-by-default object-level authorization decision.
+    """Central deny-by-default object-level authorization decision.
 
     The caller must provide the server-derived SecurityContext. Request-body
     identity, role, tenant and approval values must never be substituted here.
@@ -49,10 +49,7 @@ def authorize_context(
     return AuthorizationDecision(True, "authorized")
 
 
-def require_authorized(
-    context: SecurityContext,
-    **kwargs: object,
-) -> None:
+def require_authorized(context: SecurityContext, **kwargs: object) -> None:
     decision = authorize_context(context, **kwargs)  # type: ignore[arg-type]
     if not decision.allowed:
         raise AuthorizationError(decision.reason)
