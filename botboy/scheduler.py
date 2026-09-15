@@ -103,6 +103,15 @@ class SchedulerStore(_SQLiteMixin):
         if "security_context" not in columns:
             conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN security_context TEXT NOT NULL DEFAULT '{}'")
             conn.commit()
+        legacy=conn.execute("SELECT task_id,payload FROM scheduled_tasks").fetchall()
+        for row in legacy:
+            try: payload=json.loads(row[1] or "{}")
+            except (TypeError,ValueError): continue
+            security=payload.get("_botboy_security") if isinstance(payload,dict) else None
+            if isinstance(security,dict) and security.get("org_id") and security.get("principal_id") and not security.get("enforced"):
+                security["enforced"]=True
+                conn.execute("UPDATE scheduled_tasks SET payload=?,security_context=? WHERE task_id=?",(json.dumps(payload),json.dumps(security,separators=(",",":")),row[0]))
+        conn.commit()
     def add_task(self,name:str,schedule:str,task_type:str="generic",payload:Optional[dict]=None,max_runs:Optional[int]=None,security_context:Optional[dict]=None)->str:
         task_id=_secrets.token_hex(8); next_run=parse_schedule(schedule); body=dict(payload or {})
         if security_context is not None:
