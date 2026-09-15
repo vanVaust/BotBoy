@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - master
+      - security/v5.1-foundation
   pull_request:
 
 jobs:
