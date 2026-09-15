@@ -114,6 +114,7 @@ class GatewayAppContext:
     def __post_init__(self) -> None:
         original_authorize = self.authorize
         original_authorize_with_roles = self.authorize_with_roles
+        original_approval_context = self.approval_context
         original_store_factory = self.task_store_or_503
 
         def scoped_authorize(*args, **kwargs):
@@ -128,6 +129,25 @@ class GatewayAppContext:
             _current_roles.set(tuple(str(role) for role in (roles or [])))
             return principal, roles
 
+        def scoped_approval_context(*args, **kwargs):
+            """Build approval context without trusting a client payload boolean.
+
+            Gateway callers may still use an explicit approval header or an
+            authorized admin role. A route cannot manufacture approval merely
+            by passing {"approval": true} internally; this closes the task
+            resume path that previously did exactly that.
+            """
+            context = dict(original_approval_context(*args, **kwargs) or {})
+            payload = args[1] if len(args) > 1 else kwargs.get("payload")
+            roles = current_gateway_roles()
+            admin = "admin" in {str(role).lower() for role in roles}
+            payload_granted = isinstance(payload, dict) and bool(payload.get("approval"))
+            if payload_granted and not admin:
+                context["granted"] = False
+                context["explicit"] = False
+                context["reason"] = "payload_approval_rejected"
+            return context
+
         def scoped_store_factory(*args, **kwargs):
             store = original_store_factory(*args, **kwargs)
             if store is None:
@@ -136,4 +156,5 @@ class GatewayAppContext:
 
         self.authorize = scoped_authorize
         self.authorize_with_roles = scoped_authorize_with_roles
+        self.approval_context = scoped_approval_context
         self.task_store_or_503 = scoped_store_factory
