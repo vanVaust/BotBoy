@@ -4,6 +4,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
+from botboy.approval_store import ApprovalStore
 from botboy.gateway.app_context import GatewayAppContext
 from botboy.tasks import (
     ACTIVE_TASK_STATUSES,
@@ -422,6 +423,46 @@ def create_task_router(ctx: GatewayAppContext) -> APIRouter:
         artifacts = store.get_artifacts(task_id, limit=min(limit, 200))
         return {"available": True, "task_id": task_id, "artifacts": [artifact.to_dict() for artifact in artifacts], "count": len(artifacts)}
 
+    @router.post("/api/tasks/{task_id}/approve")
+    async def task_approve(request: Request, task_id: str):
+        principal_id, roles = ctx.authorize_with_roles(
+            request.headers,
+            request.client.host if request.client else "",
+            require_auth=ctx.auth_enabled,
+        )
+        store = ctx.task_store_or_503()
+        record = store.get_task(task_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if not record.command.strip():
+            raise HTTPException(status_code=409, detail="Task has no command to approve")
+        if record.status not in {TASK_STATUS_WAITING_APPROVAL, TASK_STATUS_BLOCKED, TASK_STATUS_FAILED}:
+            raise HTTPException(status_code=409, detail=f"Task '{task_id}' is not approvable from status '{record.status}'")
+        principal = principal_id or record.principal
+        if principal != record.principal and "admin" not in {str(role).lower() for role in roles}:
+            raise HTTPException(status_code=403, detail="Task approval requires task ownership")
+        security_context = bot.lifecycle_service.load_security_context(task_id)
+        authorization_version = security_context.authorization_version if security_context else 1
+        approval = ApprovalStore(store).issue(
+            task_id=task_id,
+            principal_id=principal,
+            org_id=record.org_id,
+            command=record.command,
+            capability="task.execute",
+            authorization_version=authorization_version,
+        )
+        store.add_event(
+            task_id,
+            event_type="approval_issued",
+            status=record.status,
+            message="Server-issued task execution approval",
+            principal=principal,
+            request_id=getattr(request.state, "request_id", ""),
+            run_id=record.run_id,
+            payload_ref="approval",
+        )
+        return {"success": True, "approval": approval}
+
     @router.post("/api/tasks/{task_id}/resume")
     async def task_resume(request: Request, task_id: str):
         principal_id, roles = ctx.authorize_with_roles(
@@ -437,12 +478,37 @@ def create_task_router(ctx: GatewayAppContext) -> APIRouter:
             raise HTTPException(status_code=409, detail="Task has no command to resume")
         if record.status not in {TASK_STATUS_WAITING_APPROVAL, TASK_STATUS_BLOCKED, TASK_STATUS_FAILED}:
             raise HTTPException(status_code=409, detail=f"Task '{task_id}' is not resumable from status '{record.status}'")
+        principal = principal_id or record.principal
+        approval_id = request.headers.get("x-botboy-approval", "").strip()
+        if not approval_id:
+            raise HTTPException(status_code=403, detail="Server-issued approval required")
+        security_context = bot.lifecycle_service.load_security_context(task_id)
+        authorization_version = security_context.authorization_version if security_context else 1
+        consumed = ApprovalStore(store).consume_if_valid(
+            approval_id,
+            task_id=task_id,
+            principal_id=principal,
+            org_id=record.org_id,
+            command=record.command,
+            capability="task.execute",
+            authorization_version=authorization_version,
+        )
+        if not consumed:
+            raise HTTPException(status_code=403, detail="Invalid, expired, already-consumed, or mismatched approval")
         return await bot.process_command(
             record.command,
-            principal=principal_id or record.principal,
+            principal=principal,
             request_id=getattr(request.state, "request_id", "") or f"{record.request_id or task_id}-resume",
             roles=roles,
-            approval_context=ctx.approval_context(request.headers, {"approval": True}, roles),
+            approval_context={
+                "granted": True,
+                "explicit": True,
+                "reason": "server_issued",
+                "source": "approval_store",
+                "approval_id": approval_id,
+                "approval_scope": "task.execute",
+                "approval_expires_at": consumed["expires_at"],
+            },
             task_context=record.to_context(),
         )
 
