@@ -10,7 +10,7 @@ import os
 import secrets
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, List, Optional
 
 
 @dataclass(frozen=True)
@@ -63,15 +63,10 @@ def _b64url_decode(s: str) -> bytes:
 
 
 class JWTAuth:
-    """
-    HS256 JWT authentication using stdlib only.
+    """HS256 JWT authentication using stdlib only."""
 
-    Token structure:
-        header.payload.signature  (standard JWT)
-    """
-
-    ACCESS_TTL = 3600        # 1 hour
-    REFRESH_TTL = 604800     # 7 days
+    ACCESS_TTL = 3600
+    REFRESH_TTL = 604800
     MIN_SECRET_LEN = 32
 
     def __init__(self, secret: str = "", *, allow_generate: bool = False, revocation_store: Any = None) -> None:
@@ -156,7 +151,6 @@ class JWTAuth:
             principal_type=principal_type,
             credential_source=credential_source,
         )
-
         access_payload = {
             "sub": principal_obj.principal_id,
             "roles": principal_obj.roles,
@@ -187,7 +181,6 @@ class JWTAuth:
 
     @staticmethod
     def extract_bearer_token(header_value: str = "") -> str:
-        """Extract a Bearer token from an Authorization header."""
         if not header_value:
             return ""
         if header_value.lower().startswith("bearer "):
@@ -206,7 +199,6 @@ class JWTAuth:
             self._local_revoked_jtis.add(jti)
 
     def revoke_token(self, token: str) -> bool:
-        """Revokes a specific token."""
         payload = self._decode(token)
         if not payload:
             return False
@@ -250,14 +242,10 @@ class JWTAuth:
         jti = payload.get("jti", "")
         if jti and self.is_revoked(jti):
             return None
-        
-        # Optionally, revoke the used refresh token (refresh token rotation)
         self.revoke_jti(jti, payload.get("exp", 0))
-
         return self.create_pair(
             payload["sub"],
             payload.get("roles", ["user"]),
             principal_type=payload.get("ptype", "user"),
             credential_source=payload.get("src", "jwt"),
         )
-
