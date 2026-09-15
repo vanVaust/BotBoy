@@ -60,6 +60,19 @@ class _TaskStoreAuthorizationProxy:
         if not self._is_worker():
             raise HTTPException(status_code=403, detail="Worker control requires worker or admin authorization")
 
+    def _authorized_artifact_path(self, task_id: str, file_path: str) -> Path:
+        """Allow artifact registration only for files inside the task artifact root."""
+        task = self._store.get_task(task_id)
+        if not self._authorized(task):
+            raise HTTPException(status_code=404, detail="Task not found")
+        root = Path(self._store.artifact_root).expanduser().resolve()
+        candidate = Path(file_path).expanduser().resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Artifact path is outside the managed artifact root") from exc
+        return candidate
+
     def get_task(self, task_id: str):
         record = self._store.get_task(task_id)
         return record if self._authorized(record) else None
@@ -73,9 +86,6 @@ class _TaskStoreAuthorizationProxy:
             return [], 0
         scoped = dict(kwargs)
         scoped["principal"] = principal
-        # TaskStore supports org_id as a persisted field even though older
-        # callers did not expose it in its public list signature. Apply the
-        # tenant filter defensively at the proxy boundary after retrieval.
         records, total = self._store.list_tasks(**scoped)
         records = [record for record in records if str(getattr(record, "org_id", "default") or "default") == org_id]
         return records, len(records) if total != len(records) else total
@@ -89,6 +99,30 @@ class _TaskStoreAuthorizationProxy:
         if self.get_task(task_id) is None:
             return []
         return self._store.get_artifacts(task_id, *args, **kwargs)
+
+    def add_artifact_file(self, task_id: str, *args, **kwargs):
+        file_path = kwargs.get("file_path")
+        if file_path is None and len(args) >= 1:
+            file_path = args[0]
+        self._authorized_artifact_path(task_id, str(file_path or ""))
+        return self._store.add_artifact_file(task_id, *args, **kwargs)
+
+    def write_artifact(self, task_id: str, *args, **kwargs):
+        if self.get_task(task_id) is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        filename = str(kwargs.get("filename", ""))
+        if not filename and len(args) >= 4:
+            filename = str(args[3])
+        # Resolve the target exactly as TaskStore will, but reject traversal and
+        # absolute paths before the underlying implementation writes anything.
+        root = Path(self._store.artifact_root).expanduser().resolve()
+        task_dir = (root / task_id).resolve()
+        target = (task_dir / filename).resolve()
+        try:
+            target.relative_to(task_dir)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Artifact filename escapes the task artifact directory") from exc
+        return self._store.write_artifact(task_id, *args, **kwargs)
 
     def cancel_task(self, task_id: str, *args, **kwargs):
         if self.get_task(task_id) is None:
