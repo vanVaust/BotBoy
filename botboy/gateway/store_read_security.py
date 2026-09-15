@@ -50,10 +50,49 @@ def install() -> None:
             return records
         return [item for item in records if self._authorized(item)]
 
+    def list_blockers(self, *, limit: int = 100):
+        records = self._store.list_blockers(limit=limit)
+        if not self._auth_enabled or _system():
+            return records
+        return [item for item in records if self._authorized(item)]
+
+    def task_graph(self, task_id: str):
+        record = _visible(self, task_id)
+        if record is None:
+            return {"task": None, "children": [], "root_task_id": ""}
+        graph = self._store.task_graph(record.task_id)
+        if not self._auth_enabled or _system():
+            return graph
+        tasks = [item for item in graph.get("tasks", []) if self._authorized(self._store.get_task(item.get("task_id", "")))]
+        children = [item for item in graph.get("children", []) if self._authorized(self._store.get_task(item.get("task_id", "")))]
+        root = graph.get("root")
+        if isinstance(root, dict):
+            root_record = self._store.get_task(root.get("task_id", ""))
+            if root_record is None or not self._authorized(root_record):
+                root = None
+        graph = dict(graph)
+        graph["tasks"] = tasks
+        graph["children"] = children
+        graph["root"] = root
+        return graph
+
+    def list_worker_leases(self, *, limit: int = 100, only_stale: bool = False, lease_timeout_s: int = 900):
+        leases = self._store.list_worker_leases(
+            limit=limit,
+            only_stale=only_stale,
+            lease_timeout_s=lease_timeout_s,
+        )
+        if not self._auth_enabled or _system():
+            return leases
+        return [lease for lease in leases if self.get_task(str(lease.get("task_id", "") or "")) is not None]
+
     cls.list_children = list_children
     cls.get_children = get_children
     cls.get_blockers = get_blockers
     cls.get_blocked_tasks = get_blocked_tasks
+    cls.list_blockers = list_blockers
+    cls.task_graph = task_graph
+    cls.list_worker_leases = list_worker_leases
     cls._store_read_security_installed = True
 
 
