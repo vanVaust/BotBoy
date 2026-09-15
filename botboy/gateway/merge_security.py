@@ -37,6 +37,8 @@ def _authorized_record(service: TaskMergeService, record: Any) -> bool:
 def _family_authorized(service: TaskMergeService, task_id: str) -> bool:
     store = getattr(service, "task_store", None)
     if store is None:
+        store = getattr(getattr(service, "bot", None), "task_store", None)
+    if store is None:
         return False
     get_task = getattr(store, "get_task", None)
     task = get_task(task_id) if callable(get_task) else None
@@ -90,7 +92,6 @@ def _wrap_apply_action(original: Callable[..., Any]) -> Callable[..., Any]:
             if principal and principal != current_principal:
                 kwargs["principal"] = current_principal
         return original(self, task_id, **kwargs)
-
     return guarded
 
 
