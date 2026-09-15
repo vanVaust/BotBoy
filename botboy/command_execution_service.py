@@ -45,6 +45,60 @@ class CommandExecutionService:
             "source": "local",
         }
 
+    def _approval_required(self, command: str) -> bool:
+        if not self.bot.skills:
+            return False
+        contract = self.bot.skills.get_contract_for_command(command.strip())
+        return bool(contract and contract.get("needs_approval"))
+
+    @staticmethod
+    def _has_server_approval(approval_context: dict) -> bool:
+        return bool(
+            approval_context.get("granted")
+            and approval_context.get("explicit")
+            and approval_context.get("source") == "approval_store"
+            and str(approval_context.get("approval_id", "")).strip()
+            and approval_context.get("approval_scope") == "task.execute"
+        )
+
+    def _authorization_failure(
+        self,
+        output: str,
+        *,
+        task_ctx: Optional[TaskContext],
+        trace_ctx,
+        root_span_id: str,
+        trace_token,
+        principal_id: str,
+        request_id: str,
+    ) -> dict:
+        result = {"success": False, "output": output, "type": "authorization_error"}
+        result = self.bot._decorate_with_task(result, task_ctx, TASK_STATUS_FAILED)
+        if self.bot.task_store and task_ctx:
+            self.bot.task_store.update_status(
+                task_ctx.task_id,
+                status=TASK_STATUS_FAILED,
+                summary=output[:256],
+                result=result,
+                run_id=trace_ctx.run_id if trace_ctx else "",
+                principal=principal_id,
+                request_id=request_id,
+                event_type="authorization_denied",
+                message=output[:256],
+                payload_ref="approval",
+            )
+        if trace_ctx:
+            self.bot._finish_trace_run(
+                trace_ctx,
+                root_span_id,
+                trace_token,
+                status="error",
+                cmd_type="authorization_error",
+                summary=output[:256],
+                payload_ref="approval",
+            )
+        return result
+
     @staticmethod
     def _cache_security_scope(security_context: SecurityContext) -> str:
         """Stable scope boundary for cached command results.
@@ -428,6 +482,17 @@ class CommandExecutionService:
             command = validation.sanitized
         else:
             command = stripped_command
+
+        if self._approval_required(command) and not self._has_server_approval(effective_approval_context):
+            return self._authorization_failure(
+                "Server-issued approval required for this command.",
+                task_ctx=task_ctx,
+                trace_ctx=trace_ctx,
+                root_span_id=root_span_id,
+                trace_token=trace_token,
+                principal_id=principal_id,
+                request_id=trace_request_id,
+            )
 
         result = await self._run_route(
             command,
