@@ -138,6 +138,12 @@ class _TaskStoreAuthorizationProxy:
             return None
         return self._store.cancel_task(task_id, *args, **kwargs)
 
+    def update_task(self, *args, **kwargs):
+        """Never expose the raw task-store updater through an authenticated proxy."""
+        if self._auth_enabled:
+            raise HTTPException(status_code=403, detail="Direct task-store mutation 'update_task' is not authorized through the gateway proxy")
+        return self._store.update_task(*args, **kwargs)
+
     def _node_owned_by_current_principal(self, node: Any) -> bool:
         if node is None:
             return False
