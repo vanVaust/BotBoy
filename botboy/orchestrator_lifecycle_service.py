@@ -136,7 +136,7 @@ class OrchestratorLifecycleService:
         if task_context:
             return task_context
         title = command.strip()[:120] or kind
-        return self.task_store.create_task(
+        created = self.task_store.create_task(
             kind=kind,
             owner=owner,
             title=title,
@@ -150,6 +150,16 @@ class OrchestratorLifecycleService:
             command=command,
             payload=payload or {"command": command, "kind": kind},
         )
+        baseline = SecurityContext.from_legacy(
+            principal=principal,
+            org_id=created.org_id,
+            request_id=request_id,
+            task_id=created.task_id,
+            parent_task_id=created.parent_task_id,
+            auth_source="task_lifecycle",
+        )
+        self.persist_security_context(baseline)
+        return created
 
     @staticmethod
     def task_context_from_record(record) -> TaskContext:
