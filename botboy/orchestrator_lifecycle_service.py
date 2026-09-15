@@ -248,3 +248,30 @@ def create_task_context(
         payload=payload,
         task_context=task_context,
     )
+
+
+def decorate_with_task(result: dict, task_ctx: Optional[TaskContext], status: str) -> dict:
+    return OrchestratorLifecycleService.decorate_with_task(result, task_ctx, status)
+
+
+def trace_async_label(
+    bot: Any,
+    trace_ctx: Optional[TraceContext],
+    parent_span_id: str,
+    component: str,
+    event_type: str,
+):
+    return create_orchestrator_lifecycle_service(bot).trace_async_label(
+        trace_ctx,
+        parent_span_id,
+        component,
+        event_type,
+    )
+
+
+def task_context_from_record(record) -> TaskContext:
+    return OrchestratorLifecycleService.task_context_from_record(record)
+
+
+def shutdown_orchestrator_resources(bot: Any) -> None:
+    create_orchestrator_lifecycle_service(bot).shutdown_resources()
