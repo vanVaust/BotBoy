@@ -155,9 +155,17 @@ def _secure_proxy_attribute_access(original):
     return _guarded
 
 
+def _blocked_update_task(proxy: _TaskStoreAuthorizationProxy, *args: Any, **kwargs: Any):
+    """Explicitly bind the raw task updater to the same deny-by-default boundary."""
+    if proxy._auth_enabled:
+        raise HTTPException(status_code=403, detail="Direct task-store mutation 'update_task' is not authorized through the gateway proxy")
+    return proxy._store.update_task(*args, **kwargs)
+
+
 _TaskStoreAuthorizationProxy.create_child_task = _create_child_task
 _TaskStoreAuthorizationProxy.recover_stale_worker_task = _recover_stale_worker_task
 _TaskStoreAuthorizationProxy.reassign_task = _reassign_task
+_TaskStoreAuthorizationProxy.update_task = _blocked_update_task
 _TaskStoreAuthorizationProxy.__getattr__ = _secure_proxy_attribute_access(_TaskStoreAuthorizationProxy.__getattr__)
 
 try:
