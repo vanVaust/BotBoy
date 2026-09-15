@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from fastapi import HTTPException
+
 
 _current_principal: ContextVar[str] = ContextVar("botboy_gateway_principal", default="")
 _current_roles: ContextVar[tuple[str, ...]] = ContextVar("botboy_gateway_roles", default=())
@@ -19,29 +21,34 @@ def current_gateway_roles() -> tuple[str, ...]:
 
 
 class _TaskStoreAuthorizationProxy:
-    """Gateway-facing task-store view with object-level authorization.
-
-    The underlying TaskStore remains an internal service. HTTP routes receive
-    this proxy so an authenticated principal cannot turn a task ID into an
-    authorization bypass. Non-admin callers are restricted to their own task
-    records at the store boundary, including secondary queries used to build
-    task graphs, events, artifacts, and list responses.
-    """
+    """Gateway-facing task-store view with object/function-level authorization."""
 
     def __init__(self, store: Any, *, auth_enabled: bool) -> None:
         self._store = store
         self._auth_enabled = auth_enabled
 
+    def _roles(self) -> set[str]:
+        return {role.lower() for role in current_gateway_roles()}
+
     def _is_admin(self) -> bool:
         if not self._auth_enabled:
             return True
-        return "admin" in {role.lower() for role in current_gateway_roles()}
+        return "admin" in self._roles()
+
+    def _is_worker(self) -> bool:
+        if not self._auth_enabled:
+            return True
+        return bool(self._roles() & {"admin", "worker", "system"})
 
     def _authorized(self, record: Any) -> bool:
         if record is None or self._is_admin():
             return record is not None
         principal = current_gateway_principal()
         return bool(principal) and str(getattr(record, "principal", "")) == principal
+
+    def _require_worker_control(self) -> None:
+        if not self._is_worker():
+            raise HTTPException(status_code=403, detail="Worker control requires worker or admin authorization")
 
     def get_task(self, task_id: str):
         record = self._store.get_task(task_id)
@@ -54,8 +61,6 @@ class _TaskStoreAuthorizationProxy:
         if not principal:
             return [], 0
         scoped = dict(kwargs)
-        # The authenticated identity is authoritative; query parameters must
-        # never be able to select another principal's tasks.
         scoped["principal"] = principal
         return self._store.list_tasks(**scoped)
 
@@ -73,6 +78,67 @@ class _TaskStoreAuthorizationProxy:
         if self.get_task(task_id) is None:
             return None
         return self._store.cancel_task(task_id, *args, **kwargs)
+
+    # Worker/fleet operations are privileged function-level operations.  The
+    # route layer may authenticate a caller, but authentication alone must not
+    # grant the ability to register, mutate, or drain execution infrastructure.
+    def register_worker_node(self, *args, **kwargs):
+        self._require_worker_control()
+        return self._store.register_worker_node(*args, **kwargs)
+
+    def heartbeat_worker_node(self, node_id: str, *args, **kwargs):
+        self._require_worker_control()
+        return self._store.heartbeat_worker_node(node_id, *args, **kwargs)
+
+    def drain_worker_node(self, node_id: str, *args, **kwargs):
+        self._require_worker_control()
+        return self._store.drain_worker_node(node_id, *args, **kwargs)
+
+    def acquire_queue_lease(self, *args, **kwargs):
+        self._require_worker_control()
+        return self._store.acquire_queue_lease(*args, **kwargs)
+
+    def renew_queue_lease(self, lease_id: str, *args, **kwargs):
+        self._require_worker_control()
+        lease = self._store.get_queue_lease(lease_id)
+        if lease is None:
+            return None
+        if not self._is_admin():
+            owner = str((lease.get("metadata") or {}).get("principal", "") or "")
+            if not owner or owner != current_gateway_principal():
+                return None
+        return self._store.renew_queue_lease(lease_id, *args, **kwargs)
+
+    def release_queue_lease(self, lease_id: str, *args, **kwargs):
+        self._require_worker_control()
+        lease = self._store.get_queue_lease(lease_id)
+        if lease is None:
+            return None
+        if not self._is_admin():
+            owner = str((lease.get("metadata") or {}).get("principal", "") or "")
+            if not owner or owner != current_gateway_principal():
+                return None
+        return self._store.release_queue_lease(lease_id, *args, **kwargs)
+
+    def list_worker_nodes(self, *args, **kwargs):
+        self._require_worker_control()
+        return self._store.list_worker_nodes(*args, **kwargs)
+
+    def list_execution_queues(self, *args, **kwargs):
+        self._require_worker_control()
+        return self._store.list_execution_queues(*args, **kwargs)
+
+    def list_queue_leases(self, *args, **kwargs):
+        self._require_worker_control()
+        return self._store.list_queue_leases(*args, **kwargs)
+
+    def worker_node_summary(self, *args, **kwargs):
+        self._require_worker_control()
+        return self._store.worker_node_summary(*args, **kwargs)
+
+    def queue_summary(self, *args, **kwargs):
+        self._require_worker_control()
+        return self._store.queue_summary(*args, **kwargs)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._store, name)
@@ -130,12 +196,7 @@ class GatewayAppContext:
             return principal, roles
 
         def scoped_approval_context(*args, **kwargs):
-            """Reject client-payload approval while preserving explicit approval.
-
-            A route must not manufacture approval by passing {"approval": true}
-            internally. Explicit approval via the gateway approval header, or
-            an authorized admin role, remains supported.
-            """
+            """Reject client-payload approval while preserving explicit approval."""
             context = dict(original_approval_context(*args, **kwargs) or {})
             if context.get("reason") == "payload" and "admin" not in {
                 str(role).lower() for role in current_gateway_roles()
