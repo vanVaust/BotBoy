@@ -48,13 +48,15 @@ def create_core_router(ctx: GatewayAppContext) -> APIRouter:
         """Authorize a trace at the gateway boundary.
 
         TraceStore predates tenant-aware storage, so the gateway must never expose
-        an unscoped run_id. System identities may inspect all traces. Tenant admins
-        may inspect traces linked to a task in their tenant; non-admin principals
-        may inspect only their own traces. Traces without a task link are therefore
-        intentionally not exposed to tenant admins.
+        an unscoped run_id while authentication is enabled. With authentication
+        disabled, the gateway is intentionally operating in its trusted-local mode;
+        remote exposure is rejected by gateway readiness checks, so legacy local
+        traces remain accessible for backwards-compatible local operation.
         """
         if not isinstance(trace, dict):
             return False
+        if not ctx.auth_enabled:
+            return True
         run = trace.get("run") or {}
         if _is_system(roles):
             return True
