@@ -46,9 +46,6 @@ class _AuthorizedMergeBotView:
         task = self._store.get_task(self._task_id)
         if not task or not self._authorized(task):
             raise HTTPException(status_code=404, detail="Task not found")
-
-        # Merge results aggregate child data. Do not let a malformed or manually
-        # corrupted parent/child relation cross the authenticated security boundary.
         raw_store = self._raw_store()
         list_children = getattr(raw_store, "list_children", None)
         if not callable(list_children):
@@ -140,6 +137,7 @@ def build_merge_action_payload(
     preset: str = "",
     decorate_merge_payload: Callable[[dict[str, Any]], dict[str, Any]],
     task_records_by_root: Callable[[Any, str], list[Any]],
+    decorate_task_record: Callable[[Any, Any, Optional[list[Any]]], dict[str, Any]],
 ) -> dict[str, Any]:
     if not store:
         raise GatewayMergeActionError("Task store not available", status_code=503)
@@ -163,11 +161,9 @@ def build_merge_action_payload(
             "available": True,
             "task_id": task_id,
             "action": normalized_action,
-            "task": None,
+            "task": decorate_task_record(store, refreshed, root_records) if refreshed else None,
             "merge": merge,
         }
-        if refreshed is not None and store.get_task(task_id) is not None:
-            response["task"] = refreshed
         if bulk_results is not None:
             response["bulk_results"] = bulk_results
             response["applied_count"] = int(applied_count or 0)
