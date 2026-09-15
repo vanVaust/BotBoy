@@ -44,6 +44,33 @@ def create_core_router(ctx: GatewayAppContext) -> APIRouter:
             return _is_system(roles)
         return _is_system(roles) or "admin" in roles or str(security.get("principal_id", "")) == principal
 
+    def _trace_visible(trace: dict, *, principal: str, org: str, roles: set[str]) -> bool:
+        """Authorize a trace at the gateway boundary.
+
+        TraceStore predates tenant-aware storage, so the gateway must never expose
+        an unscoped run_id. System identities may inspect all traces. Tenant admins
+        may inspect traces linked to a task in their tenant; non-admin principals
+        may inspect only their own traces. Traces without a task link are therefore
+        intentionally not exposed to tenant admins.
+        """
+        if not isinstance(trace, dict):
+            return False
+        run = trace.get("run") or {}
+        if _is_system(roles):
+            return True
+        run_principal = str(run.get("principal", "") or "")
+        if "admin" not in roles:
+            return bool(principal) and run_principal == principal
+        task_id = str(run.get("task_id", "") or "")
+        if not task_id:
+            return run_principal == principal
+        try:
+            store = ctx.task_store_or_503()
+            task = store.get_task(task_id)
+        except Exception:
+            return False
+        return task is not None and str(getattr(task, "org_id", "default") or "default") == org
+
     @router.get("/health")
     async def health():
         response = {"status": "healthy", "version": bot.VERSION, "mode": "fastapi", "uptime_s": round(time.time() - getattr(bot, "_start_time", time.time()), 1), "components": {"memory": bool(bot.memory), "skills": bool(bot.skills), "cache": bool(bot.cache), "scheduler": bool(bot.scheduler), "history": bool(bot.history), "trace_store": bool(getattr(bot, "trace_store", None)), "llm": bool(bot.llm), "router": bool(bot.router), "archetypes": bool(bot.archetypes)}, "security": {"enable_auth": ctx.auth_enabled, "rate_limit_enabled": bool(ctx.rate_limiter), "auth_api_keys_enabled": bool(getattr(ctx.security, "auth_api_keys_enabled", True))}}
@@ -161,19 +188,38 @@ def create_core_router(ctx: GatewayAppContext) -> APIRouter:
 
     @router.get("/api/traces")
     async def traces_list(request: Request, limit: int = 20, offset: int = 0, principal: Optional[str] = None, request_id: Optional[str] = None, status: Optional[str] = None):
-        ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
+        current_principal, org, roles = _tenant_context(request)
         if not bot.trace_store:
             raise HTTPException(status_code=503, detail="Trace store not available")
-        records, total = bot.trace_store.list_runs(limit=min(limit, 200), offset=offset, principal=principal, request_id=request_id, status=status)
-        return {"runs": [record.to_dict() for record in records], "total": total, "limit": limit, "offset": offset}
+        safe_limit = min(max(int(limit or 20), 1), 200)
+        safe_offset = max(int(offset or 0), 0)
+        if _is_system(roles):
+            records, total = bot.trace_store.list_runs(limit=safe_limit, offset=safe_offset, principal=principal, request_id=request_id, status=status)
+            return {"runs": [record.to_dict() for record in records], "total": total, "limit": safe_limit, "offset": safe_offset}
+
+        if "admin" not in roles:
+            records, total = bot.trace_store.list_runs(limit=safe_limit, offset=safe_offset, principal=current_principal, request_id=request_id, status=status)
+            return {"runs": [record.to_dict() for record in records], "total": total, "limit": safe_limit, "offset": safe_offset}
+
+        # Tenant admins need cross-principal visibility within their tenant, but
+        # TraceStore itself is not yet tenant-aware. Fetch a bounded candidate
+        # window, then authorize each trace through the task-store tenant boundary.
+        candidates, _candidate_total = bot.trace_store.list_runs(limit=500, offset=0, principal=None, request_id=request_id, status=status)
+        visible = []
+        for record in candidates:
+            trace = bot.trace_store.get_run(record.run_id)
+            if trace and _trace_visible(trace, principal=current_principal, org=org, roles=roles):
+                visible.append(record)
+        page = visible[safe_offset:safe_offset + safe_limit]
+        return {"runs": [record.to_dict() for record in page], "total": len(visible), "limit": safe_limit, "offset": safe_offset}
 
     @router.get("/api/traces/{run_id}")
     async def trace_detail(request: Request, run_id: str):
-        ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
+        current_principal, org, roles = _tenant_context(request)
         if not bot.trace_store:
             raise HTTPException(status_code=503, detail="Trace store not available")
         trace = bot.trace_store.get_run(run_id)
-        if not trace:
+        if not trace or not _trace_visible(trace, principal=current_principal, org=org, roles=roles):
             raise HTTPException(status_code=404, detail="Trace run not found")
         return trace
 
