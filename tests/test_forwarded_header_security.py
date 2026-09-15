@@ -2,6 +2,7 @@ import asyncio
 import os
 import unittest
 
+import botboy.gateway.security  # noqa: F401
 from fastapi.middleware.cors import CORSMiddleware
 
 
