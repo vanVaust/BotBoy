@@ -40,72 +40,30 @@ class OrchestratorLifecycleService:
         store = self.task_security_store
         return store.load(task_id) if store else None
 
-    def start_trace_run(
-        self,
-        command: str,
-        principal: str,
-        request_id: str,
-        task_id: str = "",
-    ) -> tuple[Optional[TraceContext], Optional[str], Any]:
+    def start_trace_run(self, command: str, principal: str, request_id: str, task_id: str = "") -> tuple[Optional[TraceContext], Optional[str], Any]:
         if not self.trace_store:
             return None, None, None
-        ctx = self.trace_store.create_run(
-            command=command,
-            principal=principal,
-            request_id=request_id,
-            task_id=task_id,
-        )
-        root_span = self.trace_store.start_span(
-            ctx,
-            component="orchestrator",
-            event_type="command",
-        )
+        ctx = self.trace_store.create_run(command=command, principal=principal, request_id=request_id, task_id=task_id)
+        root_span = self.trace_store.start_span(ctx, component="orchestrator", event_type="command")
         ctx.root_span_id = root_span
         ctx.current_span_id = root_span
         token = bind_trace_context(ctx)
         return ctx, root_span, token
 
-    def finish_trace_run(
-        self,
-        trace_ctx: Optional[TraceContext],
-        root_span_id: Optional[str],
-        token: Any,
-        *,
-        status: str,
-        cmd_type: str,
-        summary: str,
-        payload_ref: str = "",
-    ) -> None:
+    def finish_trace_run(self, trace_ctx: Optional[TraceContext], root_span_id: Optional[str], token: Any, *, status: str, cmd_type: str, summary: str, payload_ref: str = "") -> None:
         if not self.trace_store or not trace_ctx:
             return
         if root_span_id:
             self.trace_store.finish_span(root_span_id, status=status, payload_ref=payload_ref)
-        self.trace_store.finish_run(
-            trace_ctx.run_id,
-            status=status,
-            cmd_type=cmd_type,
-            summary=summary,
-            payload_ref=payload_ref,
-        )
+        self.trace_store.finish_run(trace_ctx.run_id, status=status, cmd_type=cmd_type, summary=summary, payload_ref=payload_ref)
         if token is not None:
             reset_trace_context(token)
 
-    def trace_async_label(
-        self,
-        trace_ctx: Optional[TraceContext],
-        parent_span_id: str,
-        component: str,
-        event_type: str,
-    ):
+    def trace_async_label(self, trace_ctx: Optional[TraceContext], parent_span_id: str, component: str, event_type: str):
         async def runner(coro):
             if not self.trace_store or not trace_ctx:
                 return await coro
-            span_id = self.trace_store.start_span(
-                trace_ctx,
-                component=component,
-                event_type=event_type,
-                parent_span_id=parent_span_id,
-            )
+            span_id = self.trace_store.start_span(trace_ctx, component=component, event_type=event_type, parent_span_id=parent_span_id)
             try:
                 result = await coro
                 self.trace_store.finish_span(span_id, status="success")
@@ -113,7 +71,6 @@ class OrchestratorLifecycleService:
             except Exception as exc:
                 self.trace_store.finish_span(span_id, status="error", payload_ref=str(exc)[:256])
                 raise
-
         return runner
 
     def create_task_context(
@@ -130,26 +87,30 @@ class OrchestratorLifecycleService:
         scheduler_task_id: str = "",
         payload: Optional[dict] = None,
         task_context: Optional[TaskContext] = None,
+        org_id: Optional[str] = None,
     ) -> Optional[TaskContext]:
         if not self.task_store:
             return task_context
         if task_context:
             return task_context
         title = command.strip()[:120] or kind
-        created = self.task_store.create_task(
-            kind=kind,
-            owner=owner,
-            title=title,
-            summary=summary or f"{kind} lifecycle created",
-            status=TASK_STATUS_QUEUED,
-            principal=principal,
-            request_id=request_id,
-            parent_task_id=parent_task_id,
-            root_task_id=root_task_id,
-            scheduler_task_id=scheduler_task_id,
-            command=command,
-            payload=payload or {"command": command, "kind": kind},
-        )
+        create_kwargs = {
+            "kind": kind,
+            "owner": owner,
+            "title": title,
+            "summary": summary or f"{kind} lifecycle created",
+            "status": TASK_STATUS_QUEUED,
+            "principal": principal,
+            "request_id": request_id,
+            "parent_task_id": parent_task_id,
+            "root_task_id": root_task_id,
+            "scheduler_task_id": scheduler_task_id,
+            "command": command,
+            "payload": payload or {"command": command, "kind": kind},
+        }
+        if org_id:
+            create_kwargs["org_id"] = str(org_id)
+        created = self.task_store.create_task(**create_kwargs)
         baseline = SecurityContext.from_legacy(
             principal=principal,
             org_id=created.org_id,
@@ -170,12 +131,7 @@ class OrchestratorLifecycleService:
         if not task_ctx:
             return result
         result.setdefault("data", {})
-        result["data"]["task"] = {
-            "task_id": task_ctx.task_id,
-            "root_task_id": task_ctx.root_task_id,
-            "parent_task_id": task_ctx.parent_task_id,
-            "status": status,
-        }
+        result["data"]["task"] = {"task_id": task_ctx.task_id, "root_task_id": task_ctx.root_task_id, "parent_task_id": task_ctx.parent_task_id, "status": status}
         return result
 
     def shutdown_resources(self) -> None:
@@ -193,90 +149,24 @@ def create_orchestrator_lifecycle_service(bot: Any) -> OrchestratorLifecycleServ
     return OrchestratorLifecycleService(bot)
 
 
-def start_trace_run(
-    bot: Any,
-    command: str,
-    principal: str,
-    request_id: str,
-    task_id: str = "",
-) -> tuple[Optional[TraceContext], Optional[str], Any]:
-    return create_orchestrator_lifecycle_service(bot).start_trace_run(
-        command=command,
-        principal=principal,
-        request_id=request_id,
-        task_id=task_id,
-    )
+def start_trace_run(bot: Any, command: str, principal: str, request_id: str, task_id: str = "") -> tuple[Optional[TraceContext], Optional[str], Any]:
+    return create_orchestrator_lifecycle_service(bot).start_trace_run(command=command, principal=principal, request_id=request_id, task_id=task_id)
 
 
-def finish_trace_run(
-    bot: Any,
-    trace_ctx: Optional[TraceContext],
-    root_span_id: Optional[str],
-    token: Any,
-    *,
-    status: str,
-    cmd_type: str,
-    summary: str,
-    payload_ref: str = "",
-) -> None:
-    create_orchestrator_lifecycle_service(bot).finish_trace_run(
-        trace_ctx,
-        root_span_id,
-        token,
-        status=status,
-        cmd_type=cmd_type,
-        summary=summary,
-        payload_ref=payload_ref,
-    )
+def finish_trace_run(bot: Any, trace_ctx: Optional[TraceContext], root_span_id: Optional[str], token: Any, *, status: str, cmd_type: str, summary: str, payload_ref: str = "") -> None:
+    create_orchestrator_lifecycle_service(bot).finish_trace_run(trace_ctx, root_span_id, token, status=status, cmd_type=cmd_type, summary=summary, payload_ref=payload_ref)
 
 
-def create_task_context(
-    bot: Any,
-    command: str,
-    *,
-    principal: str,
-    request_id: str,
-    kind: str = "command",
-    owner: str = "botboy",
-    summary: str = "",
-    parent_task_id: str = "",
-    root_task_id: str = "",
-    scheduler_task_id: str = "",
-    payload: Optional[dict] = None,
-    task_context: Optional[TaskContext] = None,
-) -> Optional[TaskContext]:
-    return create_orchestrator_lifecycle_service(bot).create_task_context(
-        command,
-        principal=principal,
-        request_id=request_id,
-        kind=kind,
-        owner=owner,
-        summary=summary,
-        parent_task_id=parent_task_id,
-        root_task_id=root_task_id,
-        scheduler_task_id=scheduler_task_id,
-        payload=payload,
-        task_context=task_context,
-    )
+def create_task_context(bot: Any, command: str, *, principal: str, request_id: str, kind: str = "command", owner: str = "botboy", summary: str = "", parent_task_id: str = "", root_task_id: str = "", scheduler_task_id: str = "", payload: Optional[dict] = None, task_context: Optional[TaskContext] = None, org_id: Optional[str] = None) -> Optional[TaskContext]:
+    return create_orchestrator_lifecycle_service(bot).create_task_context(command, principal=principal, request_id=request_id, kind=kind, owner=owner, summary=summary, parent_task_id=parent_task_id, root_task_id=root_task_id, scheduler_task_id=scheduler_task_id, payload=payload, task_context=task_context, org_id=org_id)
 
 
 def decorate_with_task(result: dict, task_ctx: Optional[TaskContext], status: str) -> dict:
     return OrchestratorLifecycleService.decorate_with_task(result, task_ctx, status)
 
 
-def trace_async_label(
-    bot: Any,
-    trace_ctx: Optional[TraceContext],
-    parent_span_id: str,
-    component: str,
-    event_type: str,
-):
-    return create_orchestrator_lifecycle_service(bot).trace_async_label(
-        trace_ctx,
-        parent_span_id,
-        component,
-        event_type,
-    )
+def trace_async_label(bot: Any, trace_ctx: Optional[TraceContext], parent_span_id: str, component: str, event_type: str):
+    return create_orchestrator_lifecycle_service(bot).trace_async_label(trace_ctx, parent_span_id, component, event_type)
 
 
 def task_context_from_record(record) -> TaskContext:
