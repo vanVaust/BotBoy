@@ -1,9 +1,4 @@
-"""Authorization boundaries for task recovery and child-task operations.
-
-These methods are intentionally patched onto the gateway task-store proxy so
-security-sensitive TaskStore methods cannot bypass the gateway identity
-context through the proxy's generic attribute forwarding.
-"""
+"""Authorization boundaries for task recovery and child-task operations."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -15,6 +10,7 @@ from botboy.gateway.app_context import (
     _TaskStoreAuthorizationProxy,
     current_gateway_org,
     current_gateway_principal,
+    current_gateway_roles,
 )
 from botboy.security_context import SecurityContext
 from botboy.task_security import TaskSecurityStore
@@ -42,9 +38,6 @@ def _create_child_task(
 ):
     parent = _require_authorized_task(proxy, parent_task_id)
     parent_security = TaskSecurityStore(proxy._store).load(parent.task_id)
-
-    # Child identity and tenant are derived exclusively from the authorized
-    # parent. Client-supplied principal/org values are never authoritative.
     principal = str(
         parent_security.principal_id
         if parent_security
@@ -65,12 +58,10 @@ def _create_child_task(
         principal=principal,
         **kwargs,
     )
-
     if str(getattr(child, "org_id", "default") or "default") != org_id:
         child = proxy._store.update_task(child.task_id, org_id=org_id)
 
     if parent_security is not None:
-        # A parent approval is never inherited by a child execution context.
         child_security = replace(
             parent_security,
             task_id=child.task_id,
@@ -102,16 +93,11 @@ def _recover_stale_worker_task(
     run_id: str = "",
     lease_timeout_s: int = 900,
 ):
-    # Recovery is intentionally non-oracular: an unauthorized task looks like
-    # a missing task and is never mutated.
     if _authorized_record(proxy, task_id) is None:
         return None
     effective_principal = current_gateway_principal() if proxy._auth_enabled else principal
     if not effective_principal:
-        raise HTTPException(
-            status_code=403,
-            detail="Recovery requires an authenticated principal",
-        )
+        raise HTTPException(status_code=403, detail="Recovery requires an authenticated principal")
     return proxy._store.recover_stale_worker_task(
         task_id,
         principal=effective_principal,
@@ -132,10 +118,7 @@ def _reassign_task(
 ):
     _require_authorized_task(proxy, task_id)
     if proxy._auth_enabled and not proxy._is_system_or_admin():
-        raise HTTPException(
-            status_code=403,
-            detail="Task reassignment requires system or admin authorization",
-        )
+        raise HTTPException(status_code=403, detail="Task reassignment requires system or admin authorization")
     effective_principal = current_gateway_principal() if proxy._auth_enabled else principal
     return proxy._store.reassign_task(
         task_id,
@@ -173,13 +156,7 @@ def _build_child_approval_context(self, approval_context):
 
 
 def _secure_worker_child_creation(original):
-    """Wrap raw WorkerHandoffService child creation at the gateway boundary.
-
-    Some internal handoff paths receive a raw TaskStore rather than the
-    gateway authorization proxy. When gateway authentication is active, the
-    parent task remains the authority for principal/tenant identity and the
-    caller cannot substitute a different principal through the handoff API.
-    """
+    """Guard raw WorkerHandoffService child creation at the gateway boundary."""
     def _wrapped(self, *, parent_task, worker, delegated_command, principal, child_request_id, attempt_count):
         store = self.task_store
         if store is None:
@@ -197,10 +174,10 @@ def _secure_worker_child_creation(original):
         if parent is None:
             raise HTTPException(status_code=404, detail="Task not found")
 
-        auth_enabled = bool(getattr(getattr(self, "bot", None), "config", None)) and bool(
-            getattr(getattr(getattr(self, "bot", None), "config", None), "security", None)
-            and getattr(getattr(self.bot.config, "security", None), "enable_auth", False)
-        )
+        config = getattr(getattr(self, "bot", None), "config", None)
+        security = getattr(config, "security", None)
+        auth_enabled = bool(getattr(security, "enable_auth", False))
+        roles = {role.lower() for role in current_gateway_roles()}
         gateway_principal = current_gateway_principal()
         gateway_org = current_gateway_org()
         parent_org = str(getattr(parent, "org_id", "default") or "default")
@@ -210,19 +187,19 @@ def _secure_worker_child_creation(original):
                 raise HTTPException(status_code=403, detail="Worker handoff requires an authenticated principal")
             if parent_org != gateway_org:
                 raise HTTPException(status_code=404, detail="Task not found")
-            if str(getattr(parent, "principal", "")) != gateway_principal and "admin" not in {
-                role.lower() for role in getattr(__import__("botboy.gateway.app_context", fromlist=["current_gateway_roles"]), "current_gateway_roles")()
-            } and "system" not in {
-                role.lower() for role in getattr(__import__("botboy.gateway.app_context", fromlist=["current_gateway_roles"]), "current_gateway_roles")()
-            }:
+            if str(getattr(parent, "principal", "")) != gateway_principal and not (roles & {"admin", "system"}):
                 raise HTTPException(status_code=404, detail="Task not found")
 
-        security = TaskSecurityStore(store).load(parent.task_id)
+        parent_security = TaskSecurityStore(store).load(parent.task_id)
         effective_principal = str(
-            security.principal_id if security is not None else getattr(parent, "principal", "anonymous")
+            parent_security.principal_id
+            if parent_security is not None
+            else getattr(parent, "principal", "anonymous")
         )
         effective_org = str(
-            security.org_id if security is not None else getattr(parent, "org_id", "default") or "default"
+            parent_security.org_id
+            if parent_security is not None
+            else getattr(parent, "org_id", "default") or "default"
         )
 
         child = original(
@@ -234,25 +211,29 @@ def _secure_worker_child_creation(original):
             child_request_id=child_request_id,
             attempt_count=attempt_count,
         )
-        if str(getattr(child, "org_id", "default") or "default") != effective_org:
+        child_record = store.get_task(child.task_id)
+        if child_record is not None and str(getattr(child_record, "org_id", "default") or "default") != effective_org:
             child = store.update_task(child.task_id, org_id=effective_org).to_context()
 
-        child_security = replace(
-            security,
-            task_id=child.task_id,
-            parent_task_id=parent.task_id,
-            approval_id="",
-            approval_scope=frozenset(),
-            approval_expires_at=None,
-        ) if security is not None else SecurityContext.from_legacy(
-            principal=effective_principal,
-            org_id=effective_org,
-            roles=[],
-            request_id=str(getattr(child, "request_id", "") or ""),
-            task_id=child.task_id,
-            parent_task_id=parent.task_id,
-            auth_source="task_parent",
-        )
+        if parent_security is not None:
+            child_security = replace(
+                parent_security,
+                task_id=child.task_id,
+                parent_task_id=parent.task_id,
+                approval_id="",
+                approval_scope=frozenset(),
+                approval_expires_at=None,
+            )
+        else:
+            child_security = SecurityContext.from_legacy(
+                principal=effective_principal,
+                org_id=effective_org,
+                roles=[],
+                request_id=str(getattr(child, "request_id", "") or ""),
+                task_id=child.task_id,
+                parent_task_id=parent.task_id,
+                auth_source="task_parent",
+            )
         TaskSecurityStore(store).save(child_security)
         return child
 
