@@ -1,11 +1,25 @@
 from fastapi import APIRouter, HTTPException, Request
 
-from botboy.gateway.app_context import GatewayAppContext, current_gateway_org
+from botboy.gateway.app_context import GatewayAppContext, current_gateway_org, current_gateway_roles
 from botboy.gateway.auth import AuthPrincipal
 
 
 def create_auth_router(ctx: GatewayAppContext) -> APIRouter:
     router = APIRouter()
+
+    def _roles() -> set[str]:
+        return {str(role).lower() for role in current_gateway_roles()}
+
+    def _is_system() -> bool:
+        return "system" in _roles()
+
+    def _validate_issued_role(role: str) -> str:
+        normalized = str(role or "user").strip().lower() or "user"
+        if normalized == "system" and not _is_system():
+            raise HTTPException(status_code=403, detail="System credentials may only be issued by system authorization")
+        if normalized not in {"user", "worker", "admin", "system"}:
+            raise HTTPException(status_code=400, detail="Unsupported credential role")
+        return normalized
 
     @router.post("/api/auth/login")
     async def auth_login(request: Request):
@@ -89,7 +103,7 @@ def create_auth_router(ctx: GatewayAppContext) -> APIRouter:
             raise HTTPException(status_code=503, detail="API key store unavailable")
         payload = await request.json()
         principal_id = payload.get("principal_id", "").strip()
-        role = payload.get("role", "user").strip() or "user"
+        role = _validate_issued_role(payload.get("role", "user"))
         label = payload.get("label", "").strip()
         ttl_hours = payload.get("ttl_hours", None)
         try:
@@ -98,8 +112,8 @@ def create_auth_router(ctx: GatewayAppContext) -> APIRouter:
             raise HTTPException(status_code=400, detail="ttl_hours must be numeric")
         requested_org = str(payload.get("org_id", "")).strip()
         org_id = requested_org or current_gateway_org()
-        if requested_org and requested_org != current_gateway_org() and ctx.auth_enabled:
-            raise HTTPException(status_code=403, detail="Cross-tenant API-key issuance is not permitted")
+        if requested_org and requested_org != current_gateway_org() and ctx.auth_enabled and not _is_system():
+            raise HTTPException(status_code=403, detail="Cross-tenant API-key issuance requires system authorization")
         credential = store.issue_principal_secret(principal_id=principal_id or label or "service", role=role, label=label, ttl_hours=ttl, org_id=org_id)
         return {"principal": {"principal_id": credential.principal_id, "role": credential.role, "label": credential.label, "credential_type": credential.credential_type, "org_id": credential.org_id}, "full_key": credential.full_key, "key_id": credential.key_id, "created_at": credential.created_at, "expires_at": credential.expires_at}
 
@@ -110,6 +124,9 @@ def create_auth_router(ctx: GatewayAppContext) -> APIRouter:
         if not store:
             raise HTTPException(status_code=503, detail="Principal store unavailable")
         principals = store.list_principals(include_disabled=include_disabled)
+        if ctx.auth_enabled and not _is_system():
+            org_id = current_gateway_org()
+            principals = [principal for principal in principals if str(getattr(principal, "org_id", "default") or "default") == org_id]
         return {"principals": [ctx.principal_payload(principal) for principal in principals], "total": len(principals), "stats": store.stats()}
 
     @router.post("/api/principals")
@@ -121,12 +138,12 @@ def create_auth_router(ctx: GatewayAppContext) -> APIRouter:
         payload = await request.json()
         username = payload.get("username", "").strip()
         password = payload.get("password", "")
-        role = payload.get("role", "user").strip() or "user"
+        role = _validate_issued_role(payload.get("role", "user"))
         if not username or not password:
             raise HTTPException(status_code=400, detail="Missing username or password")
         org_id = str(payload.get("org_id", "")).strip() or current_gateway_org()
-        if org_id != current_gateway_org() and ctx.auth_enabled:
-            raise HTTPException(status_code=403, detail="Cross-tenant principal creation is not permitted")
+        if org_id != current_gateway_org() and ctx.auth_enabled and not _is_system():
+            raise HTTPException(status_code=403, detail="Cross-tenant principal creation requires system authorization")
         principal = store.upsert_principal(username=username, password=password, role=role, org_id=org_id)
         return {"principal": ctx.principal_payload(principal)}
 
@@ -138,6 +155,8 @@ def create_auth_router(ctx: GatewayAppContext) -> APIRouter:
             raise HTTPException(status_code=503, detail="Principal store unavailable")
         existing = store.get_principal(username)
         if not existing:
+            raise HTTPException(status_code=404, detail="Principal not found")
+        if ctx.auth_enabled and not _is_system() and str(getattr(existing, "org_id", "default") or "default") != current_gateway_org():
             raise HTTPException(status_code=404, detail="Principal not found")
         store.disable_principal(username)
         disabled = store.get_principal(username)
