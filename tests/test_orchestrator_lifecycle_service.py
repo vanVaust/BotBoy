@@ -8,7 +8,7 @@ from botboy.orchestrator_lifecycle_service import (
     OrchestratorLifecycleService,
     create_orchestrator_lifecycle_service,
 )
-from botboy.tasks import TaskContext, TASK_STATUS_QUEUED
+from botboy.tasks import TaskContext, TaskRecord, TASK_STATUS_QUEUED
 from botboy.tracing import TraceContext
 
 
@@ -128,7 +128,39 @@ class OrchestratorLifecycleServiceTests(unittest.TestCase):
         self.assertEqual(bot.trace_store.calls[-1][2]["status"], "error")
 
     def test_task_context_from_record(self) -> None:
-        task_ctx = OrchestratorLifecycleService.task_context_from_record(TaskContext(task_id="task-4", root_task_id="root-4", parent_task_id="parent-4", kind="command", owner="botboy", principal="alice", request_id="req-5", scheduler_task_id="sched-1", command="run", status=TASK_STATUS_QUEUED, run_id="run-4"))
+        record = TaskRecord(
+            task_id="task-4",
+            root_task_id="root-4",
+            parent_task_id="parent-4",
+            kind="command",
+            owner="botboy",
+            title="run",
+            summary="",
+            status=TASK_STATUS_QUEUED,
+            principal="alice",
+            request_id="req-5",
+            run_id="run-4",
+            scheduler_task_id="sched-1",
+            command="run",
+            delegation_status="none",
+            delegated_to_worker="",
+            blocked_by_task_id="",
+            blocked_kind="",
+            blocked_reason="",
+            lease_expires_at="",
+            heartbeat_at="",
+            attempt_count=0,
+            retry_after_s=0,
+            payload_json="{}",
+            result_json="{}",
+            org_id="default",
+            created_at="2026-09-15T00:00:00+00:00",
+            updated_at="2026-09-15T00:00:00+00:00",
+            started_at="",
+            ended_at="",
+        )
+        task_ctx = OrchestratorLifecycleService.task_context_from_record(record)
+        self.assertIsInstance(task_ctx, TaskContext)
         self.assertEqual(task_ctx.task_id, "task-4")
         self.assertEqual(task_ctx.root_task_id, "root-4")
         self.assertEqual(task_ctx.parent_task_id, "parent-4")
