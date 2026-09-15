@@ -41,6 +41,7 @@ def _lease_visible(proxy: _TaskStoreAuthorizationProxy, lease: dict[str, Any]) -
 
 
 def _scoped_worker_nodes(proxy: _TaskStoreAuthorizationProxy, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+    proxy._require_worker_control()
     nodes = proxy._store.list_worker_nodes(*args, **kwargs)
     if not proxy._auth_enabled or _is_system():
         return nodes
@@ -53,7 +54,6 @@ def _scoped_worker_nodes(proxy: _TaskStoreAuthorizationProxy, *args: Any, **kwar
         owner = str(metadata.get("owner_principal", "") or "")
         worker_id = str(node.get("worker_id", "") or "")
         node_id = str(node.get("node_id", "") or "")
-        # Admins can inspect their org; ordinary workers can inspect nodes they own.
         if node_org != org_id:
             continue
         if _is_admin() or owner == principal or worker_id == principal or node_id == principal:
@@ -62,6 +62,7 @@ def _scoped_worker_nodes(proxy: _TaskStoreAuthorizationProxy, *args: Any, **kwar
 
 
 def _scoped_execution_queues(proxy: _TaskStoreAuthorizationProxy, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+    proxy._require_worker_control()
     queues = proxy._store.list_execution_queues(*args, **kwargs)
     if not proxy._auth_enabled or _is_system():
         return queues
@@ -71,7 +72,6 @@ def _scoped_execution_queues(proxy: _TaskStoreAuthorizationProxy, *args: Any, **
         for node in scoped_nodes
         if str(node.get("queue_name", "") or "")
     }
-    # Also retain queues that have a lease already proven to belong to this principal.
     leases = proxy._store.list_queue_leases(include_released=False, include_expired=True, limit=500)
     allowed_queue_names.update(
         str(lease.get("queue_name", "") or "")
@@ -82,6 +82,7 @@ def _scoped_execution_queues(proxy: _TaskStoreAuthorizationProxy, *args: Any, **
 
 
 def _scoped_queue_leases(proxy: _TaskStoreAuthorizationProxy, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+    proxy._require_worker_control()
     leases = proxy._store.list_queue_leases(*args, **kwargs)
     if not proxy._auth_enabled or _is_system():
         return leases
@@ -89,6 +90,7 @@ def _scoped_queue_leases(proxy: _TaskStoreAuthorizationProxy, *args: Any, **kwar
 
 
 def _scoped_worker_node_summary(proxy: _TaskStoreAuthorizationProxy, *args: Any, **kwargs: Any) -> dict[str, Any]:
+    proxy._require_worker_control()
     nodes = _scoped_worker_nodes(proxy, *args, **kwargs)
     queues = _scoped_execution_queues(proxy)
     by_worker: dict[str, int] = {}
@@ -117,6 +119,7 @@ def _scoped_worker_node_summary(proxy: _TaskStoreAuthorizationProxy, *args: Any,
 
 
 def _scoped_queue_summary(proxy: _TaskStoreAuthorizationProxy, *args: Any, **kwargs: Any) -> dict[str, Any]:
+    proxy._require_worker_control()
     queues = _scoped_execution_queues(proxy)
     leases = _scoped_queue_leases(proxy, include_released=True, include_expired=True, limit=500)
     by_queue: dict[str, dict[str, int]] = {}
