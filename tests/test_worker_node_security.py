@@ -1,6 +1,6 @@
 import unittest
 
-from botboy.gateway.app_context import _TaskStoreAuthorizationProxy, _current_principal, _current_roles
+from botboy.gateway.app_context import _TaskStoreAuthorizationProxy, _current_org, _current_principal, _current_roles
 
 
 class _Store:
@@ -15,6 +15,7 @@ class _Store:
     def register_worker_node(self, **kwargs):
         node = {
             "node_id": kwargs["node_id"],
+            "worker_id": kwargs.get("worker_id", ""),
             "metadata": kwargs.get("metadata", {}),
         }
         self.nodes[node["node_id"]] = node
@@ -30,10 +31,14 @@ class _Store:
 class WorkerNodeSecurityTests(unittest.TestCase):
     def setUp(self):
         self.store = _Store()
+        _current_principal.set("")
+        _current_roles.set(())
+        _current_org.set("default")
 
-    def _proxy(self, principal, roles):
+    def _proxy(self, principal, roles, org="default"):
         _current_principal.set(principal)
         _current_roles.set(tuple(roles))
+        _current_org.set(org)
         return _TaskStoreAuthorizationProxy(self.store, auth_enabled=True)
 
     def test_worker_cannot_register_node(self):
@@ -44,16 +49,32 @@ class WorkerNodeSecurityTests(unittest.TestCase):
     def test_owner_is_bound_and_other_worker_cannot_mutate(self):
         admin = self._proxy("admin", ["admin"])
         admin.register_worker_node(node_id="node-1", worker_id="worker-a")
+
         owner = self._proxy("worker-a", ["worker"])
         self.assertIsNotNone(owner.heartbeat_worker_node("node-1"))
+        self.assertIsNotNone(owner.drain_worker_node("node-1"))
+
         other = self._proxy("worker-b", ["worker"])
         self.assertIsNone(other.heartbeat_worker_node("node-1"))
         self.assertIsNone(other.drain_worker_node("node-1"))
+
+    def test_reassigned_node_follows_new_worker_identity(self):
+        admin = self._proxy("admin", ["admin"])
+        admin.register_worker_node(node_id="node-1", worker_id="worker-a")
+        admin.register_worker_node(node_id="node-1", worker_id="worker-b")
+
+        old_owner = self._proxy("worker-a", ["worker"])
+        self.assertIsNone(old_owner.heartbeat_worker_node("node-1"))
+
+        new_owner = self._proxy("worker-b", ["worker"])
+        self.assertIsNotNone(new_owner.heartbeat_worker_node("node-1"))
+        self.assertIsNotNone(new_owner.drain_worker_node("node-1"))
 
     def test_admin_can_reassign_existing_node(self):
         admin = self._proxy("admin", ["admin"])
         admin.register_worker_node(node_id="node-1", worker_id="worker-a")
         admin.register_worker_node(node_id="node-1", worker_id="worker-b")
+        self.assertEqual(self.store.nodes["node-1"]["worker_id"], "worker-b")
         self.assertEqual(self.store.nodes["node-1"]["metadata"]["owner_principal"], "admin")
 
 
