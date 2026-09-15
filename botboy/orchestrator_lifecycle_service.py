@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from botboy.security_context import SecurityContext
+from botboy.task_security import TaskSecurityStore
 from botboy.tasks import TASK_STATUS_QUEUED, TaskContext
 from botboy.tracing import TraceContext, bind_trace_context, reset_trace_context
 
@@ -11,6 +13,7 @@ class OrchestratorLifecycleService:
 
     def __init__(self, bot: Any) -> None:
         self.bot = bot
+        self._task_security_store: Optional[TaskSecurityStore] = None
 
     @property
     def trace_store(self):
@@ -19,6 +22,23 @@ class OrchestratorLifecycleService:
     @property
     def task_store(self):
         return getattr(self.bot, "task_store", None)
+
+    @property
+    def task_security_store(self) -> Optional[TaskSecurityStore]:
+        if not self.task_store:
+            return None
+        if self._task_security_store is None:
+            self._task_security_store = TaskSecurityStore(self.task_store)
+        return self._task_security_store
+
+    def persist_security_context(self, context: SecurityContext) -> None:
+        store = self.task_security_store
+        if store:
+            store.save(context)
+
+    def load_security_context(self, task_id: str) -> Optional[SecurityContext]:
+        store = self.task_security_store
+        return store.load(task_id) if store else None
 
     def start_trace_run(
         self,
@@ -133,19 +153,7 @@ class OrchestratorLifecycleService:
 
     @staticmethod
     def task_context_from_record(record) -> TaskContext:
-        return TaskContext(
-            task_id=record.task_id,
-            root_task_id=record.root_task_id,
-            parent_task_id=record.parent_task_id,
-            kind=record.kind,
-            owner=record.owner,
-            principal=record.principal,
-            request_id=record.request_id,
-            scheduler_task_id=record.scheduler_task_id,
-            command=record.command,
-            status=record.status,
-            run_id=record.run_id,
-        )
+        return record.to_context()
 
     @staticmethod
     def decorate_with_task(result: dict, task_ctx: Optional[TaskContext], status: str) -> dict:
@@ -240,30 +248,3 @@ def create_task_context(
         payload=payload,
         task_context=task_context,
     )
-
-
-def decorate_with_task(result: dict, task_ctx: Optional[TaskContext], status: str) -> dict:
-    return OrchestratorLifecycleService.decorate_with_task(result, task_ctx, status)
-
-
-def trace_async_label(
-    bot: Any,
-    trace_ctx: Optional[TraceContext],
-    parent_span_id: str,
-    component: str,
-    event_type: str,
-):
-    return create_orchestrator_lifecycle_service(bot).trace_async_label(
-        trace_ctx,
-        parent_span_id,
-        component,
-        event_type,
-    )
-
-
-def task_context_from_record(record) -> TaskContext:
-    return OrchestratorLifecycleService.task_context_from_record(record)
-
-
-def shutdown_orchestrator_resources(bot: Any) -> None:
-    create_orchestrator_lifecycle_service(bot).shutdown_resources()
