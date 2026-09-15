@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import sqlite3
 import time
 from typing import Any, Optional
@@ -72,19 +70,12 @@ def create_core_router(ctx: GatewayAppContext) -> APIRouter:
     async def control_center_renderer():
         renderer = ctx.web_dir / "control_center_renderer.js"
         if renderer.exists():
-            return Response(
-                content=renderer.read_text(encoding="utf-8"),
-                media_type="text/javascript",
-            )
+            return Response(content=renderer.read_text(encoding="utf-8"), media_type="text/javascript")
         raise HTTPException(status_code=404, detail="Control Center renderer not found")
 
     @router.post("/api/command")
     async def execute_command(request: Request):
-        principal_id, roles = ctx.authorize_with_roles(
-            request.headers,
-            request.client.host if request.client else "",
-            require_auth=ctx.auth_enabled,
-        )
+        principal_id, roles = ctx.authorize_with_roles(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
         try:
             payload = await request.json()
         except ValueError:
@@ -92,28 +83,12 @@ def create_core_router(ctx: GatewayAppContext) -> APIRouter:
         command = payload.get("command", "").strip()
         if not command:
             raise HTTPException(status_code=400, detail="Missing 'command' field")
-        return await bot.process_command(
-            command,
-            principal=principal_id,
-            request_id=getattr(request.state, "request_id", ""),
-            roles=roles,
-            approval_context=ctx.approval_context(request.headers, payload, roles),
-        )
+        return await bot.process_command(command, principal=principal_id, request_id=getattr(request.state, "request_id", ""), roles=roles, approval_context=ctx.approval_context(request.headers, payload, roles))
 
     @router.get("/api/status")
     async def api_status(request: Request):
-        principal_id, roles = ctx.authorize_with_roles(
-            request.headers,
-            request.client.host if request.client else "",
-            require_auth=ctx.auth_enabled,
-        )
-        return await bot.process_command(
-            "status",
-            principal=principal_id,
-            request_id=getattr(request.state, "request_id", ""),
-            roles=roles,
-            approval_context=ctx.approval_context(request.headers, {}, roles),
-        )
+        principal_id, roles = ctx.authorize_with_roles(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
+        return await bot.process_command("status", principal=principal_id, request_id=getattr(request.state, "request_id", ""), roles=roles, approval_context=ctx.approval_context(request.headers, {}, roles))
 
     @router.get("/api/memories")
     async def list_memories(request: Request, limit: int = 20, offset: int = 0):
@@ -175,24 +150,11 @@ def create_core_router(ctx: GatewayAppContext) -> APIRouter:
         return ctx.dashboard_payload("fastapi")
 
     @router.get("/api/traces")
-    async def traces_list(
-        request: Request,
-        limit: int = 20,
-        offset: int = 0,
-        principal: Optional[str] = None,
-        request_id: Optional[str] = None,
-        status: Optional[str] = None,
-    ):
+    async def traces_list(request: Request, limit: int = 20, offset: int = 0, principal: Optional[str] = None, request_id: Optional[str] = None, status: Optional[str] = None):
         ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
         if not bot.trace_store:
             raise HTTPException(status_code=503, detail="Trace store not available")
-        records, total = bot.trace_store.list_runs(
-            limit=min(limit, 200),
-            offset=offset,
-            principal=principal,
-            request_id=request_id,
-            status=status,
-        )
+        records, total = bot.trace_store.list_runs(limit=min(limit, 200), offset=offset, principal=principal, request_id=request_id, status=status)
         return {"runs": [record.to_dict() for record in records], "total": total, "limit": limit, "offset": offset}
 
     @router.get("/api/traces/{run_id}")
@@ -206,24 +168,11 @@ def create_core_router(ctx: GatewayAppContext) -> APIRouter:
         return trace
 
     @router.get("/api/history")
-    async def history_list(
-        request: Request,
-        limit: int = 20,
-        offset: int = 0,
-        search: Optional[str] = None,
-        success: Optional[bool] = None,
-        request_id: Optional[str] = None,
-    ):
+    async def history_list(request: Request, limit: int = 20, offset: int = 0, search: Optional[str] = None, success: Optional[bool] = None, request_id: Optional[str] = None):
         ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
         if not bot.history:
             raise HTTPException(status_code=503, detail="History not available")
-        records, total = bot.history.list(
-            limit=min(limit, 200),
-            offset=offset,
-            search=search,
-            success=success,
-            request_id=request_id,
-        )
+        records, total = bot.history.list(limit=min(limit, 200), offset=offset, search=search, success=success, request_id=request_id)
         return {"records": [record.to_dict() for record in records], "total": total, "limit": limit, "offset": offset}
 
     @router.get("/api/history/stats")
@@ -255,12 +204,7 @@ def create_core_router(ctx: GatewayAppContext) -> APIRouter:
         if not name or not schedule:
             raise HTTPException(status_code=400, detail="Missing 'name' or 'schedule'")
         try:
-            task_id = bot.scheduler.add(
-                name=name,
-                schedule=schedule,
-                task_type=payload.get("task_type", "generic"),
-                payload=payload.get("payload"),
-            )
+            task_id = bot.scheduler.add(name=name, schedule=schedule, task_type=payload.get("task_type", "generic"), payload=payload.get("payload"))
             return {"task_id": task_id, "name": name, "schedule": schedule}
         except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
             raise HTTPException(status_code=400, detail=str(exc))
