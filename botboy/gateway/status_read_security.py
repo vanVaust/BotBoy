@@ -11,6 +11,8 @@ _SENSITIVE_PREFIXES = (
     "  Channel messages:",
     "  Archetypes routed:",
     "  Trace runs:",
+    "  Tasks tracked:",
+    "  Worker nodes:",
     "  Reflection entries:",
     "  Delegation workers:",
 )
