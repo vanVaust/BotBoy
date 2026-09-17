@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 import tempfile
 import unittest
-from types import SimpleNamespace
 
 import botboy.gateway  # noqa: F401,E402
 from botboy.approval_store import ApprovalStore
 from botboy.command_execution_service import CommandExecutionService
+from botboy.gateway.execution_security_gate import _require_final_authorization
 from botboy.security_context import SecurityContext
 from botboy.task_security import TaskSecurityStore
 from botboy.tasks import TaskStore
@@ -61,14 +61,23 @@ class FinalExecutionAuthorizationTests(unittest.TestCase):
             "trace_token": None,
         }
 
+    def _assert_gate_denies(self, service, command, task, approval_context):
+        with self.assertRaises(Exception) as raised:
+            _require_final_authorization(
+                service,
+                command,
+                principal_id="alice",
+                approval_context=approval_context,
+                task_ctx=task.to_context(),
+            )
+        self.assertEqual(getattr(raised.exception, "status_code", None), 403)
+
     def test_final_gate_blocks_missing_approval_even_if_called_directly(self):
         tmp, store, task = self._setup()
         try:
             bot = _Bot(store)
             service = CommandExecutionService(bot)
-            with self.assertRaises(Exception) as raised:
-                asyncio.run(service._run_route("dangerous operation", **self._route_kwargs(task, {})))
-            self.assertEqual(getattr(raised.exception, "status_code", None), 403)
+            self._assert_gate_denies(service, "dangerous operation", task, {})
             self.assertEqual(bot.route_calls, 0)
         finally:
             store.close()
@@ -93,9 +102,7 @@ class FinalExecutionAuthorizationTests(unittest.TestCase):
             }
             bot = _Bot(store)
             service = CommandExecutionService(bot)
-            with self.assertRaises(Exception) as raised:
-                asyncio.run(service._run_route("dangerous operation", **self._route_kwargs(task, approval_context)))
-            self.assertEqual(getattr(raised.exception, "status_code", None), 403)
+            self._assert_gate_denies(service, "dangerous operation", task, approval_context)
             self.assertEqual(bot.route_calls, 0)
 
             consumed = approvals.consume_if_valid(
@@ -139,9 +146,7 @@ class FinalExecutionAuthorizationTests(unittest.TestCase):
             }
             bot = _Bot(store)
             service = CommandExecutionService(bot)
-            with self.assertRaises(Exception) as raised:
-                asyncio.run(service._run_route("different operation", **self._route_kwargs(task, context)))
-            self.assertEqual(getattr(raised.exception, "status_code", None), 403)
+            self._assert_gate_denies(service, "different operation", task, context)
             self.assertEqual(bot.route_calls, 0)
         finally:
             store.close()
