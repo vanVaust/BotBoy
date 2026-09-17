@@ -45,14 +45,7 @@ def create_core_router(ctx: GatewayAppContext) -> APIRouter:
         return _is_system(roles) or "admin" in roles or str(security.get("principal_id", "")) == principal
 
     def _trace_visible(trace: dict, *, principal: str, org: str, roles: set[str]) -> bool:
-        """Authorize a trace at the gateway boundary.
-
-        TraceStore predates tenant-aware storage, so the gateway must never expose
-        an unscoped run_id while authentication is enabled. With authentication
-        disabled, the gateway is intentionally operating in its trusted-local mode;
-        remote exposure is rejected by gateway readiness checks, so legacy local
-        traces remain accessible for backwards-compatible local operation.
-        """
+        """Authorize a trace at the gateway boundary."""
         if not isinstance(trace, dict):
             return False
         if not ctx.auth_enabled:
@@ -82,20 +75,23 @@ def create_core_router(ctx: GatewayAppContext) -> APIRouter:
         return response
 
     @router.get("/metrics")
-    async def prometheus_metrics():
+    async def prometheus_metrics(request: Request):
+        # Metrics are a cross-request information surface. When gateway auth is
+        # enabled, do not expose aggregate counters/timings without identity.
+        ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
         if not bot.metrics:
             return PlainTextResponse("# no metrics\n")
         body, content_type = bot.metrics.render()
         return Response(content=body, media_type=content_type)
 
-    @router.get("/", response_class=HTMLResponse)
+    @router.get("/")
     async def root():
         index = ctx.web_dir / "index.html"
         if index.exists():
             return HTMLResponse(content=index.read_text(encoding="utf-8"))
         return HTMLResponse(content="<h1>BotBoy v0.6.0-dev</h1><p>Web UI not found.</p>")
 
-    @router.get("/dashboard.html", response_class=HTMLResponse)
+    @router.get("/dashboard.html")
     async def dashboard_html():
         dashboard = ctx.web_dir / "dashboard.html"
         if dashboard.exists():
@@ -167,7 +163,8 @@ def create_core_router(ctx: GatewayAppContext) -> APIRouter:
         return {"skills": skills, "count": len(skills)}
 
     @router.get("/api/metrics")
-    async def metrics_json():
+    async def metrics_json(request: Request):
+        ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=ctx.auth_enabled)
         if not bot.metrics:
             raise HTTPException(status_code=503, detail="Metrics not available")
         return bot.metrics.to_json()
