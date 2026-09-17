@@ -1,8 +1,9 @@
-"""Redact process-wide status and dashboard telemetry from authenticated requests."""
+"""Redact process-wide status and dashboard telemetry at gateway boundaries."""
 from __future__ import annotations
 
-from botboy.gateway.app_context import current_gateway_principal, _TaskStoreAuthorizationProxy
-from botboy.__main__ import BotBoy
+from typing import Any
+
+from botboy.gateway.app_context import current_gateway_principal
 from botboy.dashboard_support import get_dashboard_payload as _original_dashboard_payload
 
 _SENSITIVE_PREFIXES = (
@@ -20,39 +21,39 @@ _GLOBAL_OPERATION_KEYS = (
     "delegation_worker_count",
 )
 
-_original_show_status = BotBoy._show_status
 
-
-def _scoped_show_status(self: BotBoy) -> dict:
-    result = _original_show_status(self)
+def redact_authenticated_status(result: Any) -> Any:
+    """Remove process-wide telemetry from an authenticated status response."""
     if not current_gateway_principal():
         return result
     if not isinstance(result, dict) or not isinstance(result.get("output"), str):
         return result
-    result = dict(result)
-    result["output"] = "\n".join(
-        line for line in result["output"].splitlines()
+    scoped = dict(result)
+    scoped["output"] = "\n".join(
+        line for line in scoped["output"].splitlines()
         if not line.startswith(_SENSITIVE_PREFIXES)
     )
-    return result
+    return scoped
 
 
-def _scoped_dashboard_payload(bot, mode: str = "local") -> dict:
+def scoped_dashboard_payload(bot, mode: str = "local") -> dict:
+    """Remove process-wide telemetry and scope task dashboard data."""
     payload = _original_dashboard_payload(bot, mode=mode)
     if not current_gateway_principal() or not isinstance(payload, dict):
         return payload
     scoped = dict(payload)
     for key in _GLOBAL_TOP_LEVEL_KEYS:
         scoped.pop(key, None)
-
     raw_store = getattr(bot, "task_store", None)
     if raw_store is not None:
-        proxy = _TaskStoreAuthorizationProxy(raw_store, auth_enabled=True)
         try:
-            scoped["tasks"] = proxy.summary()
+            from botboy.gateway.app_context import _TaskStoreAuthorizationProxy
+            scoped["tasks"] = _TaskStoreAuthorizationProxy(raw_store, auth_enabled=True).summary()
         except Exception:
-            scoped["tasks"] = {"available": True, "total": 0, "recent": [], "waiting_approval": [], "blocked": [], "delegated": []}
-
+            scoped["tasks"] = {
+                "available": True, "total": 0, "recent": [],
+                "waiting_approval": [], "blocked": [], "delegated": [],
+            }
     operations = scoped.get("operations_summary")
     if isinstance(operations, dict):
         operations = dict(operations)
@@ -75,8 +76,8 @@ def _scoped_dashboard_payload(bot, mode: str = "local") -> dict:
     return scoped
 
 
-BotBoy._show_status = _scoped_show_status
-
-# server.py imports get_dashboard_payload after the gateway package is initialized.
+# Patch only the dashboard helper here; status is redacted explicitly by the
+# authenticated command/HTTP boundary to avoid importing botboy.__main__ during
+# package initialization (which would create a cli <-> gateway import cycle).
 import botboy.dashboard_support as _dashboard_support
-_dashboard_support.get_dashboard_payload = _scoped_dashboard_payload
+_dashboard_support.get_dashboard_payload = scoped_dashboard_payload
