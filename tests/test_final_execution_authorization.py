@@ -4,6 +4,8 @@ import asyncio
 import tempfile
 import unittest
 
+from fastapi import HTTPException
+
 import botboy.gateway  # noqa: F401,E402
 from botboy.approval_store import ApprovalStore
 from botboy.command_execution_service import CommandExecutionService
@@ -62,7 +64,7 @@ class FinalExecutionAuthorizationTests(unittest.TestCase):
         }
 
     def _assert_gate_denies(self, service, command, task, approval_context):
-        with self.assertRaises(Exception) as raised:
+        with self.assertRaises(HTTPException) as raised:
             _require_final_authorization(
                 service,
                 command,
@@ -70,13 +72,14 @@ class FinalExecutionAuthorizationTests(unittest.TestCase):
                 approval_context=approval_context,
                 task_ctx=task.to_context(),
             )
-        self.assertEqual(getattr(raised.exception, "status_code", None), 403)
+        self.assertEqual(raised.exception.status_code, 403)
 
     def test_final_gate_blocks_missing_approval_even_if_called_directly(self):
         tmp, store, task = self._setup()
         try:
             bot = _Bot(store)
             service = CommandExecutionService(bot)
+            self.assertTrue(service._approval_required("dangerous operation"))
             self._assert_gate_denies(service, "dangerous operation", task, {})
             self.assertEqual(bot.route_calls, 0)
         finally:
@@ -102,6 +105,7 @@ class FinalExecutionAuthorizationTests(unittest.TestCase):
             }
             bot = _Bot(store)
             service = CommandExecutionService(bot)
+            self.assertTrue(service._approval_required("dangerous operation"))
             self._assert_gate_denies(service, "dangerous operation", task, approval_context)
             self.assertEqual(bot.route_calls, 0)
 
@@ -146,6 +150,7 @@ class FinalExecutionAuthorizationTests(unittest.TestCase):
             }
             bot = _Bot(store)
             service = CommandExecutionService(bot)
+            self.assertTrue(service._approval_required("different operation"))
             self._assert_gate_denies(service, "different operation", task, context)
             self.assertEqual(bot.route_calls, 0)
         finally:
