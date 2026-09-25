@@ -100,6 +100,36 @@ The next phase is therefore **consolidation and proof**, not feature accumulatio
 
 ---
 
+# 1.3 Current verification checkpoint — 2026-09-25
+
+The latest GitHub Actions run for commit `be79ee2d1879acfe14c3bb2071ab4897305981a8` is **FAILED**.
+
+Verified from the release-verification job:
+
+- release acceptance: **passed**;
+- release test suite: **failed**;
+- total tests executed: **306**;
+- failures: **3 errors**;
+- all three errors originate in `tests/test_final_execution_authorization.py`;
+- the failing tests attempted to call `TaskContext.to_context()`, but `TaskContext` has no such method.
+
+This is a **test contract defect**, not evidence that the final authorization gate should be weakened. The production gate currently accepts the existing `TaskContext` object shape directly.
+
+A corrective test-only commit has been applied:
+
+`0a3e54c57a443236c3dd95497689f099515c9703` — `test: pass TaskContext directly to final authorization gate`
+
+### Verification state
+
+- Final execution gate implementation: **IMPLEMENTED**
+- Direct gate regression tests: **IMPLEMENTED**
+- Latest corrective test commit: **IMPLEMENTED**
+- CI verification of corrective commit: **PENDING**
+- Architectural cleanup of the gate: **PLANNED**
+
+The next verification decision must be based on the new CI result. No security bypass or fail-open behavior is to be introduced merely to obtain a green build.
+
+
 # 2. Security Classification
 
 Every BotBoy operation must be classified before implementation.
