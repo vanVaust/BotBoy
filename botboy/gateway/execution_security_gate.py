@@ -7,33 +7,16 @@ context creation.
 """
 from __future__ import annotations
 
-import hashlib
-from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
 
+from botboy.approval_store import ApprovalStore
 from botboy.command_execution_service import CommandExecutionService
 from botboy.task_security import TaskSecurityStore
 
 
 _INSTALLED = False
-
-
-def _fingerprint(command: str) -> str:
-    return hashlib.sha256(str(command or "").encode("utf-8")).hexdigest()
-
-
-def _approval_row(store: Any, approval_id: str) -> Any:
-    try:
-        return store._get_conn().execute(
-            "SELECT approval_id, task_id, principal_id, org_id, capability, "
-            "command_fingerprint, authorization_version, expires_at, consumed_at "
-            "FROM task_approvals WHERE approval_id = ?",
-            (approval_id,),
-        ).fetchone()
-    except Exception:
-        return None
 
 
 def _require_final_authorization(
@@ -49,22 +32,12 @@ def _require_final_authorization(
     if store is None or task_ctx is None:
         raise HTTPException(status_code=403, detail="Execution security context is unavailable")
 
-    # Commands that do not require approval still need to preserve the normal
-    # CommandExecutionService contract.  The persisted security checks below
-    # are only meaningful for a real TaskStore implementation; lightweight
-    # test/runtime stores intentionally do not expose its private DB contract.
     required = service._approval_required(command)
     if not required:
         return
 
     if not service._has_server_approval(approval_context):
         raise HTTPException(status_code=403, detail="Server-issued approval required at final execution boundary")
-
-    # The final persisted-grant verification is fail-closed for the real
-    # TaskStore.  Minimal in-memory test doubles cannot prove persistence and
-    # are limited to the server-issued approval shape check above.
-    if not callable(getattr(store, "_get_conn", None)):
-        return
 
     task_principal = str(getattr(task_ctx, "principal", "") or "")
     if task_principal != str(principal_id):
@@ -84,31 +57,20 @@ def _require_final_authorization(
         raise HTTPException(status_code=403, detail="Persisted security task mismatch")
 
     approval_id = str(approval_context.get("approval_id", "")).strip()
-    row = _approval_row(store, approval_id)
-    if row is None:
-        raise HTTPException(status_code=403, detail="Approval grant does not exist")
-    if str(row["task_id"]) != str(task_ctx.task_id):
-        raise HTTPException(status_code=403, detail="Approval is bound to another task")
-    if str(row["principal_id"]) != str(principal_id):
-        raise HTTPException(status_code=403, detail="Approval principal mismatch")
-    if str(row["org_id"] or "default") != str(context.org_id or "default"):
-        raise HTTPException(status_code=403, detail="Approval tenant mismatch")
-    if str(row["capability"]) != "task.execute":
-        raise HTTPException(status_code=403, detail="Approval capability mismatch")
-    if str(row["command_fingerprint"]) != _fingerprint(command):
-        raise HTTPException(status_code=403, detail="Approval command mismatch")
-    if str(row["authorization_version"]) != str(context.authorization_version):
-        raise HTTPException(status_code=403, detail="Approval authorization version mismatch")
-    if not str(row["consumed_at"] or "").strip():
-        raise HTTPException(status_code=403, detail="Approval was not atomically consumed before execution")
     try:
-        expiry = datetime.fromisoformat(str(row["expires_at"]))
-        if expiry.tzinfo is None:
-            expiry = expiry.replace(tzinfo=timezone.utc)
-        if expiry <= datetime.now(timezone.utc):
-            raise HTTPException(status_code=403, detail="Approval has expired")
-    except ValueError as exc:
-        raise HTTPException(status_code=403, detail="Approval expiry is invalid") from exc
+        approval = ApprovalStore(store).get_consumed_if_valid(
+            approval_id,
+            task_id=task_ctx.task_id,
+            principal_id=principal_id,
+            org_id=str(context.org_id or "default"),
+            command=command,
+            capability="task.execute",
+            authorization_version=int(context.authorization_version),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=403, detail="Approval grant could not be verified") from exc
+    if approval is None:
+        raise HTTPException(status_code=403, detail="Approval grant is not valid at the final execution boundary")
 
 
 def install() -> None:
