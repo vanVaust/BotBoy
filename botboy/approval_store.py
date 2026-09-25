@@ -153,3 +153,50 @@ class ApprovalStore:
         if not row:
             return None
         return dict(row)
+
+    def get_consumed_if_valid(
+        self,
+        approval_id: str,
+        *,
+        task_id: str,
+        principal_id: str,
+        org_id: str,
+        command: str,
+        capability: str = "task.execute",
+        authorization_version: Optional[int] = None,
+    ) -> Optional[dict]:
+        """Read a consumed approval and verify every execution-time binding."""
+        if not approval_id or not task_id or not principal_id:
+            return None
+        conn = self.task_store._get_conn()
+        row = conn.execute(
+            "SELECT approval_id, task_id, principal_id, org_id, capability, "
+            "command_fingerprint, authorization_version, issued_at, expires_at, consumed_at "
+            "FROM task_approvals WHERE approval_id = ?",
+            (approval_id,),
+        ).fetchone()
+        if not row:
+            return None
+        if str(row["task_id"]) != str(task_id):
+            return None
+        if str(row["principal_id"]) != str(principal_id):
+            return None
+        if str(row["org_id"] or "default") != str(org_id or "default"):
+            return None
+        if str(row["capability"]) != str(capability):
+            return None
+        if str(row["command_fingerprint"]) != command_fingerprint(command):
+            return None
+        if authorization_version is not None and str(row["authorization_version"]) != str(authorization_version):
+            return None
+        if not str(row["consumed_at"] or "").strip():
+            return None
+        try:
+            expires = datetime.fromisoformat(str(row["expires_at"]))
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+        if expires <= self._now():
+            return None
+        return dict(row)
