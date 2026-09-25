@@ -102,32 +102,38 @@ The next phase is therefore **consolidation and proof**, not feature accumulatio
 
 # 1.3 Current verification checkpoint — 2026-09-25
 
-The latest GitHub Actions run for commit `be79ee2d1879acfe14c3bb2071ab4897305981a8` is **FAILED**.
+### Final-gate CI closure
 
-Verified from the release-verification job:
+Run #178 for commit `80a79b97f228598cda5f9d9895014afd48736f8b` completed **SUCCESS**.
 
-- release acceptance: **passed**;
-- release test suite: **failed**;
-- total tests executed: **306**;
-- failures: **3 errors**;
-- all three errors originate in `tests/test_final_execution_authorization.py`;
-- the failing tests attempted to call `TaskContext.to_context()`, but `TaskContext` has no such method.
+Verified:
 
-This is a **test contract defect**, not evidence that the final authorization gate should be weakened. The production gate currently accepts the existing `TaskContext` object shape directly.
+- release-verification workflow: **passed**;
+- the prior 306-test / 3-error regression caused by the incomplete final-gate test fixture is closed;
+- final-gate tests now exercise the real `TaskStore` persistence contract;
+- no security bypass was introduced to obtain the green build.
 
-A corrective test-only commit has been applied:
+### Architectural consolidation now in progress
 
-`0a3e54c57a443236c3dd95497689f099515c9703` — `test: pass TaskContext directly to final authorization gate`
+The final gate has been tightened after CI closure:
 
-### Verification state
+- `ApprovalStore.get_consumed_if_valid()` is now the supported read/verification API for consumed grants;
+- the final gate no longer duplicates approval-row SQL/fingerprint/expiry validation;
+- the final gate no longer contains the compatibility return path for stores without `_get_conn()`;
+- the remaining import-time monkeypatch is explicitly tracked as architectural debt and is not yet considered complete.
+
+Current status:
 
 - Final execution gate implementation: **IMPLEMENTED**
-- Direct gate regression tests: **IMPLEMENTED**
-- Latest corrective test commit: **IMPLEMENTED**
-- CI verification of corrective commit: **PENDING**
-- Architectural cleanup of the gate: **PLANNED**
+- Direct gate regression tests: **VERIFIED** by run #178
+- Approval verification abstraction: **IMPLEMENTED**
+- Removal of duplicated approval validation: **IMPLEMENTED**
+- Removal of private storage dependency from final gate: **IMPLEMENTED**
+- Removal of import-time monkeypatching: **PLANNED**
+- Canonical authorization service: **PLANNED**
+- Full adversarial execution matrix: **PLANNED**
 
-The next verification decision must be based on the new CI result. No security bypass or fail-open behavior is to be introduced merely to obtain a green build.
+The next verification decision must be based on CI for the architectural cleanup commits. No security bypass or fail-open behavior is to be introduced merely to obtain a green build.
 
 
 # 2. Security Classification
@@ -592,14 +598,16 @@ The final gate is the last security barrier before an irreversible or security-r
 
 ## Current implementation debt
 
-The current final gate contains architectural compromises that must be removed during consolidation:
+The remaining final-gate debt is now limited to architectural placement:
 
 - import-time monkeypatching of `CommandExecutionService._run_route`;
-- direct use of private `TaskStore._get_conn()`;
-- compatibility return paths for stores without the private connection API;
-- duplicated approval-row validation outside the approval abstraction.
+- the gate still sits in a gateway import hook rather than being an explicit execution-service boundary.
 
-These may be useful as temporary diagnostics, but they are not the target architecture.
+The following debts have been removed:
+
+- direct use of private `TaskStore._get_conn()` by the final gate;
+- compatibility return paths for stores without the private connection API;
+- duplicated approval-row SQL/fingerprint/expiry validation outside `ApprovalStore`.
 
 ## Definition of Done
 
@@ -646,14 +654,14 @@ For every resume/retry/recovery:
 
 Never implement:
 
-```text
+```
 persisted_task.approved == true
         -> execute()
 ```
 
 Instead:
 
-```text
+```
 persisted_task
   -> reconstruct security state
   -> current authorization
