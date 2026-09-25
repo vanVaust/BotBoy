@@ -25,6 +25,7 @@ class _Bot:
         self.task_store = store
         self.skills = _Skills()
         self.route_calls = 0
+        self.trace_store = None
 
     async def _route(self, *_args, **_kwargs):
         self.route_calls += 1
