@@ -57,7 +57,7 @@ class FinalExecutionAuthorizationTests(unittest.TestCase):
             "roles": [],
             "approval_context": approval_context,
             "request_id": "req-1",
-            "task_ctx": task.to_context(),
+            "task_ctx": task,
             "trace_ctx": None,
             "root_span_id": "",
             "trace_token": None,
@@ -70,7 +70,7 @@ class FinalExecutionAuthorizationTests(unittest.TestCase):
                 command,
                 principal_id="alice",
                 approval_context=approval_context,
-                task_ctx=task.to_context(),
+                task_ctx=task,
             )
         self.assertEqual(raised.exception.status_code, 403)
 
