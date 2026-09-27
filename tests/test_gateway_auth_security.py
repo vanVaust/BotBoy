@@ -3,9 +3,13 @@ from __future__ import annotations
 import base64
 import json
 import unittest
+from types import SimpleNamespace
 
+from fastapi import Request
+
+from botboy.gateway.routes_auth import create_auth_router
 from botboy.gateway.auth import JWTAuth, _b64url_encode
-from botboy.gateway.secrets import SecretStore, _verify_key
+from botboy.gateway.secrets import PrincipalStore, SecretStore, _verify_key
 
 
 class GatewayAuthSecurityTest(unittest.TestCase):
@@ -124,6 +128,49 @@ class GatewayAuthSecurityTest(unittest.TestCase):
             mutated_payload = _b64url_encode(json.dumps(mutated_claims).encode())
             mutated = f"{header}.{mutated_payload}.{auth._sign(header, mutated_payload)}"
             self.assertIsNone(auth.refresh(mutated))
+
+
+    def test_refresh_rejects_changed_principal_role_or_tenant(self) -> None:
+        auth = JWTAuth("x" * 32)
+        store = PrincipalStore()
+        self.addCleanup(store.close)
+        store.upsert_principal("alice", "password", role="user", org_id="tenant-a")
+        pair = auth.create_pair("alice", ["user"], org_id="tenant-a")
+
+        ctx = SimpleNamespace(
+            auth=auth,
+            auth_enabled=True,
+            authorize=lambda *args, **kwargs: "alice",
+            bootstrap_principal_store=lambda: store,
+            get_api_key_store=lambda: None,
+        )
+        router = create_auth_router(ctx)
+        endpoint = next(route.endpoint for route in router.routes if route.path == "/api/auth/refresh")
+
+        async def call_refresh() -> None:
+            body = json.dumps({"refresh_token": pair.refresh_token}).encode()
+
+            async def receive():
+                return {"type": "http.request", "body": body, "more_body": False}
+
+            request = Request(
+                {"type": "http", "method": "POST", "path": "/api/auth/refresh", "headers": [], "client": ("127.0.0.1", 1)},
+                receive,
+            )
+            await endpoint(request)
+
+        store.upsert_principal("alice", "password", role="admin", org_id="tenant-a")
+        with self.assertRaises(Exception) as role_error:
+            import asyncio
+            asyncio.run(call_refresh())
+        self.assertEqual(getattr(role_error.exception, "status_code", None), 401)
+
+        pair = auth.create_pair("alice", ["user"], org_id="tenant-a")
+        store.upsert_principal("alice", "password", role="user", org_id="tenant-b")
+        with self.assertRaises(Exception) as org_error:
+            import asyncio
+            asyncio.run(call_refresh())
+        self.assertEqual(getattr(org_error.exception, "status_code", None), 401)
 
     def test_jwt_revocation(self) -> None:
         auth = JWTAuth("x" * 32)
