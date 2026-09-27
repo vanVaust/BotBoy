@@ -4,8 +4,11 @@ import asyncio
 import unittest
 from types import SimpleNamespace
 
+from botboy.approval_store import ApprovalStore
 from botboy.command_execution_service import CommandExecutionService
-from botboy.tasks import TASK_STATUS_COMPLETED, TASK_STATUS_FAILED
+from botboy.security_context import SecurityContext
+from botboy.task_security import TaskSecurityStore
+from botboy.tasks import TASK_STATUS_COMPLETED, TASK_STATUS_FAILED, TaskStore
 
 
 class _TaskStore:
@@ -32,7 +35,31 @@ class _Bot:
         self.cache = None
         self.skills = _Skills()
         self.validator = None
-        self.task_store = _TaskStore()
+        self.task_store = TaskStore(db_path=":memory:")
+        task = self.task_store.create_task(
+            title="approval test",
+            principal="alice",
+            org_id="org-a",
+            command="dangerous operation",
+        )
+        self.task_id = task.task_id
+        TaskSecurityStore(self.task_store).save(
+            SecurityContext.from_legacy(
+                principal="alice",
+                org_id="org-a",
+                roles=["user"],
+                request_id="",
+                task_id=self.task_id,
+            )
+        )
+        approval = ApprovalStore(self.task_store).issue(
+            task_id=self.task_id,
+            principal_id="alice",
+            org_id="org-a",
+            command="dangerous operation",
+            authorization_version=1,
+        )
+        self.approval_id = approval["approval_id"]
         self.metrics = None
         self.trace_store = None
         self.archetypes = None
@@ -43,9 +70,15 @@ class _Bot:
         self.route_calls = []
         self.finished = []
 
+    def __del__(self):
+        try:
+            self.task_store.close()
+        except Exception:
+            pass
+
     def _create_task_context(self, command: str, **kwargs):
         return SimpleNamespace(
-            task_id="task-approval",
+            task_id=self.task_id,
             root_task_id="task-approval",
             parent_task_id="",
             command=command,
@@ -95,7 +128,7 @@ class CommandApprovalBoundaryTests(unittest.TestCase):
                     "granted": True,
                     "explicit": True,
                     "source": "approval_store",
-                    "approval_id": "approval-1",
+                    "approval_id": bot.approval_id,
                     "approval_scope": "task.execute",
                 },
             )
