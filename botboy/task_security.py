@@ -24,8 +24,16 @@ class TaskSecurityStore:
         self.task_store = task_store
         self._ensure_schema()
 
+    def _database_store(self) -> Any:
+        """Return the underlying persistence store without widening proxy surface."""
+        store = self.task_store
+        while hasattr(store, "_store"):
+            store = store._store
+        return store
+
     def _ensure_schema(self) -> None:
-        conn = self.task_store._get_conn()
+        store = self._database_store()
+        conn = store._get_conn()
         conn.execute(
             """CREATE TABLE IF NOT EXISTS task_security_contexts (
                 task_id TEXT PRIMARY KEY,
@@ -69,7 +77,8 @@ class TaskSecurityStore:
     def save(self, context: SecurityContext) -> None:
         if not context.task_id:
             raise ValueError("SecurityContext.task_id is required for persistence")
-        conn = self.task_store._get_conn()
+        store = self._database_store()
+        conn = store._get_conn()
         existing = conn.execute(
             "SELECT security_context_json FROM task_security_contexts WHERE task_id = ?",
             (context.task_id,),
@@ -83,7 +92,7 @@ class TaskSecurityStore:
             self._validate_transition(previous, context)
 
         payload = json.dumps(context.to_dict(), sort_keys=True)
-        now = self.task_store._now()
+        now = store._now()
         conn.execute(
             """INSERT INTO task_security_contexts
                (task_id, security_context_json, created_at, updated_at)
@@ -96,7 +105,8 @@ class TaskSecurityStore:
         conn.commit()
 
     def load(self, task_id: str) -> Optional[SecurityContext]:
-        conn = self.task_store._get_conn()
+        store = self._database_store()
+        conn = store._get_conn()
         row = conn.execute(
             "SELECT security_context_json FROM task_security_contexts WHERE task_id = ?",
             (task_id,),
@@ -112,6 +122,7 @@ class TaskSecurityStore:
         return SecurityContext.from_dict(payload)
 
     def delete(self, task_id: str) -> None:
-        conn = self.task_store._get_conn()
+        store = self._database_store()
+        conn = store._get_conn()
         conn.execute("DELETE FROM task_security_contexts WHERE task_id = ?", (task_id,))
         conn.commit()
