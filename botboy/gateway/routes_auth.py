@@ -108,9 +108,17 @@ def create_auth_router(ctx: GatewayAppContext) -> APIRouter:
         principal_store = ctx.bootstrap_principal_store()
         if principal_store:
             principal_record = principal_store.get_principal(token_info.principal_id)
-            if principal_record and principal_record.disabled:
-                ctx.auth.revoke_token(refresh_token)
-                raise HTTPException(status_code=401, detail="Principal is disabled")
+            if principal_record:
+                current_role = str(principal_record.role or "").strip().lower()
+                token_roles = {str(role).strip().lower() for role in token_info.roles}
+                current_org = str(principal_record.org_id or "default")
+                token_org = str(token_info.org_id or "default")
+                if principal_record.disabled:
+                    ctx.auth.revoke_token(refresh_token)
+                    raise HTTPException(status_code=401, detail="Principal is disabled")
+                if current_role not in token_roles or current_org != token_org:
+                    ctx.auth.revoke_token(refresh_token)
+                    raise HTTPException(status_code=401, detail="Principal authorization has changed")
         pair = ctx.auth.refresh(refresh_token)
         if not pair:
             raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
