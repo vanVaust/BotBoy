@@ -59,7 +59,15 @@ class _Bot:
             command="dangerous operation",
             authorization_version=1,
         )
-        self.approval_id = approval["approval_id"]
+        consumed = ApprovalStore(self.task_store).consume_if_valid(
+            approval["approval_id"],
+            task_id=self.task_id,
+            principal_id="alice",
+            org_id="org-a",
+            command="dangerous operation",
+            authorization_version=1,
+        )
+        self.approval_id = consumed["approval_id"]
         self.metrics = None
         self.trace_store = None
         self.archetypes = None
