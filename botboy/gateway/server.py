@@ -39,14 +39,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from botboy.gateway.security import default_bind_host, resolve_cors_origins, validate_remote_gateway_readiness
+from botboy.gateway.security import TrustedProxyHeaderMiddleware, default_bind_host, resolve_cors_origins, validate_remote_gateway_readiness
 from botboy.gateway.app_context import GatewayAppContext
 from botboy.gateway.dashboard_payload import enrich_dashboard_payload as shared_enrich_dashboard_payload
 from botboy.gateway.merge_actions import (
     GatewayMergeActionError,
     build_merge_action_payload as shared_build_merge_action_payload,
 )
-from botboy.resources import web_dir as bundled_web_dir
+from botboy.resources import web_dir as bundled_web_dir, runtime_home_dir
 from botboy.gateway.task_support import (
     build_task_graph as shared_build_task_graph,
     collect_task_records as shared_collect_task_records,
@@ -165,6 +165,8 @@ def create_app(bot, *, host: str = default_bind_host(), port: int = 8765) -> Any
         response = await call_next(request)
         return response
 
+    app.add_middleware(TrustedProxyHeaderMiddleware)
+
     config = getattr(bot, "config", None)
     security = getattr(config, "security", None)
     validate_remote_gateway_readiness(config, host=host, port=port, surface="gateway")
@@ -183,11 +185,13 @@ def create_app(bot, *, host: str = default_bind_host(), port: int = 8765) -> Any
         if config and hasattr(config, "resolve_token_revocation_db_path"):
             revocation_store_path = config.resolve_token_revocation_db_path()
         else:
-            revocation_store_path = str(Path.home() / ".botboy" / "revoked_tokens.db")
+            revocation_store_path = str(runtime_home_dir() / "revoked_tokens.db")
             
         try:
             revocation_store = TokenRevocationStore(db_path=revocation_store_path)
         except (OSError, RuntimeError, sqlite3.Error):
+            if auth_enabled:
+                raise RuntimeError("Persistent token revocation store is unavailable")
             revocation_store = None
             
         auth = JWTAuth(secret=jwt_secret, allow_generate=not auth_enabled, revocation_store=revocation_store)
@@ -269,9 +273,19 @@ def create_app(bot, *, host: str = default_bind_host(), port: int = 8765) -> Any
                 headers={"Retry-After": str(retry_after)},
             )
 
+    def _verify_current_token(token: str):
+        token_info = auth.verify(token) if token else None
+        if token_info:
+            from botboy.gateway.auth import validate_credential_state
+            try:
+                validate_credential_state(token_info, _get_credential_store(), _get_api_key_store())
+            except ValueError:
+                return None
+        return token_info
+
     def _authorize(headers: Any, client_host: str = "", require_auth: Optional[bool] = None) -> str:
         token = _extract_token(headers)
-        token_info = auth.verify(token) if token else None
+        token_info = _verify_current_token(token)
         identity = token_info.principal_id if token_info else _client_identity(headers, client_host)
 
         _enforce_rate_limit(identity)
@@ -288,7 +302,7 @@ def create_app(bot, *, host: str = default_bind_host(), port: int = 8765) -> Any
 
     def _authorize_with_roles(headers: Any, client_host: str = "", require_auth: Optional[bool] = None) -> tuple[str, list[str]]:
         token = _extract_token(headers)
-        token_info = auth.verify(token) if token else None
+        token_info = _verify_current_token(token)
         identity = token_info.principal_id if token_info else _client_identity(headers, client_host)
 
         _enforce_rate_limit(identity)
@@ -361,6 +375,7 @@ def create_app(bot, *, host: str = default_bind_host(), port: int = 8765) -> Any
             "created_at": principal.created_at,
             "updated_at": principal.updated_at,
             "disabled": principal.disabled,
+            "org_id": principal.org_id,
         }
 
     def _require_admin(headers: Any, client_host: str = "") -> None:
@@ -623,8 +638,11 @@ def create_app(bot, *, host: str = default_bind_host(), port: int = 8765) -> Any
     if bot.history:
         from botboy.history import make_history_router
 
-        router = make_history_router(bot.history)
+        router = make_history_router(bot.history, context=route_context)
         if router:
+            # Core owns the collection/stats contract; retain only the extra
+            # record endpoint from the optional history adapter.
+            router.routes[:] = [route for route in router.routes if route.path not in {"/api/history", "/api/history/stats"}]
             app.include_router(router)
 
     bot._start_time = time.time()

@@ -1,5 +1,13 @@
 # BotBoy – Code-Audit und Fortschrittsregister
 
+Aktualisierung 2026-10-16: Auf ausdruecklichen Nutzerauftrag wurden zwei
+Entwickler-Agenten und ein Integrator fuer lokale Korrekturen eingesetzt.
+Der historische Stand unten bleibt nachvollziehbar; aktuelle Umsetzung,
+Gegenpruefungen und Restgrenzen stehen in
+`docs/SECURITY_INTEGRATION_VERIFICATION_2026-10-16.md`.
+Untersuchungsbasis der lokalen Integration: main `afc84e4` und Security-Head
+`6c6ef4f`; kein veroeffentlichter Release.
+
 Stand: 2026-09-28. Dieses Dokument protokolliert Analyseschritte, nicht den Sicherheitsstatus des Produkts. Keine Codeänderung wird hierdurch autorisiert.
 
 ## Unveränderliche Untersuchungsbasis
@@ -45,7 +53,7 @@ OFFEN = noch nicht begonnen; IN ARBEIT = geprüft, aber Abnahmekriterium offen; 
 - Auswirkung: Falsche Tenant-Identität in ausgegebenen JWTs; abhängig von nachfolgenden Prüfpfaden Zugriffsausfall oder fehlerhafte Mandantenzuordnung. Keine Behauptung eines ausnutzbaren Cross-Tenant-Zugriffs ohne End-to-End-Nachweis.
 - Vorläufiger Schweregrad: HOCH (Sicherheitsgrenze, bis Laufzeitreproduktion/Impact-Analyse).
 - Maßnahme: Beim Login org_id explizit an AuthPrincipal(org_id=org_id) übergeben, Metadaten nicht als autoritative Tenant-Quelle verwenden. Tests für Passwort- und API-Key-Login, nicht-default Tenant, Access/Refresh sowie nachfolgende Tenant-Autorisierung ergänzen.
-- Status: IN ARBEIT; weder Codekorrektur noch Regressionstests in dieser Audit-Sitzung vorgenommen.
+- Status am 2026-09-28: IN ARBEIT; in der damaligen Audit-Sitzung keine Korrektur vorgenommen. Aktualisierung 2026-10-16: Login-Claim-Fehler lokal korrigiert und ueber echte Passwort-/API-Key-HTTP-Anmeldung inklusive Refresh in FastAPI und stdlib nachgewiesen. Weitere getrennte Kontextverluste bei Command-/Adminpfaden ebenfalls korrigiert; siehe aktuelle Verifikation. Kein Remote-Release hierdurch freigegeben.
 
 ## Prüfhinweise, noch keine bestätigten Defekte
 - Letzte Ausführungsfreigabe: Im PR-Diff installiert gateway/__init__.py importzeitige Patches; execution_security_gate.py umhüllt CommandExecutionService._run_route. Tatsächliche Abdeckung aller Ausführungspfade und Approval-Replay prüfen.

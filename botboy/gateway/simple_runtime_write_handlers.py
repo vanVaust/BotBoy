@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from contextvars import copy_context
 from typing import Any
+from botboy.gateway.simple_server_support import SimpleServerSupport
 
 
 def _run_sync(coro) -> Any:
@@ -12,7 +14,7 @@ def _run_sync(coro) -> Any:
     import concurrent.futures
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(asyncio.run, coro)
+        future = pool.submit(copy_context().run, asyncio.run, coro)
         return future.result(timeout=30)
 
 
@@ -27,7 +29,11 @@ def handle_memories_post(handler, payload: dict) -> None:
     if not content:
         handler._json({"error": "Missing content"}, 400)
         return
-    mem_id = bot.memory.store(content, payload.get("metadata"))
+    metadata = dict(payload.get("metadata") or {}) if isinstance(payload.get("metadata"), dict) else {}
+    if handler.auth_enabled:
+        context = SimpleServerSupport(handler).security_context()
+        metadata["_botboy_security"] = {"principal_id": context.principal_id, "org_id": context.org_id}
+    mem_id = bot.memory.store(content, metadata)
     handler._json({"id": mem_id, "content": content, "success": True})
 
 
@@ -51,6 +57,7 @@ def handle_command(handler, payload: dict) -> None:
                 request_id=handler.request_id,
                 roles=roles,
                 approval_context=handler._approval_context(payload, roles),
+                **({"security_context": SimpleServerSupport(handler).security_context()} if handler.auth_enabled else {}),
             )
         )
         handler._json(result)

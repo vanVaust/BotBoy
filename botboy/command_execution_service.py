@@ -6,6 +6,10 @@ import time
 from typing import Optional
 
 from botboy.tasks import TASK_STATUS_COMPLETED, TASK_STATUS_FAILED, TaskContext
+from botboy.security_context import SecurityContext
+from botboy.security_authorization import AuthorizationError, require_authorized
+from botboy.approval_store import ApprovalStore
+from botboy.task_security import TaskSecurityStore
 
 OPTIONAL_ROUTE_ERRORS = (
     RuntimeError,
@@ -43,6 +47,80 @@ class CommandExecutionService:
             "reason": "local_default",
             "source": "local",
         }
+
+    def _approval_required(self, command: str) -> bool:
+        if not self.bot.skills:
+            return False
+        contract = self.bot.skills.get_contract_for_command(command.strip())
+        return bool(contract and contract.get("needs_approval"))
+
+    @staticmethod
+    def _has_server_approval(approval_context: dict) -> bool:
+        return bool(
+            approval_context.get("granted")
+            and approval_context.get("explicit")
+            and approval_context.get("source") == "approval_store"
+            and str(approval_context.get("approval_id", "")).strip()
+            and approval_context.get("approval_scope") == "task.execute"
+        )
+
+    def _authorization_failure(
+        self,
+        output: str,
+        *,
+        task_ctx: Optional[TaskContext],
+        trace_ctx,
+        root_span_id: str,
+        trace_token,
+        principal_id: str,
+        request_id: str,
+    ) -> dict:
+        result = {"success": False, "output": output, "type": "authorization_error"}
+        result = self.bot._decorate_with_task(result, task_ctx, TASK_STATUS_FAILED)
+        if self.bot.task_store and task_ctx:
+            self.bot.task_store.update_status(
+                task_ctx.task_id,
+                status=TASK_STATUS_FAILED,
+                summary=output[:256],
+                result=result,
+                run_id=trace_ctx.run_id if trace_ctx else "",
+                principal=principal_id,
+                request_id=request_id,
+                event_type="authorization_denied",
+                message=output[:256],
+                payload_ref="approval",
+            )
+        if trace_ctx:
+            self.bot._finish_trace_run(
+                trace_ctx,
+                root_span_id,
+                trace_token,
+                status="error",
+                cmd_type="authorization_error",
+                summary=output[:256],
+                payload_ref="approval",
+            )
+        return result
+
+    @staticmethod
+    def _cache_security_scope(security_context: SecurityContext) -> str:
+        """Stable scope boundary for cached command results.
+
+        At minimum, cached results must not cross principal/tenant boundaries.
+        A future authorization-version change can invalidate old scopes by
+        changing the version carried in SecurityContext.
+        """
+        return json.dumps({
+            "version": security_context.authorization_version,
+            "org": security_context.org_id,
+            "principal": security_context.principal_id,
+            "source": security_context.auth_source,
+            "credential_source": security_context.credential_source,
+            "credential_version": security_context.credential_version,
+            "roles": sorted(security_context.roles),
+            "scopes": sorted(security_context.scopes),
+            "capabilities": sorted(security_context.capabilities),
+        }, sort_keys=True, separators=(",", ":"))
 
     def _cache_allowed(self, raw_command: str) -> bool:
         normalized_command = raw_command.strip().lower()
@@ -159,6 +237,96 @@ class CommandExecutionService:
             )
         return result
 
+    def _require_remote_command_surface(self, command: str, context: SecurityContext) -> None:
+        """Keep remote commands away from legacy process-global store handlers.
+
+        Dedicated HTTP resource endpoints enforce object and tenant scopes. The
+        equivalent legacy command families cannot safely share raw bot stores.
+        Local CLI/scheduler behavior remains an explicitly trusted entry point.
+        """
+        if context.auth_source in {"local", "legacy", "task_lifecycle", "task_parent", "scheduler"}:
+            return
+        first = command.strip().split(maxsplit=1)[0].lower() if command.strip() else ""
+        if first in {"help", "?", "status", "version", "skills"}:
+            return
+        stateful = {
+            "task", "tasks", "history", "remember", "store", "save", "search", "forget",
+            "delete", "memories", "memstats", "worker", "workers", "schedule", "handoff",
+            "a2a", "reflect", "reflection", "performance", "eval", "evals", "skilllib",
+            "skilllibrary", "skillroute", "contract", "contracts", "system",
+            "plan", "think", "archetypes", "intent", "hsearch", "hybrid-search",
+        }
+        if first in stateful:
+            raise AuthorizationError("Use the authorized resource API for this command family")
+        contract = self.bot.skills.get_contract_for_command(command) if self.bot.skills else None
+        if not contract:
+            raise AuthorizationError("Remote command has no explicit skill contract")
+        if "system-info" in (contract.get("capabilities") or []):
+            raise AuthorizationError("System introspection requires an authorized system endpoint")
+
+    def require_final_authorization(
+        self, command: str, *, principal_id: str, approval_context: dict,
+        task_ctx: Optional[TaskContext], security_context: Optional[SecurityContext] = None,
+        claim_execution: bool = False, check_approval: bool = True,
+    ) -> None:
+        """Transport-independent check immediately before a command can act."""
+        store = getattr(self.bot, "task_store", None)
+        lifecycle = getattr(self.bot, "lifecycle_service", None)
+
+        def security_store():
+            return lifecycle.task_security_store if lifecycle is not None else TaskSecurityStore(store)
+
+        if security_context is not None:
+            self._require_remote_command_surface(command, security_context)
+            if task_ctx is None or store is None:
+                raise AuthorizationError("Execution security context is unavailable")
+            require_authorized(security_context, required_capability="task.execute",
+                               principal_id=principal_id, org_id=task_ctx.org_id,
+                               task_id=task_ctx.task_id)
+            if task_ctx.principal != principal_id:
+                raise AuthorizationError("task_principal_mismatch")
+            persisted = security_store().load(task_ctx.task_id)
+            if persisted is None:
+                raise AuthorizationError("Persisted security context is missing")
+            require_authorized(persisted, principal_id=principal_id, org_id=task_ctx.org_id,
+                               task_id=task_ctx.task_id)
+            if persisted.authorization_version != security_context.authorization_version:
+                raise AuthorizationError("authorization_version_mismatch")
+            if persisted.credential_source and (
+                persisted.credential_source != security_context.credential_source
+                or persisted.credential_version != security_context.credential_version
+            ):
+                raise AuthorizationError("task_credential_binding_changed")
+            if not persisted.capabilities.issuperset(security_context.capabilities):
+                raise AuthorizationError("capabilities_expanded")
+            if not persisted.roles.issuperset(security_context.roles):
+                raise AuthorizationError("roles_expanded")
+            if not persisted.scopes.issuperset(security_context.scopes):
+                raise AuthorizationError("scopes_expanded")
+        if not check_approval or not self._approval_required(command):
+            return
+        if store is None or task_ctx is None or not self._has_server_approval(approval_context):
+            raise AuthorizationError("Server-issued approval required at final execution boundary")
+        if task_ctx.principal != principal_id:
+            raise AuthorizationError("task_principal_mismatch")
+        context = security_store().load(task_ctx.task_id)
+        if context is None:
+            raise AuthorizationError("Persisted security context is missing")
+        # Approval is a separately persisted grant, not a capability supplied by
+        # request JSON. Legacy tasks can acquire an approval but not a new owner.
+        require_authorized(context, principal_id=principal_id, org_id=task_ctx.org_id,
+                           task_id=task_ctx.task_id)
+        if security_context and context.authorization_version != security_context.authorization_version:
+            raise AuthorizationError("authorization_version_mismatch")
+        approvals = lifecycle.approval_store if lifecycle is not None else ApprovalStore(store)
+        verify = approvals.claim_execution_if_valid if claim_execution else approvals.get_consumed_if_valid
+        grant = verify(str(approval_context.get("approval_id", "")),
+                       task_id=task_ctx.task_id, principal_id=principal_id,
+                       org_id=context.org_id, command=command, capability="task.execute",
+                       authorization_version=int(context.authorization_version))
+        if grant is None:
+            raise AuthorizationError("Approval grant is invalid, expired, or already executed")
+
     async def _run_route(
         self,
         command: str,
@@ -171,7 +339,12 @@ class CommandExecutionService:
         trace_ctx,
         root_span_id: str,
         trace_token,
+        security_context: Optional[SecurityContext] = None,
     ) -> dict:
+        self.require_final_authorization(
+            command, principal_id=principal_id, approval_context=approval_context,
+            task_ctx=task_ctx, security_context=security_context, claim_execution=True,
+        )
         if self.bot.trace_store and trace_ctx:
             route_span_id = self.bot.trace_store.start_span(
                 trace_ctx,
@@ -285,6 +458,7 @@ class CommandExecutionService:
                     principal=principal_id,
                     request_id=request_id,
                     task_id=task_ctx.task_id if task_ctx else "",
+                    org_id=task_ctx.org_id if task_ctx else "default",
                 )
             except BEST_EFFORT_STORE_ERRORS:
                 pass
@@ -321,6 +495,7 @@ class CommandExecutionService:
         roles: Optional[list[str]] = None,
         approval_context: Optional[dict] = None,
         task_context: Optional[TaskContext] = None,
+        security_context: Optional[SecurityContext] = None,
     ) -> dict:
         if not raw_command or not raw_command.strip():
             return {"success": False, "output": "Empty command.", "type": "error"}
@@ -329,10 +504,34 @@ class CommandExecutionService:
         stripped_command = raw_command.strip()
         principal_id = principal or (task_context.principal if task_context else "") or "anonymous"
         trace_request_id = request_id or (task_context.request_id if task_context else "") or ""
+        roles = roles or []
+        explicit_security_context = security_context is not None
+        if security_context is not None:
+            try:
+                require_authorized(security_context, required_capability="task.execute")
+                self._require_remote_command_surface(stripped_command, security_context)
+                if task_context:
+                    require_authorized(security_context, principal_id=task_context.principal, org_id=task_context.org_id)
+                    if security_context.task_id and security_context.task_id != task_context.task_id:
+                        raise AuthorizationError("task_mismatch")
+            except AuthorizationError as exc:
+                return {"success": False, "output": str(exc), "type": "authorization_error"}
+        security_context = security_context or SecurityContext.from_legacy(
+            principal=principal_id,
+            org_id=task_context.org_id if task_context else "default",
+            roles=roles,
+            request_id=trace_request_id,
+            task_id=task_context.task_id if task_context else "",
+            parent_task_id=task_context.parent_task_id if task_context else "",
+            auth_source="legacy",
+        )
+        principal_id = security_context.principal_id
+        trace_request_id = security_context.request_id or trace_request_id
+        cache_scope = self._cache_security_scope(security_context)
+
         effective_approval_context = dict(approval_context or {})
         if approval_context is None:
             effective_approval_context = self._default_approval_context()
-        roles = roles or []
         cache_allowed = self._cache_allowed(stripped_command)
 
         task_ctx = self.bot._create_task_context(
@@ -340,7 +539,29 @@ class CommandExecutionService:
             principal=principal_id,
             request_id=trace_request_id,
             task_context=task_context,
+            org_id=security_context.org_id,
+            security_context=security_context if explicit_security_context else None,
         )
+        security_context = security_context.with_task(
+            task_ctx.task_id if task_ctx else security_context.task_id,
+            task_ctx.parent_task_id if task_ctx else security_context.parent_task_id,
+        )
+        if explicit_security_context:
+            try:
+                self.require_final_authorization(
+                    stripped_command, principal_id=principal_id, approval_context={}, task_ctx=task_ctx,
+                    security_context=security_context, check_approval=False,
+                )
+            except (AuthorizationError, ValueError) as exc:
+                return {"success": False, "output": str(exc), "type": "authorization_error"}
+        self._mark_task_running(
+            task_ctx,
+            raw_command=stripped_command,
+            principal_id=principal_id,
+            request_id=trace_request_id,
+            trace_ctx=None,
+        )
+
         trace_ctx, root_span_id, trace_token = self.bot._start_trace_run(
             stripped_command,
             principal_id,
@@ -356,7 +577,7 @@ class CommandExecutionService:
         )
 
         if self.bot.cache and cache_allowed:
-            cached = self.bot.cache.get(raw_command)
+            cached = self.bot.cache.get(raw_command, security_scope=cache_scope)
             if cached is not None:
                 return self._record_cache_hit(
                     cached,
@@ -386,17 +607,35 @@ class CommandExecutionService:
         else:
             command = stripped_command
 
-        result = await self._run_route(
-            command,
-            principal_id=principal_id,
-            roles=roles,
-            approval_context=effective_approval_context,
-            request_id=trace_request_id,
-            task_ctx=task_ctx,
-            trace_ctx=trace_ctx,
-            root_span_id=root_span_id,
-            trace_token=trace_token,
-        )
+        if self._approval_required(command) and not self._has_server_approval(effective_approval_context):
+            return self._authorization_failure(
+                "Server-issued approval required for this command.",
+                task_ctx=task_ctx,
+                trace_ctx=trace_ctx,
+                root_span_id=root_span_id,
+                trace_token=trace_token,
+                principal_id=principal_id,
+                request_id=trace_request_id,
+            )
+
+        try:
+            result = await self._run_route(
+                command,
+                principal_id=principal_id,
+                roles=list(security_context.roles),
+                approval_context=effective_approval_context,
+                request_id=trace_request_id,
+                task_ctx=task_ctx,
+                trace_ctx=trace_ctx,
+                root_span_id=root_span_id,
+                trace_token=trace_token,
+                security_context=security_context if explicit_security_context else None,
+            )
+        except AuthorizationError as exc:
+            return self._authorization_failure(
+                str(exc), task_ctx=task_ctx, trace_ctx=trace_ctx, root_span_id=root_span_id,
+                trace_token=trace_token, principal_id=principal_id, request_id=trace_request_id,
+            )
 
         self._record_archetype_outcome(command, result)
         result = await self._apply_reflection(command, result, trace_ctx, root_span_id)
@@ -406,7 +645,7 @@ class CommandExecutionService:
         task_status = self.bot._infer_task_status(result)
 
         if self.bot.cache and cache_allowed:
-            self.bot.cache.set(raw_command, result)
+            self.bot.cache.set(raw_command, result, security_scope=cache_scope)
 
         self._record_history_and_metrics(
             command=command,
@@ -458,6 +697,7 @@ async def process_command(
     roles: Optional[list[str]] = None,
     approval_context: Optional[dict] = None,
     task_context: Optional[TaskContext] = None,
+    security_context: Optional[SecurityContext] = None,
 ) -> dict:
     return await CommandExecutionService(bot).process_command(
         raw_command,
@@ -466,4 +706,5 @@ async def process_command(
         roles=roles,
         approval_context=approval_context,
         task_context=task_context,
+        security_context=security_context,
     )

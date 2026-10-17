@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import sqlite3
+import os
 from pathlib import Path
 from typing import Any, Optional
 
-from botboy.gateway.auth import JWTAuth
+from botboy.gateway.auth import JWTAuth, validate_credential_state
+from botboy.gateway.app_context import _TaskStoreAuthorizationProxy, _current_principal, _current_org, _current_roles
+from botboy.security_context import SecurityContext
+from botboy.security_policy import DEFAULT_CAPABILITY_POLICY
+from botboy.gateway.security import _is_trusted_proxy
 from botboy.gateway.dashboard_payload import enrich_dashboard_payload as shared_enrich_dashboard_payload
 from botboy.gateway.rate_limit import RateLimiter
 from botboy.gateway.secrets import PrincipalStore, SecretStore
@@ -55,11 +60,13 @@ def build_simple_handler_state(
         if config and hasattr(config, "resolve_token_revocation_db_path"):
             revocation_store_path = config.resolve_token_revocation_db_path()
         else:
-            revocation_store_path = str(Path.home() / ".botboy" / "revoked_tokens.db")
+            revocation_store_path = str(Path(os.getenv("BOTBOY_HOME", str(Path.home() / ".botboy"))) / "revoked_tokens.db")
             
         try:
             revocation_store = TokenRevocationStore(db_path=revocation_store_path)
         except (OSError, RuntimeError, sqlite3.Error):
+            if auth_enabled:
+                raise RuntimeError("Persistent token revocation store is unavailable")
             revocation_store = None
             
         auth = JWTAuth(secret=jwt_secret, allow_generate=not auth_enabled, revocation_store=revocation_store)
@@ -167,13 +174,17 @@ class SimpleServerSupport:
         if not store and not optional:
             if hasattr(self.handler, "_json"):
                 self.handler._json({"error": "Task store not available"}, 503)
+        if store is not None and getattr(self.handler, "auth_enabled", False):
+            return _TaskStoreAuthorizationProxy(store, auth_enabled=True)
         return store
 
     def client_identity(self) -> str:
-        forwarded = self.handler.headers.get("x-forwarded-for") or self.handler.headers.get("x-real-ip") or ""
-        if forwarded:
-            return forwarded.split(",")[0].strip() or self.handler.client_address[0] or "unknown"
-        return self.handler.client_address[0] or "unknown"
+        peer = self.handler.client_address[0] or "unknown"
+        if _is_trusted_proxy(peer):
+            forwarded = self.handler.headers.get("x-forwarded-for") or self.handler.headers.get("x-real-ip") or ""
+            if forwarded:
+                return forwarded.split(",")[0].strip() or peer
+        return peer
 
     def extract_token(self) -> str:
         return JWTAuth.extract_bearer_token(self.handler.headers.get("authorization", ""))
@@ -194,10 +205,50 @@ class SimpleServerSupport:
 
     def current_token_info(self):
         token = self.extract_token()
-        return self.handler.auth.verify(token) if (getattr(self.handler, "auth", None) and token) else None
+        info = self.handler.auth.verify(token) if (getattr(self.handler, "auth", None) and token) else None
+        if info is not None:
+            try:
+                validate_credential_state(info, self.get_credential_store(), self.get_api_key_store())
+            except (ValueError, sqlite3.Error, OSError):
+                return None
+        return info
+
+    def _establish_context(self, token_info) -> None:
+        _current_principal.set(token_info.principal_id if token_info else "")
+        _current_org.set(token_info.org_id if token_info else "default")
+        _current_roles.set(tuple(token_info.roles) if token_info else ())
+
+    def security_context(self) -> SecurityContext:
+        info = self.current_token_info()
+        if getattr(self.handler, "auth_enabled", False) and info is None:
+            from botboy.security_authorization import AuthorizationError
+            raise AuthorizationError("Missing or invalid bearer token")
+        roles = frozenset(info.roles if info else [])
+        return SecurityContext(
+            principal_id=info.principal_id if info else self.client_identity(),
+            org_id=info.org_id if info else "default",
+            roles=roles,
+            capabilities=DEFAULT_CAPABILITY_POLICY.for_roles(roles),
+            auth_source="stdlib",
+            credential_source=info.credential_source if info else "",
+            credential_version=info.credential_version if info else "",
+            request_id=getattr(self.handler, "request_id", ""),
+        )
+
+    def data_scope(self) -> dict:
+        if not getattr(self.handler, "auth_enabled", False):
+            return {}
+        context = self.security_context()
+        if "system" in context.roles:
+            return {}
+        scope = {"org_id": context.org_id}
+        if "admin" not in context.roles:
+            scope["principal"] = context.principal_id
+        return scope
 
     def ensure_access(self, require_auth: bool = False) -> Optional[str]:
         token_info = self.current_token_info()
+        self._establish_context(token_info)
         identity = token_info.principal_id if token_info else self.client_identity()
 
         if self.enforce_rate_limit(identity):
@@ -211,6 +262,7 @@ class SimpleServerSupport:
 
     def ensure_access_with_roles(self, require_auth: bool = False) -> tuple[Optional[str], list[str]]:
         token_info = self.current_token_info()
+        self._establish_context(token_info)
         identity = token_info.principal_id if token_info else self.client_identity()
 
         if self.enforce_rate_limit(identity):
@@ -250,10 +302,14 @@ class SimpleServerSupport:
 
     def require_admin(self) -> bool:
         token_info = self.current_token_info()
+        self._establish_context(token_info)
         identity = token_info.principal_id if token_info else self.client_identity()
         if self.enforce_rate_limit(identity):
             return False
-        if getattr(self.handler, "auth_enabled", False) and (not token_info or "admin" not in token_info.roles):
+        if getattr(self.handler, "auth_enabled", False) and not token_info:
+            self.handler._json({"error": "Missing or invalid bearer token"}, 401)
+            return False
+        if getattr(self.handler, "auth_enabled", False) and not ({"admin", "system"} & set(token_info.roles)):
             self.handler._json({"error": "Admin token required"}, 403)
             return False
         return True

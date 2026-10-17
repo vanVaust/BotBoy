@@ -24,6 +24,8 @@ class _FakeTokenInfo:
     principal_type = "user"
     roles = ["admin"]
     credential_source = "jwt"
+    org_id = "default"
+    credential_version = ""
 
 
 class _FakeAuth:
@@ -33,7 +35,7 @@ class _FakeAuth:
     def refresh(self, refresh_token: str):
         return _FakePair() if refresh_token == "refresh" else None
 
-    def verify(self, access_token: str):
+    def verify(self, access_token: str, expected_type="access"):
         return _FakeTokenInfo()
 
 
@@ -46,6 +48,7 @@ class _FakeCredential:
     key_id = "key-1"
     created_at = "2026-04-03T00:00:00Z"
     expires_at = "2026-04-04T00:00:00Z"
+    org_id = "default"
 
 
 class _FakeSecretStore:
@@ -64,6 +67,8 @@ class _FakePrincipal:
         self.role = role
         self.principal_id = username
         self.disabled = disabled
+        self.org_id = "default"
+        self.updated_at = "2026-04-03T00:00:00Z"
 
 
 class _FakePrincipalStore:
@@ -84,16 +89,18 @@ class _FakePrincipalStore:
     def stats(self) -> dict:
         return {"total": len(self.principals)}
 
-    def upsert_principal(self, username: str, password: str, role: str):
+    def upsert_principal(self, username: str, password: str, role: str, org_id="default", expected_org_id=None):
         self.principals[username] = _FakePrincipal(username, role)
         return self.principals[username]
 
     def get_principal(self, username: str):
         return self.principals.get(username)
 
-    def disable_principal(self, username: str):
+    def disable_principal(self, username: str, expected_org_id=None):
         if username in self.principals:
             self.principals[username].disabled = True
+            return True
+        return False
 
 
 class _FakeHandler:

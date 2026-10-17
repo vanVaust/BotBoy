@@ -34,6 +34,7 @@ class SecurityConfig:
     jwt_secret: str = ""
     jwt_secret_file: str = field(default_factory=lambda: _default_state_path("jwt.secret"))
     principal_db_path: str = field(default_factory=lambda: _default_state_path("principals.db"))
+    token_revocation_db_path: str = field(default_factory=lambda: _default_state_path("revoked_tokens.db"))
     auth_bootstrap_user: str = "admin"
     auth_bootstrap_secret: str = ""
     auth_bootstrap_role: str = "admin"
@@ -179,6 +180,7 @@ class BotBoyConfig:
         self.security.jwt_secret = sec.get("jwt_secret", self.security.jwt_secret)
         self.security.jwt_secret_file = sec.get("jwt_secret_file", self.security.jwt_secret_file)
         self.security.principal_db_path = sec.get("principal_db_path", self.security.principal_db_path)
+        self.security.token_revocation_db_path = sec.get("token_revocation_db_path", self.security.token_revocation_db_path)
         self.security.auth_bootstrap_user = sec.get("auth_bootstrap_user", self.security.auth_bootstrap_user)
         self.security.auth_bootstrap_secret = sec.get("auth_bootstrap_secret", self.security.auth_bootstrap_secret)
         self.security.auth_bootstrap_role = sec.get("auth_bootstrap_role", self.security.auth_bootstrap_role)
@@ -266,6 +268,8 @@ class BotBoyConfig:
             self.security.jwt_secret_file = v
         if v := os.getenv("BOTBOY_PRINCIPAL_DB_PATH"):
             self.security.principal_db_path = v
+        if v := os.getenv("BOTBOY_TOKEN_REVOCATION_DB_PATH"):
+            self.security.token_revocation_db_path = v
         if v := os.getenv("BOTBOY_AUTH_BOOTSTRAP_USER"):
             self.security.auth_bootstrap_user = v
         if v := os.getenv("BOTBOY_AUTH_BOOTSTRAP_SECRET"):
@@ -365,6 +369,11 @@ class BotBoyConfig:
             return self._resolve_runtime_path(v)
         return self._resolve_runtime_path(self.security.principal_db_path)
 
+    def resolve_token_revocation_db_path(self) -> str:
+        """Return the persistent token-revocation database shared by gateway workers."""
+        value = os.getenv("BOTBOY_TOKEN_REVOCATION_DB_PATH", "") or self.security.token_revocation_db_path
+        return self._resolve_runtime_path(value)
+
     def resolve_memory_db_path(self) -> str:
         """Return the path used for memory persistence."""
         return self._resolve_runtime_path(self.memory.db_path)
@@ -420,6 +429,7 @@ class BotBoyConfig:
                 "jwt_secret_file": self.security.jwt_secret_file,
                 "principal_db_path": self.security.principal_db_path,
                 "resolved_principal_db_path": self.resolve_principal_db_path(),
+                "token_revocation_db_path": self.resolve_token_revocation_db_path(),
                 "jwt_secret_configured": self.has_jwt_secret(),
                 "auth_bootstrap_user": self.security.auth_bootstrap_user,
                 "auth_bootstrap_secret_configured": bool(self.resolve_bootstrap_secret()),

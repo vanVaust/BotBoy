@@ -98,6 +98,11 @@ def build_help_response(bot) -> dict:
 
 
 def build_status_response(bot) -> dict:
+    from botboy.gateway.status_read_security import _scoped_show_status
+    return _scoped_show_status(bot)
+
+
+def _build_status_response(bot) -> dict:
     lines = [f"BotBoy v{bot.VERSION} - Status"]
     lines.append(f"  Memory:    {'OK' if bot.memory else 'N/A'}")
     lines.append(f"  Skills:    {len(bot.skills.list_skills()) if bot.skills else 0} loaded")

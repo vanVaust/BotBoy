@@ -101,10 +101,10 @@ TASK_STORE_MIGRATIONS = (
                 org_id              TEXT PRIMARY KEY,
                 name                TEXT NOT NULL,
                 billing_tier        TEXT NOT NULL DEFAULT 'free',
-                is_active           INTEGER NOT NULL DEFAULT 1,
-                metadata_json       TEXT NOT NULL DEFAULT '{}',
-                created_at          TEXT NOT NULL,
-                updated_at          TEXT NOT NULL
+                is_active            INTEGER NOT NULL DEFAULT 1,
+                metadata_json        TEXT NOT NULL DEFAULT '{}',
+                created_at           TEXT NOT NULL,
+                updated_at           TEXT NOT NULL
             )
             """,
             "CREATE INDEX IF NOT EXISTS idx_organizations_name ON organizations(name)",
@@ -134,6 +134,33 @@ TASK_STORE_MIGRATIONS = (
             "CREATE INDEX IF NOT EXISTS idx_replay_diffs_expected ON replay_diffs(expected_run_id)",
             "CREATE INDEX IF NOT EXISTS idx_replay_diffs_actual ON replay_diffs(actual_run_id)",
             "CREATE INDEX IF NOT EXISTS idx_replay_diffs_matches ON replay_diffs(matches)",
+        ),
+    ),
+    Migration(
+        version=10,
+        name="atomic_queue_lease_capacity",
+        statements=(
+            "CREATE INDEX IF NOT EXISTS idx_queue_leases_active_queue ON queue_leases(queue_name, lease_status)",
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_queue_leases_capacity
+            BEFORE INSERT ON queue_leases
+            WHEN NEW.lease_status = 'active'
+              AND (
+                  SELECT COUNT(*)
+                  FROM queue_leases
+                  WHERE queue_name = NEW.queue_name
+                    AND lease_status = 'active'
+                    AND lease_expires_at != ''
+                    AND lease_expires_at > CURRENT_TIMESTAMP
+              ) >= (
+                  SELECT MAX(1, max_parallelism)
+                  FROM execution_queues
+                  WHERE queue_name = NEW.queue_name
+              )
+            BEGIN
+                SELECT RAISE(ABORT, 'queue max_parallelism exceeded');
+            END
+            """,
         ),
     ),
 )

@@ -47,6 +47,11 @@ from botboy.introspection_support import (
     get_worker_payload as build_worker_payload,
 )
 from botboy.orchestrator_lifecycle_service import OrchestratorLifecycleService
+from botboy.security_context import SecurityContext
+from botboy.security_authorization import AuthorizationError, require_authorized
+from botboy.security_policy import DEFAULT_CAPABILITY_POLICY
+from botboy.approval_store import command_fingerprint
+from dataclasses import replace
 from botboy.operator_workbench_support import (
     get_merge_review_queue as build_merge_review_queue,
     get_operator_workbench_payload as build_operator_workbench_payload,
@@ -274,6 +279,8 @@ class BotBoy:
         scheduler_task_id: str = "",
         payload: Optional[dict] = None,
         task_context: Optional[TaskContext] = None,
+        org_id: Optional[str] = None,
+        security_context: Optional[SecurityContext] = None,
     ) -> Optional[TaskContext]:
         return self._lifecycle_service().create_task_context(
             command,
@@ -287,6 +294,8 @@ class BotBoy:
             scheduler_task_id=scheduler_task_id,
             payload=payload,
             task_context=task_context,
+            org_id=org_id,
+            security_context=security_context,
         )
 
     @staticmethod
@@ -701,10 +710,87 @@ class BotBoy:
     def get_task_merge_payload(self, task_id: str, *, record=None) -> dict:
         return self._task_merge_service().get_task_merge_payload(task_id, record=record)
 
+    def _scheduled_security_context(self, scheduled_task) -> SecurityContext:
+        """Revalidate persisted delayed-work authority without trusting workflow JSON."""
+        security = getattr(scheduled_task, "security_context", None)
+        auth_enabled = bool(getattr(self.config.security, "enable_auth", False))
+        if not security:
+            if auth_enabled:
+                raise AuthorizationError("Scheduled work has no persisted security context")
+            # Explicit compatibility for operator-owned local jobs. No system role.
+            payload = dict(getattr(scheduled_task, "payload", {}) or {})
+            return SecurityContext(
+                principal_id=str(payload.get("principal", "scheduler") or "scheduler"),
+                roles=frozenset(), capabilities=DEFAULT_CAPABILITY_POLICY.user,
+                auth_source="scheduler",
+            )
+        if not isinstance(security, dict) or security.get("enforced") is not True:
+            raise AuthorizationError("Scheduled security enforcement is invalid")
+        context = SecurityContext.from_dict(security)
+        if not context.org_id or not context.principal_id or context.principal_id == "anonymous":
+            raise AuthorizationError("Scheduled identity is missing")
+        if security.get("scheduler_task_id") != scheduled_task.task_id:
+            raise AuthorizationError("Scheduled task binding is invalid")
+        command = str((scheduled_task.payload or {}).get("command", "") or "").strip()
+        if security.get("command_fingerprint") != command_fingerprint(command):
+            raise AuthorizationError("Scheduled command binding has changed")
+        if context.approval_expires_at:
+            from datetime import datetime, timezone
+            expiry = datetime.fromisoformat(context.approval_expires_at.replace("Z", "+00:00"))
+            if expiry.tzinfo is None or expiry <= datetime.now(timezone.utc):
+                raise AuthorizationError("Scheduled authorization has expired")
+        if auth_enabled:
+            # Select exactly the credential namespace authenticated at enqueue;
+            # an identically named password/API-key principal is no substitute.
+            from botboy.gateway.secrets import PrincipalStore, SecretStore
+            if not context.credential_version:
+                raise AuthorizationError("Scheduled credential version is missing")
+            if context.credential_source == "principal_store":
+                with PrincipalStore(self.config.resolve_principal_db_path()) as store:
+                    record = store.get_principal(context.principal_id)
+                    if record is None or record.disabled:
+                        raise AuthorizationError("Scheduled principal is disabled or missing")
+                    version = record.updated_at
+            elif context.credential_source == "secret_store":
+                with SecretStore(self.config.resolve_api_key_store_path()) as store:
+                    record = store.get_active_key(context.principal_id)
+                    if record is None:
+                        raise AuthorizationError("Scheduled API key is revoked or expired")
+                    version = record.created_at
+            else:
+                raise AuthorizationError("Scheduled credential source cannot be revalidated")
+            if record.org_id != context.org_id or context.roles != frozenset({record.role}):
+                raise AuthorizationError("Scheduled role or tenant has changed")
+            if context.credential_version != version:
+                raise AuthorizationError("Scheduled credentials have changed")
+        policy = DEFAULT_CAPABILITY_POLICY.for_roles(context.roles)
+        if not policy.issuperset(context.capabilities):
+            raise AuthorizationError("Scheduled capabilities exceed current policy")
+        require_authorized(context, required_capability="task.execute")
+        # Delayed external work retains the remote command-family restrictions.
+        # It cannot acquire local/system semantics from serialized auth_source.
+        resolved = replace(context, auth_source="scheduler_external", task_id="", parent_task_id="",
+                           approval_id="", approval_scope=frozenset(), approval_expires_at=None)
+        self._command_execution_service()._require_remote_command_surface(command, resolved)
+        return resolved
+
+    def _scheduled_security_allows(self, scheduled_task) -> bool:
+        try:
+            self._scheduled_security_context(scheduled_task)
+            return True
+        except (AuthorizationError, ValueError, TypeError, OSError):
+            return False
+
     async def _run_scheduled_task(self, scheduled_task) -> None:
         payload = dict(getattr(scheduled_task, "payload", {}) or {})
         command = str(payload.get("command", "") or "").strip()
-        principal = str(payload.get("principal", "scheduler")).strip() or "scheduler"
+        try:
+            security_context = self._scheduled_security_context(scheduled_task)
+        except (AuthorizationError, ValueError, TypeError, OSError):
+            if self.scheduler:
+                self.scheduler.cancel(scheduled_task.task_id)
+            return
+        principal = security_context.principal_id
         request_id = (
             str(payload.get("request_id", "")).strip()
             or f"req-scheduler-{scheduled_task.task_id}-{int(time.time())}"
@@ -717,6 +803,8 @@ class BotBoy:
             owner="scheduler",
             summary=f"Scheduler run for {scheduled_task.name}",
             scheduler_task_id=scheduled_task.task_id,
+            org_id=security_context.org_id,
+            security_context=security_context,
             payload={
                 "command": command,
                 "schedule": scheduled_task.schedule,
@@ -742,7 +830,7 @@ class BotBoy:
             command,
             principal=principal,
             request_id=request_id,
-            roles=["system"],
+            roles=list(security_context.roles),
             approval_context={
                 "granted": True,
                 "explicit": False,
@@ -750,6 +838,7 @@ class BotBoy:
                 "source": "scheduler",
             },
             task_context=task_ctx,
+            security_context=security_context,
         )
 
     async def process_command(
@@ -761,6 +850,7 @@ class BotBoy:
         roles: Optional[List[str]] = None,
         approval_context: Optional[dict] = None,
         task_context: Optional[TaskContext] = None,
+        security_context: Optional[SecurityContext] = None,
     ) -> dict:
         """
         Central command-processing pipeline with full Phase-0 integration.
@@ -769,7 +859,7 @@ class BotBoy:
         """
         # Phase 1: Governance Pre-Execution Block
         if self.governance:
-            org_id = getattr(self.config, "org_id", "default_org")
+            org_id = security_context.org_id if security_context else (task_context.org_id if task_context else getattr(self.config, "org_id", "default_org"))
             cmd_hint = raw_command.split(" ")[0] if raw_command else "unknown"
             if not self.governance.enforce_pre_execution(org_id, skill_name=cmd_hint, risk="medium"):
                 return {
@@ -786,10 +876,15 @@ class BotBoy:
             roles=roles,
             approval_context=approval_context,
             task_context=task_context,
+            security_context=security_context,
         )
 
-        # Phase 1: Self-Healing & DAG Post-Execution
-        if self.self_healing:
+        # These maintenance engines currently use process-global raw stores.
+        # A remote command must not retry or fan out unrelated tenant work.
+        trusted_local_execution = security_context is None or security_context.auth_source in {
+            "local", "legacy", "task_lifecycle", "task_parent", "scheduler",
+        }
+        if self.self_healing and trusted_local_execution:
             try:
                 stale_tasks = self.self_healing.scan_for_stale_tasks(timeout_seconds=3600)
                 for st in stale_tasks:
@@ -798,7 +893,7 @@ class BotBoy:
                 import logging
                 logging.getLogger(__name__).warning(f"[SELF-HEALING] Error during auto-retry scan: {e}")
 
-        if self.dag_engine:
+        if self.dag_engine and trusted_local_execution:
             task_info = result.get("data", {}).get("task", {})
             root_id = task_info.get("root_task_id") or task_info.get("task_id")
             if root_id:

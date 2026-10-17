@@ -42,6 +42,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 from copy import deepcopy
+from dataclasses import replace
+from contextvars import copy_context
 from functools import lru_cache
 import json
 import os
@@ -59,6 +61,9 @@ from botboy.core.config import BotBoyConfig
 from botboy.gateway.security import default_bind_host, origin_allowed, validate_safe_bind
 from botboy.resources import default_skills_dir, example_skills_dir
 from botboy.skills.manager import SkillManager
+from botboy.security_context import SecurityContext
+from botboy.security_policy import DEFAULT_CAPABILITY_POLICY
+from botboy.gateway.app_context import _current_principal, _current_org, _current_roles
 
 
 # ── BotBoy singleton ──────────────────────────────────────────────────────────
@@ -112,14 +117,12 @@ def _get_bot() -> BotBoy:
 
 def _run(coro) -> Any:
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(1) as pool:
-                return pool.submit(asyncio.run, coro).result(timeout=30)
-        return loop.run_until_complete(coro)
+        asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(coro)
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(1) as pool:
+        return pool.submit(copy_context().run, asyncio.run, coro).result(timeout=30)
 
 
 # ── Tool definitions ──────────────────────────────────────────────────────────
@@ -654,7 +657,7 @@ def _with_approval_argument(schema: Dict[str, Any]) -> Dict[str, Any]:
     if "approval" not in properties:
         properties["approval"] = {
             "type": "boolean",
-            "description": "Explicit approval for this MCP tool call.",
+            "description": "Local operator confirmation only. Remote task execution requires a server-issued task approval; this Boolean cannot grant it.",
             "default": False,
         }
     patched["properties"] = properties
@@ -749,28 +752,69 @@ def _err(msg: str) -> dict:
     return {"content": [{"type": "text", "text": f"Error: {msg}"}], "isError": True}
 
 
-def _handle_tool(name: str, args: dict) -> dict:
+_HTTP_TOOLS = frozenset({
+    "botboy_memory_store", "botboy_memory_search", "botboy_memory_list", "botboy_memory_stats",
+    "botboy_calculate", "botboy_hash", "botboy_convert", "botboy_base64",
+    "botboy_execute", "botboy_status", "botboy_history", "botboy_history_stats",
+})
+
+
+def _handle_tool(name: str, args: dict, *, security_context: SecurityContext | None = None) -> dict:
+    tokens = (_current_principal.set(security_context.principal_id if security_context else ""),
+              _current_org.set(security_context.org_id if security_context else "default"),
+              _current_roles.set(tuple(security_context.roles) if security_context else ()))
+    try:
+        return _handle_tool_impl(name, args, security_context=security_context)
+    finally:
+        _current_principal.reset(tokens[0])
+        _current_org.reset(tokens[1])
+        _current_roles.reset(tokens[2])
+
+
+def _handle_tool_impl(name: str, args: dict, *, security_context: SecurityContext | None = None) -> dict:
     try:
         args = args if isinstance(args, dict) else {}
         if name not in _MCP_TOOL_NAMES:
             return _err(f"Unknown tool: {name}")
+        if security_context is not None and name not in _HTTP_TOOLS:
+            return _err("This operation requires the authorized resource API")
 
         if name in _approval_required_tools() and not _approval_granted(args):
             return _err(f"Approval required for MCP tool: {name}")
 
         bot = _get_bot()
+        scope = ({"principal": security_context.principal_id, "org_id": security_context.org_id}
+                 if security_context is not None else {})
+        if security_context is not None:
+            commands = {
+                "botboy_calculate": lambda: f"calculate {args['expression']}",
+                "botboy_hash": lambda: f"hash {args.get('algorithm', 'sha256')} {args['text']}",
+                "botboy_convert": lambda: f"convert {args['value']} {args['from_unit']} {args['to_unit']}",
+                "botboy_base64": lambda: f"base64 {args.get('mode', 'encode')} {args['data']}",
+                "botboy_status": lambda: "status",
+                "botboy_execute": lambda: args["command"],
+            }
+            if name in commands:
+                context = replace(security_context, request_id=f"mcp-{secrets.token_hex(8)}")
+                result = _run(bot.process_command(commands[name](), principal=context.principal_id,
+                    roles=list(context.roles), security_context=context, request_id=context.request_id,
+                    approval_context={"granted": False, "explicit": False, "source": "mcp_http"}))
+                return _ok(json.dumps(result))
 
         # ── Memory tools ──────────────────────────────────────────────────────
         if name == "botboy_memory_store":
             content  = args["content"]
             metadata = args.get("metadata")
+            if security_context is not None:
+                metadata = dict(metadata) if isinstance(metadata, dict) else {}
+                metadata["_botboy_security"] = {"principal_id": security_context.principal_id, "org_id": security_context.org_id}
             mem_id   = bot.memory.store(content, metadata)
             return _ok(json.dumps({"id": mem_id, "content": content, "success": True}))
 
         if name == "botboy_memory_search":
             query   = args["query"]
             limit   = min(int(args.get("limit", 5)), 50)
-            results = bot.memory.search(query, limit=limit)
+            results = bot.memory.search(query, limit=limit, **scope)
             return _ok(json.dumps({
                 "results": [r.to_dict() for r in results],
                 "count":   len(results),
@@ -780,8 +824,8 @@ def _handle_tool(name: str, args: dict) -> dict:
         if name == "botboy_memory_list":
             limit   = min(int(args.get("limit", 20)), 100)
             offset  = int(args.get("offset", 0))
-            mems    = bot.memory.list_all(limit=limit, offset=offset)
-            stats   = bot.memory.get_stats()
+            mems    = bot.memory.list_all(limit=max(1,limit), offset=max(0,offset), **scope)
+            stats   = {"total": bot.memory.count_scoped(**scope)} if scope else bot.memory.get_stats()
             return _ok(json.dumps({
                 "memories": [m.to_dict() for m in mems],
                 "total":    stats["total"],
@@ -797,7 +841,7 @@ def _handle_tool(name: str, args: dict) -> dict:
             return _ok(json.dumps({"deleted": len(matches), "query": query}))
 
         if name == "botboy_memory_stats":
-            stats = bot.memory.get_stats()
+            stats = {"total": bot.memory.count_scoped(**scope)} if scope else bot.memory.get_stats()
             return _ok(json.dumps(stats))
 
         # ── Calculation skills ────────────────────────────────────────────────
@@ -905,6 +949,7 @@ def _handle_tool(name: str, args: dict) -> dict:
                 limit=limit,
                 success=True if success_only else None,
                 cmd_type=cmd_type,
+                **scope,
             )
             return _ok(json.dumps({
                 "records": [r.to_dict() for r in records],
@@ -914,11 +959,13 @@ def _handle_tool(name: str, args: dict) -> dict:
         if name == "botboy_history_stats":
             if not bot.history:
                 return _err("History not enabled")
-            return _ok(json.dumps(bot.history.stats()))
+            return _ok(json.dumps(bot.history.stats(**scope)))
 
         return _err(f"Unknown tool: {name}")
 
     except Exception as e:
+        if security_context is not None:
+            return _err("Operation failed or was not authorized")
         return _err(f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
 
 
@@ -936,8 +983,9 @@ class MCPServer:
         "version": "0.6.0-dev",
     }
 
-    def __init__(self) -> None:
+    def __init__(self, *, security_context: SecurityContext | None = None) -> None:
         self._request_id = 0
+        self.security_context = security_context
 
     def _send(self, obj: dict) -> None:
         line = json.dumps(obj, separators=(",", ":"))
@@ -976,12 +1024,15 @@ class MCPServer:
             pass  # no response needed
 
         elif method == "tools/list":
-            self._respond(req_id, {"tools": _tools_with_contracts()})
+            tools = _tools_with_contracts()
+            if self.security_context is not None:
+                tools = [tool for tool in tools if tool["name"] in _HTTP_TOOLS]
+            self._respond(req_id, {"tools": tools})
 
         elif method == "tools/call":
             name   = params.get("name", "")
             args   = params.get("arguments", {})
-            result = _handle_tool(name, args)
+            result = _handle_tool(name, args, security_context=self.security_context)
             self._respond(req_id, result)
 
         elif method == "ping":
@@ -1016,7 +1067,14 @@ class MCPHTTPServer:
         self.host  = host
         self.token = str(os.getenv("BOTBOY_MCP_HTTP_TOKEN", "")).strip()
         validate_safe_bind(self.host, auth_enabled=bool(self.token), surface="mcp")
-        self._mcp  = MCPServer()
+        principal = str(os.getenv("BOTBOY_MCP_PRINCIPAL", "mcp-http")).strip()
+        org_id = str(os.getenv("BOTBOY_MCP_ORG_ID", "default")).strip()
+        if not principal or principal == "anonymous" or not org_id:
+            raise ValueError("MCP HTTP requires an explicit service principal and tenant")
+        roles = frozenset({"user"})
+        self._mcp = MCPServer(security_context=SecurityContext(
+            principal_id=principal, org_id=org_id, roles=roles,
+            capabilities=DEFAULT_CAPABILITY_POLICY.for_roles(roles), auth_source="mcp_http"))
 
     def start(self) -> None:
         from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -1069,10 +1127,14 @@ class MCPHTTPServer:
                     return
                 if not self._token_ok():
                     return
-                length = int(self.headers.get("Content-Length", 0))
-                body   = self.rfile.read(length) if length > 0 else b""
                 try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    if length < 0 or length > 1_048_576:
+                        raise ValueError("Invalid request body length")
+                    body = self.rfile.read(length) if length > 0 else b""
                     msg  = json.loads(body)
+                    if not isinstance(msg, dict) or not isinstance(msg.get("params", {}), dict):
+                        raise ValueError("Invalid MCP request")
                     # Redirect stdout to capture response
                     import io
                     old_stdout = sys.stdout
@@ -1090,9 +1152,9 @@ class MCPHTTPServer:
                     self._cors_headers()
                     self.end_headers()
                     self.wfile.write(response)
-                except Exception as e:
-                    err = json.dumps({"error": str(e)}).encode()
-                    self.send_response(500)
+                except Exception:
+                    err = json.dumps({"error": "Invalid MCP request or operation failed"}).encode()
+                    self.send_response(400)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(err)))
                     self._cors_headers()

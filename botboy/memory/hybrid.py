@@ -216,8 +216,11 @@ class HybridMemoryEngine(_SQLiteMixin):
     def delete(self, memory_id: int) -> bool:
         return self._semantic.delete(memory_id)
 
-    def list_all(self, limit: int = 100, offset: int = 0) -> List[Memory]:
-        return self._semantic.list_all(limit, offset)
+    def list_all(self, limit: int = 100, offset: int = 0, *, principal: Optional[str] = None, org_id: Optional[str] = None) -> List[Memory]:
+        return self._semantic.list_all(limit, offset, principal=principal, org_id=org_id)
+
+    def count_scoped(self, *, principal: Optional[str] = None, org_id: Optional[str] = None) -> int:
+        return self._semantic.count_scoped(principal=principal, org_id=org_id)
 
     def clear_all(self) -> int:
         count = self._semantic.clear_all()
@@ -231,9 +234,9 @@ class HybridMemoryEngine(_SQLiteMixin):
             conn.commit()
         return count
 
-    def search(self, query: str, limit: int = 5) -> List[Memory]:
-        """FTS5 semantic-only search (compatible API). Use hybrid_search() for full power."""
-        return self._semantic.search(query, limit)
+    def search(self, query: str, limit: int = 5, *, principal: Optional[str] = None, org_id: Optional[str] = None) -> List[Memory]:
+        """FTS5 semantic-only search with optional ownership scope."""
+        return self._semantic.search(query, limit, principal=principal, org_id=org_id)
 
     def get_stats(self) -> dict:
         sem_stats = self._semantic.get_stats()

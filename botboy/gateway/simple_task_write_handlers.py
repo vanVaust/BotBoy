@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from contextvars import copy_context
 from typing import Any, Optional
+
+from botboy.security_authorization import AuthorizationError
 
 from botboy.gateway.merge_actions import (
     GatewayMergeActionError,
@@ -24,7 +27,7 @@ def _run_sync(coro) -> Any:
     import concurrent.futures
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(asyncio.run, coro)
+        future = pool.submit(copy_context().run, asyncio.run, coro)
         return future.result(timeout=30)
 
 
@@ -134,6 +137,31 @@ def handle_task_reassign(handler, task_id: str, payload: dict) -> None:
     )
 
 
+def handle_task_approve(handler, task_id: str, payload: dict) -> None:
+    del payload
+    principal, _roles = handler._ensure_access_with_roles(require_auth=handler.auth_enabled)
+    if principal is None:
+        return
+    store = handler._task_store()
+    if not store:
+        return
+    record = store.get_task(task_id)
+    if record is None:
+        handler._json({"error": "Task not found"}, 404)
+        return
+    try:
+        approval = handler.botboy.lifecycle_service.issue_task_approval(
+            task_id, context=handler._support().security_context(),
+        )
+    except AuthorizationError as exc:
+        handler._json({"error": str(exc)}, 403)
+        return
+    except ValueError as exc:
+        handler._json({"error": str(exc)}, 409)
+        return
+    handler._json({"success": True, "approval": approval})
+
+
 def handle_task_resume(handler, task_id: str, payload: dict) -> None:
     del payload
     bot = handler.botboy
@@ -153,14 +181,36 @@ def handle_task_resume(handler, task_id: str, payload: dict) -> None:
     if record.status not in {TASK_STATUS_WAITING_APPROVAL, TASK_STATUS_BLOCKED, TASK_STATUS_FAILED}:
         handler._json({"error": f"Task '{task_id}' is not resumable from status '{record.status}'"}, 409)
         return
+    approval_id = str(getattr(handler, "headers", {}).get("x-botboy-approval", "")).strip()
+    if not approval_id:
+        handler._json({"error": "Server-issued approval required"}, 403)
+        return
+    context = handler._support().security_context()
+    persisted = bot.lifecycle_service.load_security_context(task_id)
+    if persisted is None:
+        handler._json({"error": "Persisted security context is missing"}, 403)
+        return
+    consumed = bot.lifecycle_service.approval_store.consume_if_valid(
+        approval_id, task_id=task_id, principal_id=context.principal_id, org_id=context.org_id,
+        command=record.command, capability="task.execute",
+        authorization_version=int(persisted.authorization_version),
+    )
+    if consumed is None:
+        handler._json({"error": "Invalid, expired, consumed, or mismatched approval"}, 403)
+        return
     result = _run_sync(
         bot.process_command(
             record.command,
             principal=principal_id or record.principal,
             request_id=handler.request_id or f"{record.request_id or task_id}-resume",
             roles=roles,
-            approval_context=handler._approval_context({"approval": True}, roles),
+            approval_context={
+                "granted": True, "explicit": True, "source": "approval_store",
+                "approval_id": approval_id, "approval_scope": "task.execute",
+                "approval_expires_at": consumed["expires_at"],
+            },
             task_context=record.to_context(),
+            security_context=context,
         )
     )
     handler._json(result)

@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 _PERMANENT = 0        # Never expires (deterministic: calculate, hash, base64, convert)
 _LONG = 600           # 10 minutes (skills, help, version, system info)
 _MEDIUM = 120         # 2 minutes (weather, web search)
-_SHORT = 30           # 30 seconds (status, search, performance)
+_SHORT = 30            # 30 seconds (status, search, performance)
 _BYPASS = -1          # Never cached (remember, forget, time, date)
 
 _CMD_TTL: Dict[str, int] = {
@@ -43,7 +43,7 @@ _CMD_TTL: Dict[str, int] = {
 class CacheEntry:
     value: Any
     stored_at: float
-    ttl: int  # seconds, 0=permanent, -1=bypass (should not be stored)
+    ttl: int
 
 
 @dataclass
@@ -61,11 +61,18 @@ def _ttl_for_command(command: str) -> int:
     return _CMD_TTL.get(prefix, _SHORT)
 
 
+def _scope_key(command: str, security_scope: str = "") -> str:
+    """Return a cache key that cannot cross security scopes.
+
+    The caller should supply a stable principal/tenant/security-context digest.
+    Empty scope is retained for backwards compatibility with direct cache users.
+    """
+    normalized = command.strip().lower()
+    return f"{security_scope}\x00{normalized}" if security_scope else normalized
+
+
 class ResponseCache:
-    """
-    Thread-safe LRU cache with per-command-type TTL tiers.
-    Implements O(1) get/set using OrderedDict.
-    """
+    """Thread-safe LRU cache with per-command-type TTL tiers."""
 
     def __init__(self, max_size: int = 500) -> None:
         self.max_size = max_size
@@ -80,14 +87,14 @@ class ResponseCache:
             return False
         return (time.monotonic() - entry.stored_at) > entry.ttl
 
-    def get(self, command: str) -> Optional[Any]:
+    def get(self, command: str, *, security_scope: str = "") -> Optional[Any]:
         ttl = _ttl_for_command(command)
         if ttl == _BYPASS:
             with self._lock:
                 self._bypasses += 1
             return None
 
-        key = command.strip().lower()
+        key = _scope_key(command, security_scope)
         with self._lock:
             if key not in self._cache:
                 self._misses += 1
@@ -97,19 +104,17 @@ class ResponseCache:
                 del self._cache[key]
                 self._misses += 1
                 return None
-            # LRU: move to end
             self._cache.move_to_end(key)
             self._hits += 1
             return entry.value
 
-    def set(self, command: str, value: Any) -> bool:
+    def set(self, command: str, value: Any, *, security_scope: str = "") -> bool:
         ttl = _ttl_for_command(command)
         if ttl == _BYPASS:
             return False
 
-        key = command.strip().lower()
+        key = _scope_key(command, security_scope)
         entry = CacheEntry(value=value, stored_at=time.monotonic(), ttl=ttl)
-
         with self._lock:
             if key in self._cache:
                 self._cache.move_to_end(key)
@@ -117,11 +122,11 @@ class ResponseCache:
             else:
                 self._cache[key] = entry
                 if len(self._cache) > self.max_size:
-                    self._cache.popitem(last=False)  # evict LRU
+                    self._cache.popitem(last=False)
         return True
 
-    def invalidate(self, command: str) -> bool:
-        key = command.strip().lower()
+    def invalidate(self, command: str, *, security_scope: str = "") -> bool:
+        key = _scope_key(command, security_scope)
         with self._lock:
             return self._cache.pop(key, None) is not None
 

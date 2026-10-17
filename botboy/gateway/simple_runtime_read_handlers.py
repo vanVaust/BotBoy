@@ -1,7 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+from contextvars import copy_context
 from typing import Any
+from botboy.gateway.simple_server_support import SimpleServerSupport
+
+
+def _system_access(handler) -> bool:
+    if handler._ensure_access(require_auth=handler.auth_enabled) is None:
+        return False
+    if handler.auth_enabled and "system" not in SimpleServerSupport(handler).security_context().roles:
+        handler._json({"error": "System authorization required for process-wide telemetry"}, 403)
+        return False
+    return True
 
 
 def _run_sync(coro) -> Any:
@@ -12,7 +23,7 @@ def _run_sync(coro) -> Any:
     import concurrent.futures
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(asyncio.run, coro)
+        future = pool.submit(copy_context().run, asyncio.run, coro)
         return future.result(timeout=30)
 
 
@@ -37,13 +48,15 @@ def handle_health(handler, params: dict) -> None:
             "auth_api_keys_enabled": bool(getattr(handler.security, "auth_api_keys_enabled", True)),
         },
     }
-    if bot and bot.cache:
+    if bot and bot.cache and not handler.auth_enabled:
         cache_stats = bot.cache.stats()
         response["cache"] = {"hit_rate": round(cache_stats.hit_rate, 3), "size": cache_stats.size}
     handler._json(response)
 
 
 def handle_metrics_text(handler, params: dict) -> None:
+    if not _system_access(handler):
+        return
     bot = handler.botboy
     if bot and bot.metrics:
         body, content_type = bot.metrics.render()
@@ -67,6 +80,7 @@ def handle_status(handler, params: dict) -> None:
             request_id=handler.request_id,
             roles=roles,
             approval_context=handler._approval_context({}, roles),
+            **({"security_context": SimpleServerSupport(handler).security_context()} if handler.auth_enabled else {}),
         )
     )
     handler._json(result)
@@ -85,14 +99,15 @@ def handle_memories_get(handler, params: dict) -> None:
         return
     if handler._ensure_access(require_auth=handler.auth_enabled) is None:
         return
-    limit = int(params.get("limit", ["20"])[0])
-    offset = int(params.get("offset", ["0"])[0])
-    memories = bot.memory.list_all(limit=min(limit, 100), offset=offset)
-    stats = bot.memory.get_stats()
+    limit = max(1, min(int(params.get("limit", ["20"])[0]), 100))
+    offset = max(0, int(params.get("offset", ["0"])[0]))
+    scope = SimpleServerSupport(handler).data_scope() if handler.auth_enabled else {}
+    memories = bot.memory.list_all(limit=limit, offset=offset, **scope)
+    total = bot.memory.count_scoped(**scope) if scope else bot.memory.get_stats()["total"]
     handler._json(
         {
             "memories": [memory.to_dict() for memory in memories],
-            "total": stats["total"],
+            "total": total,
             "limit": limit,
             "offset": offset,
         }
@@ -111,11 +126,14 @@ def handle_memories_search(handler, params: dict) -> None:
     if not query:
         handler._json({"error": "Missing q parameter"}, 400)
         return
-    results = bot.memory.search(query, limit=min(limit, 50))
+    scope = SimpleServerSupport(handler).data_scope() if handler.auth_enabled else {}
+    results = bot.memory.search(query, limit=max(1, min(limit, 50)), **scope)
     handler._json({"results": [result.to_dict() for result in results], "query": query, "count": len(results)})
 
 
 def handle_metrics_json(handler, params: dict) -> None:
+    if not _system_access(handler):
+        return
     bot = handler.botboy
     if bot and bot.metrics:
         handler._json(bot.metrics.to_json())
@@ -124,6 +142,8 @@ def handle_metrics_json(handler, params: dict) -> None:
 
 
 def handle_monitoring_json(handler, params: dict) -> None:
+    if not _system_access(handler):
+        return
     bot = handler.botboy
     if not bot:
         handler._json({"error": "Bot not initialized"}, 503)
@@ -140,6 +160,8 @@ def handle_monitoring_json(handler, params: dict) -> None:
 
 
 def handle_dashboard_json(handler, params: dict) -> None:
+    if not _system_access(handler):
+        return
     bot = handler.botboy
     if not bot:
         handler._json({"error": "Bot not initialized"}, 503)

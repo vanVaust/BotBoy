@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import shutil
+import os
 import unittest
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from botboy.gateway.auth import AuthPrincipal, JWTAuth
 from botboy.gateway.rate_limit import RateLimiter
@@ -69,6 +71,9 @@ class AccessAndPrincipalSupportTests(unittest.TestCase):
         shutil.rmtree(self.root, ignore_errors=True)
 
     def test_client_identity_rate_limit_and_access(self) -> None:
+        proxy_config = patch.dict(os.environ, {"BOTBOY_TRUSTED_PROXIES": "203.0.113.9"})
+        proxy_config.start()
+        self.addCleanup(proxy_config.stop)
         self.handler.headers = {
             "x-forwarded-for": "198.51.100.1, 203.0.113.2",
             "authorization": "",
@@ -84,6 +89,15 @@ class AccessAndPrincipalSupportTests(unittest.TestCase):
         self.handler._json_calls.clear()
         self.handler.rate_limiter = None
         self.assertEqual(self.support.ensure_access(require_auth=False), "198.51.100.1")
+
+    def test_untrusted_forwarded_identity_cannot_evade_rate_limit(self) -> None:
+        with patch.dict(os.environ, {"BOTBOY_TRUSTED_PROXIES": ""}):
+            self.handler.rate_limiter = RateLimiter(max_requests=1, window_seconds=3600)
+            self.handler.headers = {"x-forwarded-for": "198.51.100.1"}
+            self.assertEqual(self.support.ensure_access(), "203.0.113.9")
+            self.handler.headers = {"x-forwarded-for": "198.51.100.2"}
+            self.assertIsNone(self.support.ensure_access())
+            self.assertEqual(self.handler._json_calls[-1]["status"], 429)
 
     def test_auth_and_approval_context(self) -> None:
         self.handler.auth_enabled = True

@@ -2,6 +2,11 @@
 
 BotBoy ist eine lokal laufende Python-Anwendung mit CLI, stdlib-HTTP-Gateway, optionalem FastAPI-Gateway, Task-, Trace- und History-Persistenz, Skill-Routing und MCP-Server.
 
+Der Sicherheits-Integrationsstand vom 16.–17. Oktober 2026 ist lokal geprueft und
+kein veroeffentlichter oder fuer Produktion freigegebener Release. Nachweise und
+bewusste Funktionsgrenzen stehen in
+`docs/SECURITY_INTEGRATION_VERIFICATION_2026-10-16.md`.
+
 ## Release-Inhalt
 
 Dieser Release-Baum enthaelt:
@@ -92,7 +97,17 @@ Vollstaendige Release-Acceptance aus sauberem Build- und Install-Pfad:
 .\.venv-build\Scripts\python.exe -m botboy.release_acceptance full --python .\.venv-build\Scripts\python.exe --bootstrap-python python --outdir .\.botboy-runtime\post-edge-hardening-dist
 ```
 
-Der Acceptance-Runner verwendet standardmaessig einen OS-Temp-Root unter `%TEMP%\\botboy-release-acceptance` (Linux/macOS: `$TMPDIR/botboy-release-acceptance`) und erzwingt disjunkte Write-Sets zwischen Temp-Root und Artifact-Outdir. Build-/Install-Tempdaten bleiben damit isoliert vom Workspace, sofern nicht explizit anders konfiguriert. Mit `BOTBOY_ACCEPTANCE_TEMP_ROOT` kann der Temp-Root ueberschrieben werden, und mit `BOTBOY_ACCEPTANCE_STANDARD_SITE_PACKAGES` kann bei Offline-Install-Acceptance ein explizites Seed-`site-packages` gesetzt werden.
+Der Acceptance-Runner verwendet standardmaessig einen OS-Temp-Root unter `%TEMP%\\botboy-release-acceptance` (Linux/macOS: `$TMPDIR/botboy-release-acceptance`) und erzwingt disjunkte Write-Sets zwischen Temp-Root und Artifact-Outdir. Mit `BOTBOY_ACCEPTANCE_TEMP_ROOT` kann der Temp-Root ueberschrieben werden. Basis- und Standardpaket werden mit ihren deklarierten Abhaengigkeiten in leere Umgebungen installiert; installierte Entwicklerpakete werden nicht kopiert. Fuer Offline-Pruefungen kann `BOTBOY_ACCEPTANCE_WHEELHOUSE` auf ein vollstaendiges Wheelhouse zeigen. Das fruehere site-packages-Seeding ist entfernt.
+
+Die zusaetzliche Regression-Suite erfasst auch Tests mit freien Funktionen:
+
+```powershell
+python -m pytest tests -q --ignore=tests/test_release_build_install.py
+```
+
+Die Build-/Install-Pruefung ist bereits Teil der unittest-Vollsuite. CI prueft
+Windows und Linux auf Python 3.10 und 3.13; fehlendes Build-Tooling ist dort ein
+Fehler und kein uebersprungener Test.
 
 Die source-tree Vollsuite enthaelt den Build-/Install-Acceptance-Lauf jetzt standardmaessig. Wenn ein Interpreter mit `build` und ein Bootstrap-Interpreter mit `pip` verfuegbar sind, wird die saubere Build-/Install-Pruefung automatisch in `python -m unittest discover -s tests -v` mit ausgefuehrt.
 
@@ -149,6 +164,13 @@ Der aktuelle reproduzierbare Release-Stand steht in `botboy/data/STATUS_SNAPSHOT
 - `.github/workflows/release-verification.yml` CI-Gate fuer Build, Install und Release-Tests
 
 ## Hinweise
+
+- Externe Task-Ausfuehrung braucht einen geprueften SecurityContext. Globale zustandsbezogene CLI-Kommandos ueber HTTP/WebSocket/MCP sind gesperrt; dafuer sind autorisierte Ressourcen-APIs zu verwenden. CLI und lokales MCP-stdio bleiben Operator-Schnittstellen.
+- `/api/tasks/{id}/approve` stellt einen serverseitigen, befristeten Grant aus. `/resume` verwendet dessen ID in `X-BotBoy-Approval`. Ein Boolean oder die Adminrolle ersetzt den Grant nicht. Der finale Ausfuehrungsversuch beansprucht ihn atomar; nach einem Ausfuehrungsfehler braucht ein Retry eine neue Freigabe.
+- Passwort-/Rollen-/Tenant-Aenderungen, deaktivierte Principals und widerrufene API-Keys invalidieren die betroffenen Login-Credentials. Nach dem Upgrade ist eine erneute Anmeldung fuer alte Login-Tokens erforderlich.
+- Prozessweite Metrics, Monitoring und Dashboard-Daten verlangen bei aktivierter Authentifizierung eine Systemrolle. Tenant-Admins bleiben auf ihren Mandanten begrenzt.
+- MCP-HTTP nutzt einen serverseitig konfigurierten Serviceprincipal (`BOTBOY_MCP_PRINCIPAL`, `BOTBOY_MCP_ORG_ID`). Der gemeinsame Transport-Token identifiziert keine einzelnen Benutzer. Nicht freigegebene Tools, insbesondere globale Scheduler-/Host-Operationen, werden remote abgewiesen.
+- WebSocket-Nachrichten laufen durch dieselbe Ausfuehrungspruefung. Der fruehere direkte LLM-Streamingpfad ist entfernt; Antworten kommen als regulaere Ergebnisnachricht.
 
 - Laufzeitdaten werden standardmaessig unter `~/.botboy/` angelegt. Mit `BOTBOY_HOME` kann ein anderer Root gesetzt werden.
 - Die ausgelieferte Default-Skill-Konfiguration verwendet die gebuendelte Skill-Bibliothek, nicht `~/.botboy/skills`.

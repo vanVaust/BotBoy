@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import uuid
 import venv
 import zipfile
@@ -16,10 +17,15 @@ ROOT = Path(__file__).resolve().parent.parent
 RUNTIME_TEMP_ROOT = Path(
     os.getenv(
         "BOTBOY_ACCEPTANCE_TEMP_ROOT",
-        str(ROOT / ".botboy-runtime" / "acceptance-temp"),
+        str(Path(tempfile.gettempdir()) / "botboy-release-acceptance"),
     )
 )
 IGNORED_ROOT_NAMES = {
+    ".git",
+    ".venv",
+    ".env",
+    ".pytest_cache",
+    ".ruff_cache",
     ".botboy-mcp-runtime",
     ".botboy-runtime",
     ".codex_eval_runtime",
@@ -64,7 +70,9 @@ def _normalize_archive_names(names: list[str]) -> list[str]:
 def _resolve_executable(spec: str) -> str:
     candidate = Path(spec)
     if candidate.exists() or any(token in spec for token in ("\\", "/", ":")):
-        return str(candidate.resolve())
+        # Resolving a venv's Python symlink selects the base interpreter and
+        # silently discards the very environment the caller asked us to test.
+        return os.path.abspath(candidate)
     return spec
 
 
@@ -136,6 +144,8 @@ def _run(
 
 def _command_env(base_dir: Path, extra: dict[str, str] | None = None) -> dict[str, str]:
     env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    env.pop("PYTHONHOME", None)
     temp_root = (base_dir / "_tmp").resolve()
     temp_root.mkdir(parents=True, exist_ok=True)
     env["TMP"] = str(temp_root)
@@ -167,6 +177,10 @@ def _inspect_wheel(artifact: Path) -> None:
 
 
 def build_release_artifacts(*, python_executable: str | Path, outdir: Path) -> tuple[Path, Path]:
+    output_root = outdir.resolve()
+    temp_root = RUNTIME_TEMP_ROOT.resolve()
+    if output_root.is_relative_to(temp_root) or temp_root.is_relative_to(output_root):
+        raise ValueError("Artifact output and acceptance temporary root must be disjoint")
     outdir.mkdir(parents=True, exist_ok=True)
     temp_dir = _create_workspace_tempdir("build-")
     try:
@@ -213,49 +227,24 @@ def _create_venv(env_dir: Path) -> Path:
     return python_executable
 
 
-def _site_packages_dir(python_executable: str | Path, *, base_dir: Path) -> Path:
-    result = _run(
-        [
-            str(python_executable),
-            "-c",
-            "import sysconfig; print(sysconfig.get_path('purelib'))",
-        ],
-        cwd=ROOT,
-        env=_command_env(base_dir),
-        label="resolve site-packages",
-    )
-    return Path(result.stdout.strip()).resolve()
-
-
-def _copy_site_packages_seed(source_dir: Path, target_dir: Path) -> None:
-    if not source_dir.exists():
-        return
-    target_dir.mkdir(parents=True, exist_ok=True)
-    for item in source_dir.iterdir():
-        if item.name == "__pycache__":
-            continue
-        destination = target_dir / item.name
-        if item.is_dir():
-            shutil.copytree(item, destination, dirs_exist_ok=True)
-        else:
-            shutil.copy2(item, destination)
-
-
 def _pip_install(
     bootstrap_python: str | Path,
     env_python: Path,
     spec: str,
     *,
     base_dir: Path,
-    no_deps: bool = False,
 ) -> None:
     command = [str(bootstrap_python), "-m", "pip", "--python", str(env_python), "install"]
-    if no_deps:
-        command.append("--no-deps")
+    wheelhouse = os.getenv("BOTBOY_ACCEPTANCE_WHEELHOUSE", "")
+    if wheelhouse:
+        wheelhouse_path = Path(wheelhouse).expanduser().resolve()
+        if not wheelhouse_path.is_dir():
+            raise ValueError("BOTBOY_ACCEPTANCE_WHEELHOUSE must be an existing directory")
+        command.extend(["--no-index", "--find-links", str(wheelhouse_path)])
     command.append(spec)
     _run(
         command,
-        cwd=ROOT,
+        cwd=base_dir,
         env=_command_env(base_dir),
         label=f"pip install {spec}",
     )
@@ -269,7 +258,7 @@ def _botboy_env(base_dir: Path, name: str) -> dict[str, str]:
 
 def _run_botboy_command(env_python: Path, base_dir: Path, name: str, *args: str) -> subprocess.CompletedProcess[str]:
     return _run(
-        [str(env_python), "-m", "botboy", *args],
+        [str(env_python), "-I", "-m", "botboy", *args],
         cwd=base_dir,
         env=_botboy_env(base_dir, name),
         label=f"botboy {' '.join(args)}",
@@ -281,11 +270,13 @@ def run_install_acceptance(*, bootstrap_python: str | Path, wheel_path: Path) ->
     try:
         minimal_python = _create_venv(temp_dir / "release-minimal")
         standard_python = _create_venv(temp_dir / "release-standard")
-        bootstrap_site_packages = _site_packages_dir(bootstrap_python, base_dir=temp_dir)
-        standard_source = ROOT / ".release-build-venv" / "Lib" / "site-packages"
-
-        _copy_site_packages_seed(bootstrap_site_packages, _site_packages_dir(minimal_python, base_dir=temp_dir))
-        _pip_install(bootstrap_python, minimal_python, str(wheel_path), base_dir=temp_dir, no_deps=True)
+        _pip_install(bootstrap_python, minimal_python, str(wheel_path), base_dir=temp_dir)
+        _run(
+            [str(minimal_python), "-I", "-c", "import importlib.util; assert importlib.util.find_spec('fastapi') is None, 'Base install unexpectedly includes FastAPI'"],
+            cwd=temp_dir,
+            env=_command_env(temp_dir),
+            label="minimal dependency isolation",
+        )
         _run_botboy_command(minimal_python, temp_dir, "minimal", "version")
         _run_botboy_command(minimal_python, temp_dir, "minimal", "modules")
         _run_botboy_command(minimal_python, temp_dir, "minimal", "test")
@@ -293,9 +284,7 @@ def run_install_acceptance(*, bootstrap_python: str | Path, wheel_path: Path) ->
         _run_botboy_command(minimal_python, temp_dir, "minimal", "exec", "status")
 
         standard_spec = f"botboy[standard] @ {wheel_path.resolve().as_uri()}"
-        source_for_standard = standard_source if standard_source.exists() else bootstrap_site_packages
-        _copy_site_packages_seed(source_for_standard, _site_packages_dir(standard_python, base_dir=temp_dir))
-        _pip_install(bootstrap_python, standard_python, standard_spec, base_dir=temp_dir, no_deps=True)
+        _pip_install(bootstrap_python, standard_python, standard_spec, base_dir=temp_dir)
         _run_botboy_command(standard_python, temp_dir, "standard", "version")
         modules = _run_botboy_command(standard_python, temp_dir, "standard", "modules")
         lowered = modules.stdout.lower()
@@ -305,10 +294,12 @@ def run_install_acceptance(*, bootstrap_python: str | Path, wheel_path: Path) ->
         _run(
             [
                 str(standard_python),
+                "-I",
                 "-c",
                 "import aiohttp, fastapi, uvicorn, websockets; print('standard-runtime-ok')",
             ],
             cwd=temp_dir,
+            env=_command_env(temp_dir),
             label="standard runtime imports",
         )
     finally:

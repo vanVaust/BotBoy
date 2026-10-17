@@ -19,7 +19,7 @@ def _candidate_build_pythons() -> list[Path]:
     ]
     result: list[Path] = []
     for candidate in candidates:
-        resolved = candidate.resolve()
+        resolved = candidate.absolute()
         if resolved.exists() and resolved not in result:
             result.append(resolved)
     return result
@@ -36,6 +36,8 @@ def _select_build_python() -> Path:
         )
         if probe.returncode == 0:
             return candidate
+    if os.getenv("CI"):
+        raise RuntimeError("CI requires a Python interpreter with the 'build' module for release acceptance.")
     raise unittest.SkipTest("No Python interpreter with the 'build' module is available for release acceptance.")
 
 
@@ -46,7 +48,7 @@ def _select_bootstrap_python(preferred: Path | None = None) -> Path:
     candidates.extend([Path(sys.executable), ROOT / ".venv-build" / "Scripts" / "python.exe"])
     seen: set[Path] = set()
     for candidate in candidates:
-        resolved = candidate.resolve()
+        resolved = candidate.absolute()
         if resolved in seen:
             continue
         seen.add(resolved)
@@ -61,6 +63,8 @@ def _select_bootstrap_python(preferred: Path | None = None) -> Path:
         )
         if probe.returncode == 0:
             return resolved
+    if os.getenv("CI"):
+        raise RuntimeError("CI requires pip for clean-install acceptance.")
     raise unittest.SkipTest("No Python interpreter with pip is available for clean-install acceptance.")
 
 

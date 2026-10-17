@@ -1,25 +1,53 @@
-from __future__ import annotations
+import math
+import sqlite3
 
 from fastapi import APIRouter, HTTPException, Request
 
-from botboy.gateway.app_context import GatewayAppContext
+from botboy.gateway.app_context import GatewayAppContext, current_gateway_org, current_gateway_roles
 from botboy.gateway.auth import AuthPrincipal
 
 
 def create_auth_router(ctx: GatewayAppContext) -> APIRouter:
     router = APIRouter()
 
+    def _roles() -> set[str]:
+        return {str(role).lower() for role in current_gateway_roles()}
+
+    def _is_system() -> bool:
+        return "system" in _roles()
+
+    def _validate_issued_role(role: str) -> str:
+        normalized = str(role or "user").strip().lower() or "user"
+        if normalized == "system" and not _is_system():
+            raise HTTPException(status_code=403, detail="System credentials may only be issued by system authorization")
+        if normalized not in {"user", "worker", "admin", "system"}:
+            raise HTTPException(status_code=400, detail="Unsupported credential role")
+        return normalized
+
+    async def _payload(request: Request) -> dict:
+        try:
+            payload = await request.json()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid JSON")
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="JSON object required")
+        for field in ("api_key", "display_name", "username", "password", "refresh_token", "principal_id", "role", "label", "org_id"):
+            if field in payload and not isinstance(payload[field], str):
+                raise HTTPException(status_code=400, detail=f"{field} must be a string")
+        return payload
+
     @router.post("/api/auth/login")
     async def auth_login(request: Request):
         ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=False)
-        payload = await request.json()
+        payload = await _payload(request)
         api_key = payload.get("api_key", "").strip()
         principal_display = payload.get("display_name", "").strip()
         credential_source = "principal_store"
         principal_type = "user"
         principal_id = ""
         roles: list[str] = []
-
+        org_id = "default"
+        credential_version = ""
         if api_key:
             store = ctx.get_api_key_store()
             if not store:
@@ -32,6 +60,8 @@ def create_auth_router(ctx: GatewayAppContext) -> APIRouter:
             principal_type = "api_key"
             credential_source = "secret_store"
             principal_display = credential.label or principal_display
+            org_id = str(credential.org_id or "default")
+            credential_version = credential.created_at
         else:
             username = payload.get("username", "").strip()
             password = payload.get("password", "")
@@ -46,58 +76,38 @@ def create_auth_router(ctx: GatewayAppContext) -> APIRouter:
                 principal_type = "admin" if principal_record.role == "admin" else "user"
                 principal_id = principal_record.principal_id
                 principal_display = principal_record.username
+                org_id = str(principal_record.org_id or "default")
+                credential_version = principal_record.updated_at
             else:
                 if ctx.auth_enabled and not store.has_principals():
-                    raise HTTPException(
-                        status_code=503,
-                        detail="Auth is enabled but no principals or bootstrap secret are configured",
-                    )
+                    raise HTTPException(status_code=503, detail="Auth is enabled but no principals or bootstrap secret are configured")
                 raise HTTPException(status_code=401, detail="Invalid credentials")
-
-        principal = AuthPrincipal(
-            principal_id=principal_id,
-            roles=roles or ["user"],
-            principal_type=principal_type,
-            credential_source=credential_source,
-            display_name=principal_display,
-        )
+        principal = AuthPrincipal(principal_id=principal_id, roles=roles or ["user"], principal_type=principal_type, credential_source=credential_source, display_name=principal_display, org_id=org_id, credential_version=credential_version)
         pair = ctx.auth.create_pair(principal)
-        return {
-            "principal": {
-                "principal_id": principal.principal_id,
-                "principal_type": principal.principal_type,
-                "roles": principal.roles,
-                "credential_source": principal.credential_source,
-                "display_name": principal.display_name,
-            },
-            "access_token": pair.access_token,
-            "refresh_token": pair.refresh_token,
-            "expires_in": pair.expires_in,
-            "token_type": pair.token_type,
-        }
+        return {"principal": {"principal_id": principal.principal_id, "principal_type": principal.principal_type, "roles": principal.roles, "credential_source": principal.credential_source, "display_name": principal.display_name, "org_id": org_id}, "access_token": pair.access_token, "refresh_token": pair.refresh_token, "expires_in": pair.expires_in, "token_type": pair.token_type}
 
     @router.post("/api/auth/refresh")
     async def auth_refresh(request: Request):
         ctx.authorize(request.headers, request.client.host if request.client else "", require_auth=False)
-        payload = await request.json()
+        payload = await _payload(request)
         refresh_token = payload.get("refresh_token", "")
         if not refresh_token:
             raise HTTPException(status_code=400, detail="Missing refresh_token")
+        token_info = ctx.auth.verify(refresh_token, expected_type="refresh")
+        if not token_info:
+            raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+        try:
+            from botboy.gateway.auth import validate_credential_state
+            validate_credential_state(token_info, ctx.bootstrap_principal_store(), ctx.get_api_key_store())
+        except ValueError as exc:
+            ctx.auth.revoke_token(refresh_token)
+            raise HTTPException(status_code=401, detail=str(exc))
         pair = ctx.auth.refresh(refresh_token)
         if not pair:
             raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
         token_info = ctx.auth.verify(pair.access_token)
-        return {
-            "principal": {
-                "principal_id": token_info.principal_id if token_info else "",
-                "principal_type": token_info.principal_type if token_info else "user",
-                "roles": token_info.roles if token_info else [],
-                "credential_source": token_info.credential_source if token_info else "jwt",
-            },
-            "access_token": pair.access_token,
-            "expires_in": pair.expires_in,
-            "token_type": pair.token_type,
-        }
+        org_id = token_info.org_id
+        return {"principal": {"principal_id": token_info.principal_id if token_info else "", "principal_type": token_info.principal_type if token_info else "user", "roles": token_info.roles if token_info else [], "credential_source": token_info.credential_source if token_info else "jwt", "org_id": org_id}, "access_token": pair.access_token, "refresh_token": pair.refresh_token, "expires_in": pair.expires_in, "token_type": pair.token_type}
 
     @router.post("/api/auth/api-key")
     async def auth_issue_api_key(request: Request):
@@ -105,33 +115,28 @@ def create_auth_router(ctx: GatewayAppContext) -> APIRouter:
         store = ctx.get_api_key_store()
         if not store:
             raise HTTPException(status_code=503, detail="API key store unavailable")
-        payload = await request.json()
+        payload = await _payload(request)
         principal_id = payload.get("principal_id", "").strip()
-        role = payload.get("role", "user").strip() or "user"
+        role = _validate_issued_role(payload.get("role", "user"))
         label = payload.get("label", "").strip()
         ttl_hours = payload.get("ttl_hours", None)
         try:
             ttl = float(ttl_hours) if ttl_hours not in (None, "") else None
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="ttl_hours must be numeric")
-        credential = store.issue_principal_secret(
-            principal_id=principal_id or label or "service",
-            role=role,
-            label=label,
-            ttl_hours=ttl,
-        )
-        return {
-            "principal": {
-                "principal_id": credential.principal_id,
-                "role": credential.role,
-                "label": credential.label,
-                "credential_type": credential.credential_type,
-            },
-            "full_key": credential.full_key,
-            "key_id": credential.key_id,
-            "created_at": credential.created_at,
-            "expires_at": credential.expires_at,
-        }
+        if ttl is not None and (not math.isfinite(ttl) or ttl <= 0):
+            raise HTTPException(status_code=400, detail="ttl_hours must be positive and finite")
+        requested_org = str(payload.get("org_id", "")).strip()
+        org_id = requested_org or current_gateway_org()
+        if requested_org and requested_org != current_gateway_org() and ctx.auth_enabled and not _is_system():
+            raise HTTPException(status_code=403, detail="Cross-tenant API-key issuance requires system authorization")
+        try:
+            credential = store.issue_principal_secret(principal_id=principal_id or label or "service", role=role, label=label, ttl_hours=ttl, org_id=org_id)
+        except sqlite3.IntegrityError:
+            raise HTTPException(status_code=409, detail="Credential identifier unavailable")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"principal": {"principal_id": credential.principal_id, "role": credential.role, "label": credential.label, "credential_type": credential.credential_type, "org_id": credential.org_id}, "full_key": credential.full_key, "key_id": credential.key_id, "created_at": credential.created_at, "expires_at": credential.expires_at}
 
     @router.get("/api/principals")
     async def principal_list(request: Request, include_disabled: bool = False):
@@ -140,11 +145,11 @@ def create_auth_router(ctx: GatewayAppContext) -> APIRouter:
         if not store:
             raise HTTPException(status_code=503, detail="Principal store unavailable")
         principals = store.list_principals(include_disabled=include_disabled)
-        return {
-            "principals": [ctx.principal_payload(principal) for principal in principals],
-            "total": len(principals),
-            "stats": store.stats(),
-        }
+        if ctx.auth_enabled and not _is_system():
+            org_id = current_gateway_org()
+            principals = [principal for principal in principals if str(getattr(principal, "org_id", "default") or "default") == org_id]
+        stats = store.stats() if (not ctx.auth_enabled or _is_system()) else {"total": len(principals), "active": sum(1 for p in principals if not p.disabled), "disabled": sum(1 for p in principals if p.disabled)}
+        return {"principals": [ctx.principal_payload(principal) for principal in principals], "total": len(principals), "stats": stats}
 
     @router.post("/api/principals")
     async def principal_upsert(request: Request):
@@ -152,13 +157,26 @@ def create_auth_router(ctx: GatewayAppContext) -> APIRouter:
         store = ctx.bootstrap_principal_store()
         if not store:
             raise HTTPException(status_code=503, detail="Principal store unavailable")
-        payload = await request.json()
+        payload = await _payload(request)
         username = payload.get("username", "").strip()
         password = payload.get("password", "")
-        role = payload.get("role", "user").strip() or "user"
+        role = _validate_issued_role(payload.get("role", "user"))
         if not username or not password:
             raise HTTPException(status_code=400, detail="Missing username or password")
-        principal = store.upsert_principal(username=username, password=password, role=role)
+        org_id = str(payload.get("org_id", "")).strip() or current_gateway_org()
+        if org_id != current_gateway_org() and ctx.auth_enabled and not _is_system():
+            raise HTTPException(status_code=403, detail="Cross-tenant principal creation requires system authorization")
+        existing = store.get_principal(username)
+        if existing and ctx.auth_enabled and not _is_system():
+            if existing.org_id != current_gateway_org() or existing.role == "system":
+                raise HTTPException(status_code=404, detail="Principal not found")
+        expected_org = current_gateway_org() if ctx.auth_enabled and not _is_system() else None
+        try:
+            principal = store.upsert_principal(username=username, password=password, role=role, org_id=org_id, expected_org_id=expected_org)
+        except PermissionError:
+            raise HTTPException(status_code=404, detail="Principal not found")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         return {"principal": ctx.principal_payload(principal)}
 
     @router.delete("/api/principals/{username}")
@@ -170,7 +188,11 @@ def create_auth_router(ctx: GatewayAppContext) -> APIRouter:
         existing = store.get_principal(username)
         if not existing:
             raise HTTPException(status_code=404, detail="Principal not found")
-        store.disable_principal(username)
+        if ctx.auth_enabled and not _is_system() and (existing.org_id != current_gateway_org() or existing.role == "system"):
+            raise HTTPException(status_code=404, detail="Principal not found")
+        expected_org = current_gateway_org() if ctx.auth_enabled and not _is_system() else None
+        if not store.disable_principal(username, expected_org_id=expected_org):
+            raise HTTPException(status_code=404, detail="Principal not found")
         disabled = store.get_principal(username)
         return {"principal": ctx.principal_payload(disabled)}
 

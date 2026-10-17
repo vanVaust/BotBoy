@@ -5,11 +5,17 @@ on:
     branches:
       - main
       - master
+      - security/v5.1-foundation
   pull_request:
 
 jobs:
   release-verification:
-    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-24.04]
+        python: ["3.10", "3.13"]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout
@@ -18,21 +24,21 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python }}
 
       - name: Install build and standard runtime dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install build wheel setuptools pyyaml
+          python -m pip install build wheel setuptools pyyaml pytest
           python -m pip install ".[standard]"
 
-      - name: Run release acceptance
-        shell: pwsh
-        run: |
-          python -m botboy.release_acceptance full --python python --bootstrap-python python --outdir dist
-
-      - name: Run release test suite
+      - name: Run full suite including isolated build and install acceptance
         shell: pwsh
         run: |
           python -m unittest discover -s tests -v
+
+      - name: Run security and function-style regression tests
+        shell: pwsh
+        run: |
+          python -m pytest tests -q --ignore=tests/test_release_build_install.py

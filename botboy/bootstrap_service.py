@@ -111,7 +111,10 @@ class BootstrapService:
 
             if self.config.scheduler.enabled:
                 sched_path = self.config.resolve_scheduler_db_path()
-                self.bot.scheduler = BotBoyScheduler(db_path=sched_path)
+                self.bot.scheduler = BotBoyScheduler(
+                    db_path=sched_path,
+                    security_validator=getattr(self.bot, "_scheduled_security_allows", None),
+                )
                 run_task = getattr(self.bot, "_run_scheduled_task", None)
                 if run_task is not None:
                     self.bot.scheduler.register_handler("generic", run_task)

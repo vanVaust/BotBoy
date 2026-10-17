@@ -84,7 +84,7 @@ class _FakeTraceStore:
 
 
 class _FakeScheduler:
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: str, security_validator=None) -> None:
         self.db_path = db_path
         self.handlers = {}
         self.started = False

@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1503,6 +1504,7 @@ class TaskStore(_SQLiteMixin):
         metadata: Optional[dict] = None,
         last_seen_ip: str = "",
         node_status: str = "ready",
+        expected_org_id: Optional[str] = None,
     ) -> dict:
         normalized_node_id = str(node_id or "").strip()
         normalized_worker_id = str(worker_id or "").strip().lower()
@@ -1514,86 +1516,113 @@ class TaskStore(_SQLiteMixin):
         normalized_queue_name = str(queue_name or "").strip() or f"{normalized_worker_id}.{normalized_node_id}"
         ttl_seconds = max(30, int(lease_ttl_seconds or LEASE_TTL_SECONDS))
         parallelism = max(1, int(max_parallelism or max_concurrency or 1))
-        queue_record = self.upsert_execution_queue(
-            queue_name=normalized_queue_name,
-            worker_id=normalized_worker_id,
-            lease_ttl_seconds=ttl_seconds,
-            max_parallelism=parallelism,
-            queue_status="ready",
-            metadata={"source": "worker_node_register"},
-        )
-        now = self._now()
-        conn = self._get_conn()
-        conn.execute(
-            """
-            INSERT INTO worker_nodes (
-                node_id,
-                worker_id,
-                queue_name,
-                display_name,
-                endpoint,
-                node_status,
-                drain_state,
-                last_seen_ip,
-                metadata_json,
-                capacity_json,
-                registered_at,
-                last_heartbeat_at,
-                heartbeat_expires_at,
-                updated_at
-            )
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(node_id) DO UPDATE SET
-                worker_id = excluded.worker_id,
-                queue_name = excluded.queue_name,
-                display_name = excluded.display_name,
-                endpoint = excluded.endpoint,
-                node_status = excluded.node_status,
-                drain_state = excluded.drain_state,
-                last_seen_ip = excluded.last_seen_ip,
-                metadata_json = excluded.metadata_json,
-                capacity_json = excluded.capacity_json,
-                last_heartbeat_at = excluded.last_heartbeat_at,
-                heartbeat_expires_at = excluded.heartbeat_expires_at,
-                updated_at = excluded.updated_at
-            """,
-            (
-                normalized_node_id,
-                normalized_worker_id,
-                normalized_queue_name,
-                str(display_name or "").strip() or f"{profile['display_name']} Node {normalized_node_id}",
-                str(endpoint or "").strip(),
-                str(node_status or "ready").strip() or "ready",
-                "active",
-                str(last_seen_ip or "").strip(),
-                self._json(metadata),
-                self._json(
-                    {
-                        "max_parallelism": parallelism,
-                        "lease_ttl_seconds": ttl_seconds,
-                    }
-                ),
-                now,
-                now,
-                self._expires_at(seconds=ttl_seconds),
-                now,
-            ),
-        )
-        conn.execute("DELETE FROM worker_capabilities WHERE node_id = ?", (normalized_node_id,))
-        for capability in capabilities or list(profile["capabilities"]):
-            normalized_capability = str(capability or "").strip()
-            if not normalized_capability:
-                continue
-            conn.execute(
-                "INSERT OR IGNORE INTO worker_capabilities (node_id, capability, created_at) VALUES (?,?,?)",
-                (normalized_node_id, normalized_capability, now),
-            )
-        conn.commit()
-        node = self.get_worker_node(normalized_node_id)
-        if not node:
-            raise RuntimeError(f"Failed to register worker node '{normalized_node_id}'.")
-        node["queue"] = queue_record
-        return node
+        # Serialize authorization and both resource writes across processes.
+        # A collision must leave neither an overwritten node nor an orphan queue.
+        with self._shared_lock if self._is_memory else nullcontext():
+            conn = self._get_conn()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                if expected_org_id is not None:
+                    if str((metadata or {}).get("org_id", "")) != expected_org_id:
+                        raise PermissionError("Worker registration is outside administrator scope")
+                    for table, column, value in (
+                        ("worker_nodes", "node_id", normalized_node_id),
+                        ("execution_queues", "queue_name", normalized_queue_name),
+                    ):
+                        row = conn.execute(
+                            f"SELECT metadata_json FROM {table} WHERE {column} = ?", (value,)
+                        ).fetchone()
+                        if row is not None:
+                            persisted = _safe_json_loads(row["metadata_json"])
+                            if str(persisted.get("org_id", "")) != expected_org_id:
+                                raise PermissionError("Worker registration is outside administrator scope")
+                            if table == "worker_nodes":
+                                metadata = {**(metadata or {}), "owner_principal": persisted.get("owner_principal", "")}
+                queue_record = self._write_execution_queue(
+                    conn,
+                    queue_name=normalized_queue_name,
+                    worker_id=normalized_worker_id,
+                    lease_ttl_seconds=ttl_seconds,
+                    max_parallelism=parallelism,
+                    queue_status="ready",
+                    metadata={**(metadata or {}), "source": "worker_node_register"},
+                )
+                now = self._now()
+                conn.execute(
+                    """
+                    INSERT INTO worker_nodes (
+                        node_id,
+                        worker_id,
+                        queue_name,
+                        display_name,
+                        endpoint,
+                        node_status,
+                        drain_state,
+                        last_seen_ip,
+                        metadata_json,
+                        capacity_json,
+                        registered_at,
+                        last_heartbeat_at,
+                        heartbeat_expires_at,
+                        updated_at
+                    )
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(node_id) DO UPDATE SET
+                        worker_id = excluded.worker_id,
+                        queue_name = excluded.queue_name,
+                        display_name = excluded.display_name,
+                        endpoint = excluded.endpoint,
+                        node_status = excluded.node_status,
+                        drain_state = excluded.drain_state,
+                        last_seen_ip = excluded.last_seen_ip,
+                        metadata_json = excluded.metadata_json,
+                        capacity_json = excluded.capacity_json,
+                        last_heartbeat_at = excluded.last_heartbeat_at,
+                        heartbeat_expires_at = excluded.heartbeat_expires_at,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        normalized_node_id,
+                        normalized_worker_id,
+                        normalized_queue_name,
+                        str(display_name or "").strip() or f"{profile['display_name']} Node {normalized_node_id}",
+                        str(endpoint or "").strip(),
+                        str(node_status or "ready").strip() or "ready",
+                        "active",
+                        str(last_seen_ip or "").strip(),
+                        self._json(metadata),
+                        self._json(
+                            {
+                                "max_parallelism": parallelism,
+                                "lease_ttl_seconds": ttl_seconds,
+                            }
+                        ),
+                        now,
+                        now,
+                        self._expires_at(seconds=ttl_seconds),
+                        now,
+                    ),
+                )
+                conn.execute("DELETE FROM worker_capabilities WHERE node_id = ?", (normalized_node_id,))
+                for capability in capabilities or list(profile["capabilities"]):
+                    normalized_capability = str(capability or "").strip()
+                    if not normalized_capability:
+                        continue
+                    conn.execute(
+                        "INSERT OR IGNORE INTO worker_capabilities (node_id, capability, created_at) VALUES (?,?,?)",
+                        (normalized_node_id, normalized_capability, now),
+                    )
+                row = conn.execute("SELECT * FROM worker_nodes WHERE node_id = ?", (normalized_node_id,)).fetchone()
+                record = self._row_to_worker_node(row)
+                capabilities = [item["capability"] for item in conn.execute(
+                    "SELECT capability FROM worker_capabilities WHERE node_id = ? ORDER BY capability", (normalized_node_id,)
+                ).fetchall()]
+                node = record.to_dict(capabilities=capabilities, queue=queue_record)
+                conn.commit()
+                return node
+            except Exception:
+                conn.rollback()
+                raise
 
     def heartbeat_worker_node(
         self,
@@ -1750,6 +1779,26 @@ class TaskStore(_SQLiteMixin):
         queue_status: str = "ready",
         metadata: Optional[dict] = None,
     ) -> dict:
+        conn = self._get_conn()
+        queue = self._write_execution_queue(
+            conn, queue_name=queue_name, worker_id=worker_id,
+            lease_ttl_seconds=lease_ttl_seconds, max_parallelism=max_parallelism,
+            queue_status=queue_status, metadata=metadata,
+        )
+        conn.commit()
+        return queue
+
+    def _write_execution_queue(
+        self,
+        conn,
+        *,
+        queue_name: str,
+        worker_id: str,
+        lease_ttl_seconds: int = LEASE_TTL_SECONDS,
+        max_parallelism: int = 1,
+        queue_status: str = "ready",
+        metadata: Optional[dict] = None,
+    ) -> dict:
         normalized_queue_name = str(queue_name or "").strip()
         normalized_worker_id = str(worker_id or "").strip().lower()
         if not normalized_queue_name:
@@ -1757,7 +1806,6 @@ class TaskStore(_SQLiteMixin):
         if not normalized_worker_id:
             raise ValueError("Missing worker_id")
         now = self._now()
-        conn = self._get_conn()
         conn.execute(
             """
             INSERT INTO execution_queues (
@@ -1790,8 +1838,8 @@ class TaskStore(_SQLiteMixin):
                 now,
             ),
         )
-        conn.commit()
-        queue = self.get_execution_queue(normalized_queue_name)
+        row = conn.execute("SELECT * FROM execution_queues WHERE queue_name = ?", (normalized_queue_name,)).fetchone()
+        queue = self._row_to_execution_queue(row).to_dict() if row else None
         if not queue:
             raise RuntimeError(f"Failed to upsert execution queue '{normalized_queue_name}'.")
         return queue
@@ -2017,6 +2065,7 @@ class TaskStore(_SQLiteMixin):
         blocked_by_task_id: Optional[str] = None,
         delegation_status: Optional[str] = None,
         owner: Optional[str] = None,
+        org_id: Optional[str] = None,
     ) -> Tuple[List[TaskRecord], int]:
         conditions: list[str] = []
         params: list[Any] = []
@@ -2026,6 +2075,9 @@ class TaskStore(_SQLiteMixin):
         if principal:
             conditions.append("principal = ?")
             params.append(principal)
+        if org_id is not None:
+            conditions.append("org_id = ?")
+            params.append(org_id)
         if request_id:
             conditions.append("request_id = ?")
             params.append(request_id)

@@ -27,6 +27,8 @@ from botboy.gateway.simple_server_support import (
     build_simple_handler_state,
 )
 from botboy.gateway.simple_static_handlers import serve_static as shared_serve_static
+from botboy.gateway.errors import HTTPException
+from botboy.gateway.app_context import _current_principal, _current_org, _current_roles
 
 
 class SimpleAPIHandler(SimpleHandlerSurface, BaseHTTPRequestHandler):
@@ -46,6 +48,21 @@ class SimpleAPIHandler(SimpleHandlerSurface, BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_host = default_bind_host()
     server_port = 8765
+
+    def handle_one_request(self) -> None:
+        tokens = (_current_principal.set(""), _current_org.set("default"), _current_roles.set(()))
+        try:
+            super().handle_one_request()
+        except HTTPException as exc:
+            self._json({"error": exc.detail}, exc.status_code, headers=exc.headers)
+        except PermissionError:
+            self._json({"error": "Operation is not authorized"}, 403)
+        except (ValueError, TypeError):
+            self._json({"error": "Invalid request"}, 400)
+        finally:
+            _current_principal.reset(tokens[0])
+            _current_org.reset(tokens[1])
+            _current_roles.reset(tokens[2])
 
     def log_message(self, fmt: str, *args) -> None:
         pass
@@ -89,8 +106,13 @@ class SimpleAPIHandler(SimpleHandlerSurface, BaseHTTPRequestHandler):
 
         try:
             length = int(self.headers.get("Content-Length", 0))
+            if length < 0 or length > 1_048_576:
+                self._json({"error": "Request body is too large or has an invalid length"}, 413)
+                return
             body = self.rfile.read(length) if length > 0 else b"{}"
             payload = json.loads(body)
+            if not isinstance(payload, dict):
+                raise ValueError("JSON body must be an object")
         except (json.JSONDecodeError, ValueError):
             self._json({"error": "Invalid JSON body"}, 400)
             return

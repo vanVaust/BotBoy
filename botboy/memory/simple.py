@@ -109,15 +109,28 @@ class SimpleMemoryEngine(_SQLiteMixin):
             conn.commit()
         return ids
 
-    def search(self, query: str, limit: int = 5) -> List[Memory]:
-        sql_fts = """SELECT m.id, m.content, m.timestamp, m.metadata
+    @staticmethod
+    def _scope_filter(*, principal: Optional[str], org_id: Optional[str], alias: str = "") -> tuple[str, list[str]]:
+        column = f"{alias}.metadata" if alias else "metadata"
+        # Malformed legacy metadata cannot acquire a tenant merely by parsing.
+        document = f"CASE WHEN json_valid({column}) THEN {column} ELSE '{{}}' END"
+        conditions, params = [], []
+        for key, value in (("org_id", org_id), ("principal_id", principal)):
+            if value is not None:
+                conditions.append(f"json_extract({document}, '$._botboy_security.{key}') = ?")
+                params.append(value)
+        return (" AND " + " AND ".join(conditions)) if conditions else "", params
+
+    def search(self, query: str, limit: int = 5, *, principal: Optional[str] = None, org_id: Optional[str] = None) -> List[Memory]:
+        scope, params = self._scope_filter(principal=principal, org_id=org_id, alias="m")
+        sql_fts = f"""SELECT m.id, m.content, m.timestamp, m.metadata
                      FROM memories m JOIN memories_fts fts ON m.id = fts.rowid
-                     WHERE memories_fts MATCH ? ORDER BY bm25(memories_fts) LIMIT ?"""
-        sql_like = "SELECT id, content, timestamp, metadata FROM memories WHERE content LIKE ? LIMIT ?"
+                     WHERE memories_fts MATCH ? {scope} ORDER BY bm25(memories_fts) LIMIT ?"""
+        sql_like = f"SELECT m.id, m.content, m.timestamp, m.metadata FROM memories m WHERE content LIKE ? {scope} ORDER BY m.id DESC LIMIT ?"
         try:
-            rows = self._fetchall(sql_fts, (query, limit))
+            rows = self._fetchall(sql_fts, [query, *params, limit])
         except sqlite3.OperationalError:
-            rows = self._fetchall(sql_like, (f"%{query}%", limit))
+            rows = self._fetchall(sql_like, [f"%{query}%", *params, limit])
         return [self._row_to_memory(r) for r in rows]
 
     def get(self, memory_id: int) -> Optional[Memory]:
@@ -150,11 +163,17 @@ class SimpleMemoryEngine(_SQLiteMixin):
             conn.commit()
         return True
 
-    def list_all(self, limit: int = 100, offset: int = 0) -> List[Memory]:
+    def list_all(self, limit: int = 100, offset: int = 0, *, principal: Optional[str] = None, org_id: Optional[str] = None) -> List[Memory]:
+        scope, params = self._scope_filter(principal=principal, org_id=org_id)
         rows = self._fetchall(
-            "SELECT id, content, timestamp, metadata FROM memories ORDER BY id DESC LIMIT ? OFFSET ?",
-            (limit, offset))
+            f"SELECT id, content, timestamp, metadata FROM memories WHERE 1=1 {scope} ORDER BY id DESC LIMIT ? OFFSET ?",
+            [*params, limit, offset])
         return [self._row_to_memory(r) for r in rows]
+
+    def count_scoped(self, *, principal: Optional[str] = None, org_id: Optional[str] = None) -> int:
+        scope, params = self._scope_filter(principal=principal, org_id=org_id)
+        row = self._fetchone(f"SELECT COUNT(*) AS total FROM memories WHERE 1=1 {scope}", params)
+        return int(row["total"])
 
     def clear_all(self) -> int:
         if self._is_memory:

@@ -205,13 +205,13 @@ class SimpleTaskWriteHandlersTest(unittest.TestCase):
         self.assertEqual(handler.store.reassigned_to, "reviewer")
         self.assertEqual(payload["worker_id"], "reviewer")
 
-    def test_handle_task_resume(self) -> None:
+    def test_handle_task_resume_requires_server_grant(self) -> None:
         handler = _FakeHandler(task=_FakeTask("task-1", status="blocked", command="status"))
         handle_task_resume(handler, "task-1", {})
         payload, status = handler.json_payloads[-1]
-        self.assertEqual(status, 200)
-        self.assertTrue(payload["success"])
-        self.assertEqual(handler.botboy.calls[0]["command"], "status")
+        self.assertEqual(status, 403)
+        self.assertIn("Server-issued approval", payload["error"])
+        self.assertEqual(handler.botboy.calls, [])
 
     def test_handle_task_cancel(self) -> None:
         handler = _FakeHandler(task=_FakeTask("task-1", status="running"))

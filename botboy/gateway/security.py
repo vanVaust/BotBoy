@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from typing import Any
 
@@ -9,6 +10,64 @@ from typing import Any
 LOCALHOST_ALIASES = ("127.0.0.1", "localhost", "::1")
 WILDCARD_BIND_HOSTS = ("0.0.0.0", "::")
 DEFAULT_GATEWAY_PORT = 8765
+FORWARDED_HEADER_NAMES = {b"x-forwarded-for", b"x-real-ip", b"forwarded"}
+
+
+def _trusted_proxy_networks() -> tuple[ipaddress._BaseNetwork, ...]:
+    """Return explicitly configured trusted reverse-proxy IP/CIDR networks.
+
+    The default is empty: forwarded identity headers are therefore untrusted.
+    ``BOTBOY_TRUSTED_PROXIES`` accepts a comma-separated list of IPs/CIDRs.
+    """
+    configured = str(os.getenv("BOTBOY_TRUSTED_PROXIES", "")).strip()
+    if not configured:
+        return ()
+    networks: list[ipaddress._BaseNetwork] = []
+    for value in configured.split(","):
+        value = value.strip()
+        if not value:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(value, strict=False))
+        except ValueError:
+            # Invalid proxy configuration must not silently create trust.
+            continue
+    return tuple(networks)
+
+
+def _is_trusted_proxy(peer_host: str) -> bool:
+    if not peer_host:
+        return False
+    try:
+        address = ipaddress.ip_address(peer_host)
+    except ValueError:
+        return False
+    return any(address in network for network in _trusted_proxy_networks())
+
+
+class TrustedProxyHeaderMiddleware:
+    """Strip untrusted forwarded identity headers at the application's boundary.
+
+    This is a transport-neutral ASGI middleware: importing gateway security
+    neither requires FastAPI nor mutates middleware used by other applications.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") not in {"http", "websocket"}:
+            return await self.app(scope, receive, send)
+        client = scope.get("client") or ("", 0)
+        peer_host = str(client[0] or "")
+        if _is_trusted_proxy(peer_host):
+            return await self.app(scope, receive, send)
+        sanitized_scope = dict(scope)
+        sanitized_scope["headers"] = [
+            (name, value) for name, value in scope.get("headers", [])
+            if name.lower() not in FORWARDED_HEADER_NAMES
+        ]
+        return await self.app(sanitized_scope, receive, send)
 
 
 def default_bind_host() -> str:
@@ -109,42 +168,23 @@ def build_remote_readiness_report(
     checks: list[dict[str, str]] = []
 
     def add(name: str, status: str, message: str, severity: str = "error") -> None:
-        checks.append(
-            {
-                "name": name,
-                "status": status,
-                "severity": severity,
-                "message": message,
-            }
-        )
+        checks.append({"name": name, "status": status, "severity": severity, "message": message})
 
     if remote:
-        add(
-            "bind_host",
-            "pass",
-            f"{surface} binds to non-local host {bind_host}; remote safety policy applies.",
-            "info",
-        )
+        add("bind_host", "pass", f"{surface} binds to non-local host {bind_host}; remote safety policy applies.", "info")
         if effective_auth:
             add("auth_required", "pass", "Authentication is enabled for non-local bind.", "info")
         else:
             add("auth_required", "fail", "Authentication must be enabled for non-local bind.")
-
         if require_jwt_secret:
             if jwt_secret_configured:
                 add("stable_jwt_secret", "pass", "A stable JWT secret is configured.", "info")
             else:
-                add(
-                    "stable_jwt_secret",
-                    "fail",
-                    "A stable JWT secret is required for authenticated non-local gateway bind.",
-                )
-
+                add("stable_jwt_secret", "fail", "A stable JWT secret is required for authenticated non-local gateway bind.")
         if "*" in cors_origins:
             add("cors_wildcard", "fail", "Wildcard CORS is not allowed for non-local bind.")
         else:
             add("cors_wildcard", "pass", "CORS is not wildcard-permissive.", "info")
-
         if surface == "gateway":
             if rate_limit_enabled:
                 add("rate_limit", "pass", "Rate limiting is enabled.", "info")
@@ -178,52 +218,23 @@ def build_remote_readiness_report(
 
 def format_remote_readiness_report(report: dict[str, Any]) -> str:
     status = "PASS" if report.get("ok") else "FAIL"
-    lines = [
-        f"BotBoy remote readiness: {status}",
-        f"Surface: {report.get('surface')}",
-        f"Bind: {report.get('host')}:{report.get('port')}",
-    ]
+    lines = [f"BotBoy remote readiness: {status}", f"Surface: {report.get('surface')}", f"Bind: {report.get('host')}:{report.get('port')}"]
     for check in report.get("checks", []):
         label = str(check.get("status", "")).upper()
         lines.append(f"- {label} {check.get('name')}: {check.get('message')}")
     return "\n".join(lines)
 
 
-def validate_remote_gateway_readiness(
-    config: Any,
-    *,
-    host: str = "",
-    port: int = DEFAULT_GATEWAY_PORT,
-    surface: str = "gateway",
-) -> dict[str, Any]:
-    report = build_remote_readiness_report(
-        config,
-        host=host,
-        port=port,
-        surface=surface,
-        require_jwt_secret=True,
-    )
+def validate_remote_gateway_readiness(config: Any, *, host: str = "", port: int = DEFAULT_GATEWAY_PORT, surface: str = "gateway") -> dict[str, Any]:
+    report = build_remote_readiness_report(config, host=host, port=port, surface=surface, require_jwt_secret=True)
     if not report["ok"]:
         raise RuntimeError(format_remote_readiness_report(report))
     return report
 
 
-def validate_safe_bind(
-    host: str,
-    *,
-    auth_enabled: bool = False,
-    surface: str = "gateway",
-    port: int = DEFAULT_GATEWAY_PORT,
-) -> dict[str, Any]:
+def validate_safe_bind(host: str, *, auth_enabled: bool = False, surface: str = "gateway", port: int = DEFAULT_GATEWAY_PORT) -> dict[str, Any]:
     """Compatibility guard for surfaces that do not use BotBoyConfig."""
-    report = build_remote_readiness_report(
-        None,
-        host=host,
-        port=port,
-        surface=surface,
-        auth_enabled=auth_enabled,
-        require_jwt_secret=(surface != "mcp"),
-    )
+    report = build_remote_readiness_report(None, host=host, port=port, surface=surface, auth_enabled=auth_enabled, require_jwt_secret=(surface != "mcp"))
     if not report["ok"]:
         raise RuntimeError(format_remote_readiness_report(report))
     return report

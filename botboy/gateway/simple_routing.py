@@ -77,6 +77,8 @@ def resolve_post_route(path: str) -> tuple[Optional[str], Optional[str]]:
     exact = POST_EXACT_ROUTES.get(normalized)
     if exact:
         return exact, None
+    if normalized.startswith("/api/tasks/") and normalized.endswith("/approve"):
+        return "_handle_task_approve", normalized.split("/")[-2]
     if normalized.startswith("/api/tasks/") and normalized.endswith("/resume"):
         return "_handle_task_resume", normalized.split("/")[-2]
     if normalized.startswith("/api/tasks/") and normalized.endswith("/cancel"):

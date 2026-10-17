@@ -63,6 +63,7 @@ def _make_auth_config(*, enable_auth: bool, rate_limit_enabled: bool = False) ->
         resolve_jwt_secret=lambda: "stable-secret-for-gateway-hardening-0123",
         resolve_api_key_store_path=lambda: "broken-api-keys.db",
         resolve_principal_db_path=lambda: "broken-principals.db",
+        resolve_token_revocation_db_path=lambda: ":memory:",
     )
 
 

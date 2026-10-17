@@ -1,6 +1,22 @@
 from __future__ import annotations
 
 from typing import Any
+from botboy.gateway.simple_server_support import SimpleServerSupport
+
+
+def _trace_visible(handler, trace: dict) -> bool:
+    if not handler.auth_enabled:
+        return True
+    context = SimpleServerSupport(handler).security_context()
+    if "system" in context.roles:
+        return True
+    run = trace.get("run") or {}
+    if "admin" not in context.roles and run.get("principal") != context.principal_id:
+        return False
+    task_id = run.get("task_id")
+    store = handler._task_store(optional=True)
+    task = store.get_task(task_id) if store is not None and task_id else None
+    return task is not None and task.org_id == context.org_id
 
 from botboy.tasks import (
     ACTIVE_TASK_STATUSES,
@@ -23,6 +39,23 @@ def handle_traces_get(handler, params: dict) -> None:
     principal = params.get("principal", [None])[0]
     request_id = params.get("request_id", [None])[0]
     status = params.get("status", [None])[0]
+    if handler.auth_enabled:
+        visible = []
+        scan_offset = 0
+        while True:
+            batch, raw_total = bot.trace_store.list_runs(limit=200, offset=scan_offset, principal=principal, request_id=request_id, status=status)
+            for run in batch:
+                detail = bot.trace_store.get_run(run.run_id)
+                if detail and _trace_visible(handler, detail):
+                    visible.append(run)
+            scan_offset += len(batch)
+            if not batch or scan_offset >= raw_total:
+                break
+        limit, offset = max(1, min(limit, 200)), max(0, offset)
+        total = len(visible)
+        runs = visible[offset:offset+limit]
+        handler._json({"runs": [run.to_dict() for run in runs], "total": total, "limit": limit, "offset": offset})
+        return
     runs, total = bot.trace_store.list_runs(
         limit=min(limit, 200),
         offset=offset,
@@ -41,7 +74,7 @@ def handle_trace_detail(handler, run_id: str) -> None:
     if handler._ensure_access(require_auth=handler.auth_enabled) is None:
         return
     trace = bot.trace_store.get_run(run_id)
-    if not trace:
+    if not trace or not _trace_visible(handler, trace):
         handler._json({"error": "Trace run not found"}, 404)
         return
     handler._json(trace)

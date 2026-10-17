@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 import tempfile
 import unittest
@@ -46,17 +47,24 @@ class SchedulerSecurityTests(unittest.TestCase):
         self.assertEqual(seen, [task.task_id])
 
     def test_existing_tenant_jobs_are_migrated_to_enforced_security(self):
-        with tempfile.NamedTemporaryFile(suffix=".db") as handle:
-            conn = sqlite3.connect(handle.name)
+        fd, db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        try:
+            conn = sqlite3.connect(db_path)
             conn.execute("CREATE TABLE scheduled_tasks (task_id TEXT PRIMARY KEY,name TEXT NOT NULL,schedule TEXT NOT NULL,task_type TEXT NOT NULL DEFAULT 'generic',payload TEXT NOT NULL DEFAULT '{}',next_run_ts REAL NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,max_runs INTEGER,run_count INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL)")
             conn.execute("INSERT INTO scheduled_tasks VALUES (?,?,?,?,?,?,?,?,?,?)", ("legacy", "legacy", "in 1h", "generic", json.dumps({"_botboy_security": {"principal_id": "alice", "org_id": "tenant-a"}}), 9999999999, 1, None, 0, datetime.now(timezone.utc).isoformat()))
             conn.commit()
             conn.close()
 
-            store = SchedulerStore(handle.name)
+            store = SchedulerStore(db_path)
             task = store.list_tasks()[0]
             self.assertTrue(task.payload["_botboy_security"]["enforced"])
             store.close()
+        finally:
+            try:
+                os.remove(db_path)
+            except FileNotFoundError:
+                pass
 
 
 if __name__ == "__main__":

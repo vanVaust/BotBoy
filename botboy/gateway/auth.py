@@ -9,8 +9,9 @@ import json
 import os
 import secrets
 import time
+import threading
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, List, Optional
 
 
 @dataclass(frozen=True)
@@ -22,7 +23,9 @@ class AuthPrincipal:
     principal_type: str = "user"
     credential_source: str = "bootstrap"
     display_name: str = ""
+    org_id: str = "default"
     metadata: dict = field(default_factory=dict)
+    credential_version: str = ""
 
 
 @dataclass
@@ -42,6 +45,8 @@ class TokenInfo:
     token_id: str
     principal_type: str = "user"
     credential_source: str = "jwt"
+    org_id: str = "default"
+    credential_version: str = ""
 
     @property
     def user_id(self) -> str:
@@ -63,15 +68,10 @@ def _b64url_decode(s: str) -> bytes:
 
 
 class JWTAuth:
-    """
-    HS256 JWT authentication using stdlib only.
+    """HS256 JWT authentication using stdlib only."""
 
-    Token structure:
-        header.payload.signature  (standard JWT)
-    """
-
-    ACCESS_TTL = 3600        # 1 hour
-    REFRESH_TTL = 604800     # 7 days
+    ACCESS_TTL = 3600
+    REFRESH_TTL = 604800
     MIN_SECRET_LEN = 32
 
     def __init__(self, secret: str = "", *, allow_generate: bool = False, revocation_store: Any = None) -> None:
@@ -86,6 +86,7 @@ class JWTAuth:
         self._secret = secret.encode()
         self._revocation_store = revocation_store
         self._local_revoked_jtis = set()
+        self._revocation_lock = threading.Lock()
 
     @staticmethod
     def _coerce_principal(
@@ -93,7 +94,11 @@ class JWTAuth:
         roles: Optional[List[str]] = None,
         principal_type: Optional[str] = None,
         credential_source: str = "bootstrap",
+        org_id: str = "default",
     ) -> AuthPrincipal:
+        tenant = principal.org_id if isinstance(principal, AuthPrincipal) else org_id
+        if not isinstance(tenant, str) or not tenant.strip():
+            raise ValueError("Explicit non-empty org_id is required")
         if isinstance(principal, AuthPrincipal):
             merged_roles = list(principal.roles or roles or ["user"])
             return AuthPrincipal(
@@ -102,13 +107,16 @@ class JWTAuth:
                 principal_type=principal.principal_type,
                 credential_source=principal.credential_source,
                 display_name=principal.display_name,
+                org_id=principal.org_id or "default",
                 metadata=dict(principal.metadata or {}),
+                credential_version=principal.credential_version,
             )
         return AuthPrincipal(
             principal_id=str(principal),
             roles=list(roles or ["user"]),
             principal_type=principal_type or "user",
             credential_source=credential_source,
+            org_id=org_id or "default",
         )
 
     def _sign(self, header_b64: str, payload_b64: str) -> str:
@@ -133,6 +141,9 @@ class JWTAuth:
             expected_sig = self._sign(header_b64, body_b64)
             if not hmac.compare_digest(expected_sig, sig):
                 return None
+            header = json.loads(_b64url_decode(header_b64))
+            if not isinstance(header, dict) or header.get("alg") != "HS256":
+                return None
             payload = json.loads(_b64url_decode(body_b64))
             if not isinstance(payload, dict):
                 return None
@@ -147,6 +158,7 @@ class JWTAuth:
         *,
         principal_type: Optional[str] = None,
         credential_source: str = "bootstrap",
+        org_id: str = "default",
     ) -> TokenPair:
         now = int(time.time())
         tid = secrets.token_hex(8)
@@ -155,8 +167,8 @@ class JWTAuth:
             roles=roles,
             principal_type=principal_type,
             credential_source=credential_source,
+            org_id=org_id,
         )
-
         access_payload = {
             "sub": principal_obj.principal_id,
             "roles": principal_obj.roles,
@@ -167,6 +179,8 @@ class JWTAuth:
             "ptype": principal_obj.principal_type,
             "src": principal_obj.credential_source,
             "name": principal_obj.display_name,
+            "org_id": principal_obj.org_id,
+            "credential_version": principal_obj.credential_version,
         }
         refresh_payload = {
             "sub": principal_obj.principal_id,
@@ -178,6 +192,8 @@ class JWTAuth:
             "ptype": principal_obj.principal_type,
             "src": principal_obj.credential_source,
             "name": principal_obj.display_name,
+            "org_id": principal_obj.org_id,
+            "credential_version": principal_obj.credential_version,
         }
         return TokenPair(
             access_token=self._encode(access_payload),
@@ -187,7 +203,6 @@ class JWTAuth:
 
     @staticmethod
     def extract_bearer_token(header_value: str = "") -> str:
-        """Extract a Bearer token from an Authorization header."""
         if not header_value:
             return ""
         if header_value.lower().startswith("bearer "):
@@ -206,7 +221,6 @@ class JWTAuth:
             self._local_revoked_jtis.add(jti)
 
     def revoke_token(self, token: str) -> bool:
-        """Revokes a specific token."""
         payload = self._decode(token)
         if not payload:
             return False
@@ -216,48 +230,88 @@ class JWTAuth:
         self.revoke_jti(jti, payload.get("exp", 0))
         return True
 
+    @staticmethod
+    def _validated_org_id(payload: dict) -> Optional[str]:
+        """Return only an explicit, non-empty tenant claim; never infer one."""
+        org_id = payload.get("org_id")
+        if not isinstance(org_id, str) or not org_id.strip():
+            return None
+        return org_id.strip()
+
     def verify(self, token: str, expected_type: str = "access") -> Optional[TokenInfo]:
         payload = self._decode(token)
         if not payload:
             return None
         now = int(time.time())
-        if payload.get("exp", 0) < now:
+        expiry, issued = payload.get("exp"), payload.get("iat")
+        if type(expiry) is not int or type(issued) is not int or expiry <= now or issued > now:
             return None
         if payload.get("type") != expected_type:
             return None
-        jti = payload.get("jti", "")
-        if jti and self.is_revoked(jti):
+        jti = payload.get("jti")
+        if not isinstance(jti, str) or not jti or self.is_revoked(jti):
+            return None
+        principal_id = payload.get("sub")
+        if not isinstance(principal_id, str) or not principal_id.strip():
+            return None
+        roles = payload.get("roles", [])
+        if not isinstance(roles, list) or not roles or any(not isinstance(role, str) or role not in {"user", "admin", "worker", "system"} for role in roles):
+            return None
+        org_id = self._validated_org_id(payload)
+        if org_id is None or any(not isinstance(payload.get(key, default), str) for key, default in (("src", "jwt"), ("ptype", "user"), ("credential_version", ""))):
             return None
         return TokenInfo(
-            principal_id=payload["sub"],
-            roles=payload.get("roles", []),
-            issued_at=payload.get("iat", 0),
-            expires_at=payload.get("exp", 0),
-            token_id=jti,
+            principal_id=principal_id, roles=roles, issued_at=issued,
+            expires_at=expiry, token_id=jti,
             principal_type=payload.get("ptype", "user"),
-            credential_source=payload.get("src", "jwt"),
+            credential_source=payload.get("src", "jwt"), org_id=org_id,
+            credential_version=str(payload.get("credential_version", "")),
         )
 
     def refresh(self, refresh_token: str) -> Optional[TokenPair]:
+        info = self.verify(refresh_token, expected_type="refresh")
+        if info is None:
+            return None
         payload = self._decode(refresh_token)
-        if not payload:
-            return None
-        now = int(time.time())
-        if payload.get("exp", 0) < now:
-            return None
-        if payload.get("type") != "refresh":
-            return None
-        jti = payload.get("jti", "")
-        if jti and self.is_revoked(jti):
-            return None
-        
-        # Optionally, revoke the used refresh token (refresh token rotation)
-        self.revoke_jti(jti, payload.get("exp", 0))
-
+        if self._revocation_store and hasattr(self._revocation_store, "consume"):
+            if not self._revocation_store.consume(info.token_id, info.expires_at):
+                return None
+        else:
+            with self._revocation_lock:
+                if self.is_revoked(info.token_id):
+                    return None
+                self.revoke_jti(info.token_id, info.expires_at)
+        principal_id, org_id, roles = info.principal_id, info.org_id, info.roles
         return self.create_pair(
-            payload["sub"],
-            payload.get("roles", ["user"]),
-            principal_type=payload.get("ptype", "user"),
-            credential_source=payload.get("src", "jwt"),
+            AuthPrincipal(
+                principal_id=principal_id,
+                roles=list(roles),
+                principal_type=payload.get("ptype", "user"),
+                credential_source=payload.get("src", "jwt"),
+                display_name=payload.get("name", ""),
+                org_id=org_id,
+                credential_version=str(payload.get("credential_version", "")),
+            )
         )
 
+
+def validate_credential_state(token_info: TokenInfo, principal_store: Any, key_store: Any) -> None:
+    """Reject revoked or changed persisted credentials for access and refresh alike."""
+    if token_info.credential_source == "secret_store":
+        record = key_store.get_active_key(token_info.principal_id) if key_store else None
+        if record is None:
+            raise ValueError("API credential is revoked or expired")
+        version = record.created_at
+    else:
+        record = principal_store.get_principal(token_info.principal_id) if principal_store else None
+        if record is None:
+            if token_info.credential_source == "principal_store":
+                raise ValueError("Principal no longer exists")
+            return  # Explicitly issued bootstrap/system tokens have no password record.
+        if record.disabled:
+            raise ValueError("Principal is disabled")
+        version = record.updated_at
+    if set(token_info.roles) != {record.role} or token_info.org_id != record.org_id:
+        raise ValueError("Principal authorization has changed")
+    if token_info.credential_source in {"secret_store", "principal_store"} and token_info.credential_version != version:
+        raise ValueError("Principal credential has changed")

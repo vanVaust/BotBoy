@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 import secrets
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
-from botboy.gateway.app_context import GatewayAppContext
+from botboy.gateway.app_context import GatewayAppContext, _current_principal, _current_org, _current_roles
 
 
 async def _send_ws_json_safe(websocket: WebSocket, payload: dict) -> bool:
@@ -71,34 +71,35 @@ def create_ws_router(ctx: GatewayAppContext) -> APIRouter:
                             return
                         continue
 
-                if bot.llm and command.startswith("chat "):
-                    query = command[5:].strip()
-                    if not await _send_ws_json_safe(websocket, {"type": "stream_start"}):
-                        return
-                    full_response = ""
-                    async for chunk in bot.llm.stream(query):
-                        full_response += chunk
-                        if not await _send_ws_json_safe(websocket, {"type": "chunk", "content": chunk}):
-                            return
-                    if not await _send_ws_json_safe(
-                        websocket,
-                        {"type": "stream_end", "output": full_response, "success": True},
-                    ):
-                        return
-                else:
+                # Revalidate each message, including expiry, revocation and
+                # changed credentials. Streaming must not bypass execution.
+                tokens = (_current_principal.set(""), _current_org.set("default"), _current_roles.set(()))
+                try:
+                    principal, roles = ctx.authorize_with_roles(
+                        websocket.headers, websocket.client.host if websocket.client else "",
+                        require_auth=ctx.auth_enabled,
+                    )
                     result = await bot.process_command(
                         command,
-                        principal=websocket_identity,
+                        principal=principal,
                         request_id=getattr(websocket.state, "request_id", ""),
-                        roles=list(token_info.roles) if token_info else [],
+                        roles=roles,
                         approval_context=ctx.approval_context(
                             websocket.headers,
                             msg if isinstance(msg, dict) else {},
-                            list(token_info.roles) if token_info else [],
+                            roles,
                         ),
+                        **({"security_context": ctx.security_context(request_id=request_id)} if ctx.auth_enabled else {}),
                     )
                     if not await _send_ws_json_safe(websocket, {**result, "type": result.get("type", "result")}):
                         return
+                except (HTTPException, PermissionError):
+                    await _close_ws_safe(websocket, code=1008)
+                    return
+                finally:
+                    _current_principal.reset(tokens[0])
+                    _current_org.reset(tokens[1])
+                    _current_roles.reset(tokens[2])
         except WebSocketDisconnect:
             return
         except (RuntimeError, ValueError) as exc:

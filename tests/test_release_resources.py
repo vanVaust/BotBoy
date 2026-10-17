@@ -43,15 +43,15 @@ class ReleaseResourcesTest(unittest.TestCase):
 
     def test_status_snapshot_is_local_and_reproducible(self) -> None:
         snapshot = json.loads(status_snapshot_path().read_text(encoding="utf-8"))
-        self.assertEqual(snapshot["workspace"], "botboi_finished")
+        self.assertEqual(snapshot["workspace"], "BotBoy")
         self.assertTrue(snapshot["tests"]["available"])
         self.assertEqual(snapshot["tests"]["command"], "python -m botboy.release_smoke -v")
         self.assertEqual(snapshot["tests"]["scope"], "release_smoke")
         self.assertEqual(snapshot["tests"]["ran"], 6)
         self.assertEqual(snapshot["evals"]["default_manifest"], "botboy/data/evals/release_smoke_manifest.json")
         self.assertEqual(snapshot["evals"]["command"], "python -m botboy evals --summary")
-        self.assertEqual(snapshot["gateway_modes"]["stdlib"], "verified_release_live")
-        self.assertEqual(snapshot["gateway_modes"]["fastapi"], "verified_release_live")
+        self.assertEqual(snapshot["gateway_modes"]["stdlib"], "verified_local_integration_tests")
+        self.assertEqual(snapshot["gateway_modes"]["fastapi"], "verified_local_integration_tests")
         self.assertIn("v5_replay_diff_persistence_and_dashboard_surface", snapshot["completed_capabilities"])
         self.assertNotIn("v3_replay_diff_persistence_and_surface", snapshot["open_priorities"])
 

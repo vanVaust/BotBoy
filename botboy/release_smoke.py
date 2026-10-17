@@ -65,7 +65,7 @@ class ReleaseResourcesTest(unittest.TestCase):
 
     def test_status_snapshot_tracks_release_smokes(self) -> None:
         snapshot = json.loads(status_snapshot_path().read_text(encoding="utf-8"))
-        self.assertEqual(snapshot["workspace"], "botboi_finished")
+        self.assertEqual(snapshot["workspace"], "BotBoy")
         self.assertTrue(snapshot["tests"]["available"])
         self.assertEqual(snapshot["tests"]["command"], "python -m botboy.release_smoke -v")
         self.assertEqual(snapshot["evals"]["default_manifest"], "botboy/data/evals/release_smoke_manifest.json")

@@ -49,6 +49,7 @@ from botboy.gateway.simple_task_read_handlers import (
     handle_workers_get as shared_handle_workers_get,
 )
 from botboy.gateway.simple_task_write_handlers import (
+    handle_task_approve as shared_handle_task_approve,
     handle_task_cancel as shared_handle_task_cancel,
     handle_task_merge_action as shared_handle_task_merge_action,
     handle_task_reassign as shared_handle_task_reassign,
@@ -271,6 +272,9 @@ class SimpleHandlerSurface:
 
     def _handle_task_artifacts(self, task_id: str) -> None:
         shared_handle_task_artifacts(self, task_id)
+
+    def _handle_task_approve(self, task_id: str, payload: dict) -> None:
+        shared_handle_task_approve(self, task_id, payload)
 
     def _handle_task_resume(self, task_id: str, payload: dict) -> None:
         shared_handle_task_resume(self, task_id, payload)
