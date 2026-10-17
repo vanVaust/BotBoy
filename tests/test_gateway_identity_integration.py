@@ -37,7 +37,8 @@ class GatewayIdentityIntegrationTest(unittest.TestCase):
         self.store.upsert_principal("bob", "password", "user", "tenant-b")
         self.store.upsert_principal("root", "password", "system", "platform")
         self.client = TestClient(self.app)
-        self.addCleanup(self.client.close)
+        self.client.__enter__()
+        self.addCleanup(self.client.__exit__, None, None, None)
 
     def login(self, username="alice", **credentials):
         response = self.client.post("/api/auth/login", json=credentials if "api_key" in credentials else {"username": username, "password": credentials.get("password", "password")})

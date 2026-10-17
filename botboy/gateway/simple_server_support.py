@@ -137,6 +137,10 @@ def close_simple_handler_stores(handler_cls) -> None:
             except (OSError, RuntimeError, sqlite3.Error):
                 pass
             setattr(handler_cls, attr, None)
+    auth = getattr(handler_cls, "auth", None)
+    revocations = getattr(auth, "_revocation_store", None)
+    if revocations is not None:
+        revocations.close()
 
 
 def reset_simple_handler_state(handler_cls) -> None:

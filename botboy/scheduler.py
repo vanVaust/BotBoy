@@ -215,6 +215,11 @@ class BotBoyScheduler:
     def stop(self)->None:
         self._stop_event.set(); self._running=False
         if self._thread:self._thread.join(timeout=15)
+    def close(self)->None:
+        self.stop()
+        if self._thread and self._thread.is_alive():
+            raise RuntimeError("Scheduler is still running; cannot close its store")
+        self._store.close()
     def _run_loop(self)->None:
         loop=asyncio.new_event_loop(); asyncio.set_event_loop(loop)
         try:

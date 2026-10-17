@@ -29,6 +29,7 @@ Endpoints:
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import secrets
 import site
@@ -118,12 +119,25 @@ def create_app(bot, *, host: str = default_bind_host(), port: int = 8765) -> Any
         raise ImportError("FastAPI and uvicorn required: pip install botboy[standard]")
 
     cors_origins = resolve_cors_origins(host=host, port=port)
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        try:
+            yield
+        finally:
+            # These stores belong to this app; the shared bot has its own
+            # lifecycle and must remain usable by other gateway instances.
+            for store in (api_key_store, credential_store, revocation_store):
+                if store is not None:
+                    store.close()
+
     app = FastAPI(
         title="BotBoy API",
         description="BotBoy AI Agent Framework REST API",
         version=getattr(bot, "VERSION", "0.6.0-dev"),
         docs_url="/docs",
         redoc_url="/redoc",
+        lifespan=lifespan,
     )
 
     app.add_middleware(

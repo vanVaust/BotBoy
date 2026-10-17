@@ -192,21 +192,30 @@ class TaskDecorationSupportTests(unittest.TestCase):
         self.addCleanup(self.store.close)
         self.support = SimpleServerSupport(self.handler)
 
-        self.parent = self.store.create_task(
+        def create_task_at(created_at: str, **kwargs):
+            # Wall-clock ticks can coincide on Windows; this fixture requires
+            # distinct creation times to verify newest-first task ordering.
+            with patch.object(self.store, "_now", return_value=created_at):
+                return self.store.create_task(**kwargs)
+
+        self.parent = create_task_at(
+            "2026-01-01T00:00:00+00:00",
             title="Parent task",
             owner="worker:planner",
             principal="alice",
             status=TASK_STATUS_RUNNING,
             summary="Parent summary",
         )
-        self.queued = self.store.create_task(
+        self.queued = create_task_at(
+            "2026-01-01T00:00:01+00:00",
             title="Queued task",
             owner="worker:reviewer",
             principal="bob",
             status=TASK_STATUS_QUEUED,
             summary="Queued summary",
         )
-        self.child = self.store.create_task(
+        self.child = create_task_at(
+            "2026-01-01T00:00:02+00:00",
             title="Child task",
             owner="worker:executor",
             principal="alice",

@@ -5,6 +5,7 @@ import shutil
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from botboy.tasks import TaskStore
 
@@ -51,20 +52,26 @@ class QueueLeaseContractTest(unittest.TestCase):
         )
 
     def test_acquire_and_renew_queue_lease(self) -> None:
-        lease = self._acquire()
-        renewed = self.store.renew_queue_lease(
-            lease["lease_id"],
-            principal="tester",
-            request_id="req-lease-2",
-            lease_ttl_seconds=300,
-        )
+        reference_time = datetime.now(timezone.utc)
+        with patch("botboy.tasks.datetime", wraps=datetime) as clock:
+            clock.now.return_value = reference_time
+            lease = self._acquire()
+            # Renewal occurs later, independently of the OS clock resolution.
+            clock.now.return_value = reference_time + timedelta(seconds=10)
+            renewed = self.store.renew_queue_lease(
+                lease["lease_id"],
+                principal="tester",
+                request_id="req-lease-2",
+                lease_ttl_seconds=300,
+            )
 
         self.assertEqual(lease["queue_name"], self.node["queue_name"])
         self.assertEqual(lease["node_id"], self.node["node_id"])
         self.assertEqual(lease["task_id"], "task-lease-1")
         self.assertEqual(lease["lease_status"], "active")
         self.assertEqual(renewed["lease_id"], lease["lease_id"])
-        self.assertNotEqual(renewed["lease_expires_at"], lease["lease_expires_at"])
+        self.assertEqual(lease["lease_expires_at"], (reference_time + timedelta(seconds=300)).isoformat())
+        self.assertEqual(renewed["lease_expires_at"], (reference_time + timedelta(seconds=310)).isoformat())
 
     def test_list_release_and_summary(self) -> None:
         lease = self._acquire()

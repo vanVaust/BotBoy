@@ -30,7 +30,7 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install build wheel setuptools pyyaml pytest
+          python -m pip install --upgrade build wheel "setuptools>=68" pyyaml pytest
           python -m pip install ".[standard]"
 
       - name: Run full suite including isolated build and install acceptance

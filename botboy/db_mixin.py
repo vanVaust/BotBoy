@@ -56,7 +56,9 @@ class _SQLiteMixin:
 
     def _register_conn(self, conn: sqlite3.Connection) -> None:
         with self._connections_lock:
-            self._connections[threading.get_ident()] = conn
+            # Thread identifiers are reused after a worker exits. Keep every
+            # connection alive in the registry until shutdown can close it.
+            self._connections[id(conn)] = conn
 
     def _get_conn(self) -> sqlite3.Connection:
         if self._closed:

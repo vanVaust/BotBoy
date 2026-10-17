@@ -182,13 +182,13 @@ class OrchestratorLifecycleService:
         return result
 
     def shutdown_resources(self) -> None:
-        for attr in ("scheduler", "history", "memory", "trace_store", "task_store"):
+        for attr in ("scheduler", "history", "memory", "reflection_archive", "archetypes", "trace_store", "task_store"):
             resource = getattr(self.bot, attr, None)
             close = getattr(resource, "close", None)
             stop = getattr(resource, "stop", None)
             if callable(stop):
                 stop()
-            elif callable(close):
+            if callable(close):
                 close()
 
 

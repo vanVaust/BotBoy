@@ -168,7 +168,7 @@ class OrchestratorLifecycleServiceTests(unittest.TestCase):
     def test_shutdown_resources(self) -> None:
         bot = FakeBot()
         create_orchestrator_lifecycle_service(bot).shutdown_resources()
-        self.assertEqual(bot.calls, ["scheduler.stop", "history.close", "memory.close", "trace_store.close", "task_store.close"])
+        self.assertEqual(bot.calls, ["scheduler.stop", "scheduler.close", "history.close", "memory.close", "trace_store.close", "task_store.close"])
 
 
 if __name__ == "__main__":
