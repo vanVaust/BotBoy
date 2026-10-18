@@ -83,6 +83,14 @@ was tatsächlich geschah, zeigt `git log`. Es wird hier nicht rückwirkend erfun
   `psutil`, `docker` und `sentence-transformers` haben auch nach der genauen
   Messung null Importe. Berührt ist die Begründung von A1 — mit dem FastAPI-Pfad
   wird das Paket **nicht** abhängigkeitsfrei, `aiohttp` und `yaml` bleiben.
+- **Nachtrag: Die erste Korrektur war unvollständig.** Sie erfasste neun Stellen,
+  übersah aber Kapitel 7, wo dieselbe Falschaussage mit anderem Wortlaut stand
+  („nirgends importiert"), sowie drei Stellen, die das Entfernen der
+  Sprachunterstützung mit „`vosk`/`pyaudio` nicht importiert" begründeten — beide
+  Pakete werden lazy importiert. Die Empfehlung bleibt, ihre Begründung lautet nun
+  „0 % Abdeckung und außerhalb des Kerns". Der Abschnitt R1 beschreibt jetzt die
+  **ausgeführte** Aktion samt der bewusst verschobenen Teile, nicht mehr den
+  ursprünglichen Plan.
 
 ### Prüfstand
 

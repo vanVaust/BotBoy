@@ -290,7 +290,7 @@ Jede Zeile: Vorgabe aus dem Zielkonzept, gemessener Zustand im Repo, Urteil, Auf
 | S12 | Geräte-Brücken | kein Treffer | **offen** | zurückgestellt, siehe Kapitel 6.3 |
 | S13 | Agent-zu-Agent | `a2a_pilot.py` 273 Zeilen, kein eigenes Testmodul | **teilweise** | zurückgestellt; Konflikt mit P1 (undurchsichtige Fremdausführung) |
 | S14 | Konsens mehrerer Modelle | `consensus.py` 63 Anweisungen **0 %** | **offen** | R6: entfernen, bis F7 es verlangt |
-| S15 | Sprache | `voice/listener.py` 88 Anweisungen **0 %**, `vosk`/`pyaudio` nicht importiert | **offen** | R6: entfernen |
+| S15 | Sprache | `voice/listener.py` 88 Anweisungen **0 %**; `vosk`/`pyaudio` lazy importiert, also echte optionale Abhängigkeiten | **offen** | R6: entfernen, weil ungeprüft und außerhalb des Kerns |
 
 ### 3.3 Das Kernbild in drei Sätzen
 
@@ -675,7 +675,7 @@ Je Funktion: Zustand heute, Ziel, maschinelle Abnahme. **F-Nummern sind Fertigst
 | F9 | Geräte-Brücken | Der stärkste Beweis für eine Kontrollschicht, aber auch die größte unumkehrbare Wirkung. Erst nach F1d (Idempotenz), F1f (Halt-Schalter) und F2 (Nachweiskette). Belege zu Angriffen über Bedienoberflächenbäume mobiler Agenten sind deutlich [ETABLIERT] |
 | F10 | Körper und Bühne | Kein Zusammenhang mit dem Kernversprechen. Ein Ausbau in Richtung räumlicher Standards lohnt nach der Prüfung vom 17.10.2026 nicht |
 | F11 | Agent-zu-Agent | `a2a_pilot.py` vorhanden, aber undurchsichtige Fremdausführung widerspricht P1. Zurückstellen; MCP deckt Fremdagenten ab |
-| F12 | Sprache, weitere Kanäle | `voice/listener.py` 0 %, Pakete nicht importiert. Entfernen statt pflegen (R6), Wiederaufnahme nur bei konkretem Bedarf |
+| F12 | Sprache, weitere Kanäle | `voice/listener.py` 0 % und außerhalb des Kerns; die Fremdabhängigkeiten `vosk` und `pyaudio` verschwinden mit dem Modul. Entfernen statt pflegen (R6), Wiederaufnahme nur bei konkretem Bedarf |
 ---
 
 ## 7 Aufräumplan
@@ -684,13 +684,17 @@ Neun Schnitte. Jeder ist als Vorbedingung, Aktion, Nachbedingung formuliert, dam
 
 ### R1 Abhängigkeitsliste auf die Wirklichkeit bringen — Aufwand S, Risiko niedrig
 
-**Lage:** `setup.py` ist bereits richtig gestuft: `install_requires=["pyyaml>=6.0"]`, dazu die Zusatzgruppen `standard`, `full`, `dev`. `requirements.txt` listet dagegen alles flach als wäre es Pflicht. Von den dort genannten Paketen werden `uvicorn`, `websockets`, `aiohttp`, `httpx`, `psutil`, `docker`, `sentence-transformers`, `vosk` und `pyaudio` im Paket **nirgends importiert** [GESICHERT].
+**Erledigt am 18.10.2026.** Die Vorprüfung hat die ursprüngliche Annahme dieses Schnitts teilweise widerlegt; ausgeführt wurde der Befund, nicht der Plan.
 
-**Aktion:** `requirements.txt` ersetzen durch einen Zweizeiler, der auf die Zusatzgruppen in `setup.py` verweist. Die Gruppe `full` streichen, da keines ihrer vier Pakete importiert wird. Aus `standard` die nicht importierten Pakete entfernen; was bleibt, ist `fastapi` bis R5 greift. `pyyaml` aus `install_requires` in eine Gruppe `config` verschieben, denn es wird nur an drei Stellen lazy im Funktionskörper geladen — die Aufrufstellen müssen dann den Fehlerfall sauber behandeln.
+**Lage:** `setup.py` ist bereits richtig gestuft: `install_requires=["pyyaml>=6.0"]`, dazu die Zusatzgruppen `standard`, `full`, `dev`. `requirements.txt` listet dagegen alles flach als wäre es Pflicht. Von den 13 dort genannten Paketen haben nur **drei** keine Referenz im ganzen Repository: `psutil`, `docker` und `sentence-transformers`. `uvicorn` wird lazy in `gateway/server.py` importiert und dort aufgerufen, `aiohttp` lazy in `core/state.py` und `llm/integration.py`, `vosk` und `pyaudio` lazy in `voice/listener.py` mit Verfügbarkeitsprüfung. `websockets` wird nicht importiert, aber von `release_acceptance` und `tests/test_release_cli_gateway.py` als Standardlaufzeit zugesichert; `httpx` braucht `fastapi.testclient` [GESICHERT, AST-Messung].
 
-**Nachbedingung:** Eine frische Umgebung mit ausschließlich den Pflichtabhängigkeiten startet BotBoy und beantwortet eine Statusanfrage.
+**Ausgeführte Aktion:** `requirements.txt` verweist auf die Zusatzgruppen in `setup.py` und installiert nur die Kernanforderung. Aus den Gruppen entfernt wurden genau die drei referenzlosen Pakete `psutil`, `docker` und `sentence-transformers`. `uvicorn`, `websockets`, `aiohttp` und `httpx` bleiben in `standard`; `vosk` und `pyaudio` bleiben in `full`. Jeder verbliebene Eintrag trägt im Kommentar seine Importstelle oder die Zusicherung, die ihn hält. `dev` enthält jetzt die Standard-Laufzeit sowie `build`, `wheel` und `setuptools`, weil die dokumentierte Testumgebung sonst nicht lauffähig ist. Die README verweist auf `pip install .` für den Kern und `pip install ".[dev]"` für die Suite.
 
-**Verifikation:** `python -m venv` ohne Zusatzgruppen, Import des Pakets, Start, Statusabfrage · `pip install .` ohne Gruppen zieht kein PyTorch nach, geprüft über die Paketliste nach der Installation.
+**Nicht ausgeführt und bewusst verschoben:** `pyyaml` aus `install_requires` in eine eigene Gruppe zu verschieben. Das ändert das Laden der Konfiguration an drei Stellen und gehört in einen eigenen Schnitt (im Rückstand vermerkt).
+
+**Nachbedingung:** Eine frische Umgebung mit ausschließlich den Pflichtabhängigkeiten startet BotBoy. Eine frische Umgebung mit `pip install ".[dev]"` lässt die vollständige Suite grün durchlaufen.
+
+**Verifikation (durchgeführt):** `pip install ".[dev]"` in einer frischen Umgebung ergibt **394 bestanden, 0 übersprungen** — die beiden Build-Abnahmetests laufen damit erstmals wirklich mit statt still übersprungen zu werden; der dokumentierte Weg `unittest discover -s tests` ist ebenfalls grün; kein PyTorch in der Paketliste; Integrationsprüfung grün auf Windows und Linux mit Python 3.10 und 3.13.
 
 **Warum zuerst:** Es ist der billigste Schnitt mit der größten Außenwirkung. Wer heute `requirements.txt` folgt, installiert PyTorch samt Systembibliotheken für Funktionen, die der Code nicht aufruft.
 
@@ -752,7 +756,7 @@ Neun Schnitte. Jeder ist als Vorbedingung, Aktion, Nachbedingung formuliert, dam
 | `memory/graph.py` | 62 | **entfernen** | Graphspeicher ohne Messnachweis; Anbieter sind 2026 davon abgerückt |
 | `core/state.py`, `core/sync.py` | 93 | **prüfen** | Zustandsführung |
 | `consensus.py` | 63 | **entfernen** | ohne Nutzung; Wiederaufnahme mit F8 |
-| `voice/listener.py` | 88 | **entfernen** | `vosk`/`pyaudio` nicht importiert, 0 % |
+| `voice/listener.py` | 88 | **entfernen** | 0 % Abdeckung; nimmt die optionalen Fremdabhängigkeiten `vosk` und `pyaudio` mit |
 | `llm/context.py` | 46 | **entfernen** | ohne Nutzung |
 | `release_smoke.py` | 93 | **entfernen** | `release_acceptance.py` deckt den Zweck |
 | `a2a_pilot.py` | 273 | **entfernen** | widerspricht P1; MCP deckt Fremdagenten (F11) |
