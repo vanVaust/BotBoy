@@ -24,10 +24,22 @@ Zusaetzlich liegen die fuer installierte Pakete benoetigten Runtime-Ressourcen g
 
 ## Installation
 
+Kern (Standardbibliothek plus PyYAML):
+
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install .
 ```
+
+Zum Ausfuehren der Testsuite zusaetzlich die Standard-Laufzeit, weil elf
+Testmodule `fastapi` auf Modulebene importieren:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install ".[dev]"
+```
+
+Welche optionale Abhaengigkeit wofuer da ist und wo sie importiert wird, steht
+als Kommentar bei `extras_require` in `setup.py`.
 
 ## Start
 

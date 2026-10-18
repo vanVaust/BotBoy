@@ -61,6 +61,29 @@ was tatsächlich geschah, zeigt `git log`. Es wird hier nicht rückwirkend erfun
 - Die Git-Historie ist nicht auf Geheimnisse geprüft; der aktuelle Stand ist
   sauber (V2, M4).
 
+### Korrigiert nach automatischem Review von PR #2
+
+- **Die dokumentierte Entwicklungsumgebung war nicht lauffähig.** `[dev]` enthielt
+  nur Testwerkzeuge, während elf Testmodule `fastapi` auf Modulebene importieren;
+  wer der README oder `pip install -r requirements.txt` folgte, bekam einen
+  Einsammelfehler statt einer grünen Suite. `[dev]` umfasst jetzt die
+  Standard-Laufzeit sowie `build`, `wheel` und `setuptools` — letztere drei, weil
+  `tests/test_release_build_install.py` das Projekt baut und installiert und ohne
+  sie nicht übersprungen, sondern rot wird. Nachgewiesen in einer frischen
+  Umgebung: `pip install ".[dev]"` ergibt **394 bestanden, 0 übersprungen**. Die
+  beiden Build-Abnahmetests laufen damit erstmals wirklich mit, statt still
+  übersprungen zu werden.
+- **Abhängigkeitsmessung im Architekturdokument war zu niedrig.** Das zuerst
+  verwendete Suchmuster endete auf `[\.\s]` und übersah damit jeden Import am
+  Zeilenende, unter anderem `import uvicorn` in `gateway/server.py` und
+  `import aiohttp` in `core/state.py` und `llm/integration.py`. Korrekt sind
+  **17 von 151** Paketmodulen mit Fremdimport, nicht 2 von 291. Neun Aussagen in
+  `ARCHITEKTUR.md` sind entsprechend berichtigt, das Messverfahren ist auf eine
+  Begehung des Syntaxbaums umgestellt. **Am Inhalt von R1 ändert das nichts:**
+  `psutil`, `docker` und `sentence-transformers` haben auch nach der genauen
+  Messung null Importe. Berührt ist die Begründung von A1 — mit dem FastAPI-Pfad
+  wird das Paket **nicht** abhängigkeitsfrei, `aiohttp` und `yaml` bleiben.
+
 ### Prüfstand
 
 - Suite vor dem Aufräumen: 395 bestanden, 2 übersprungen, 74 Subtests.

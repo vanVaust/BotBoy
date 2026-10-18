@@ -17,7 +17,7 @@
 
 - **Der Code ist deutlich besser als sein Ruf und deutlich schlechter dokumentiert.** Gemessen: 291 Python-Module, 47.330 Zeilen, 87 Testdateien, **395 Tests grün in 35 s**, **64 % Anweisungsabdeckung** (15.818 Anweisungen, 5.670 nicht abgedeckt). Die Behauptung des Vorberichts, das System sei nie real geprüft, ist für dieses Repo **widerlegt** [GESICHERT].
 - **Das eigentliche Problem ist nicht fehlende Prüfung, sondern falsch verteilte Prüfung.** `botboy/policy.py` — der Entscheidungspunkt, auf dem das ganze Sicherheitsversprechen ruht — hat **0 % Abdeckung** (62 Anweisungen). Ebenso 0 %: `security/sandbox.py`, `security/tenant_sandbox.py`. Das größte Sicherheitsmodul `gateway/queue_security.py` (263 Anweisungen) liegt bei 46 % [GESICHERT].
-- **Das Stdlib-Prinzip ist fast schon erfüllt, nur weiß es niemand.** Von 291 Modulen importieren **2** Fremdcode (`fastapi`, über `find_spec` abgesichert); `yaml` wird an 3 Stellen lazy im Funktionskörper geladen. `requirements.txt` listet dagegen `docker`, `sentence-transformers`, `vosk`, `pyaudio`, `uvicorn`, `websockets`, `aiohttp`, `httpx`, `psutil` — im Paket nicht importiert. Die Abhängigkeitsliste beschreibt eine Software, die es nicht gibt [GESICHERT].
+- **Die Abhängigkeitsliste beschreibt eine Software, die es nicht gibt — aber weniger drastisch als zunächst gemessen.** Von den **151** Modulen des Pakets `botboy/` importieren **17** Fremdcode: `fastapi` (10 Module), `yaml` (3), `aiohttp` (2), `uvicorn`, `vosk`, `pyaudio` (je 1), überwiegend lazy im Funktionskörper. Ohne jede Referenz im Repository sind nur **drei** der 13 in `requirements.txt` gelisteten Pakete: `psutil`, `docker`, `sentence-transformers`. `setup.py` war bereits korrekt gestuft, falsch war allein die flache Liste [GESICHERT, AST-Messung].
 - **Zwei Gateways, und der prinzipientreue ist der besser geprüfte.** `simple_*` (12 Module, 1.610 Anweisungen, reines `http.server`) liegt bei **79 %**, `routes_* + server.py` (FastAPI, 1.173 Anweisungen) bei **75 %**. Die Entfernung des FastAPI-Pfads kostet damit weniger als sie bringt [GESICHERT].
 - **Vier echte Verstöße gegen das Zielkonzept**, jeder mit klarem Schnitt: **neun** getrennte SQLite-Dateien statt einer (A2); **kein** fortgeschriebenes Hash-Ketten-Audit, HMAC existiert nur in Auth/CSRF/Secrets (A3); `enable_auth` steht per Vorgabe auf **`False`** (A7); **75** `scripts/`-Verzeichnisse in 105 Skills, ausgeführt über `subprocess` — gegen „kein Shell-Werkzeug" (A6). `shell=True` kommt null mal vor, das ist richtig gemacht [GESICHERT].
 - **Aufräumen bringt sofort messbaren Gewinn.** `botboy/bundled/` und `botboy/bundled_assets/` sind **byte-identische** Bäume mit je 131 Dateien — ein ganzer Baum ist ersatzlos entfernbar. Dazu 11 Planungsdokumente auf oberster Ebene mit 4.172 Zeilen und überlappenden Namen, während `docs/` nur 2 Dateien enthält, plus `scratch_test.py` im Wurzelverzeichnis, das ein echtes Testmodul dupliziert [GESICHERT].
@@ -38,12 +38,14 @@ Alle Ist-Zahlen in Kapitel 2 stammen aus eigenen Messungen am geklonten Repo, ni
 | Größe | Verfahren |
 |---|---|
 | Dateizahl, Zeilen | `find` plus `wc -l` über `*.py`, ohne `.git` |
-| Fremdabhängigkeiten | `grep` auf `^\s*(from\|import)\s+<paket>` über alle Module, gegen `requirements.txt` abgeglichen |
+| Fremdabhängigkeiten | Begehung des Syntaxbaums (`ast.walk`) über alle Module des Pakets, jeder `Import`- und `ImportFrom`-Knoten gegen `sys.stdlib_module_names` geprüft, gegen `requirements.txt` abgeglichen |
 | Testergebnis | `python3 -m pytest -q` nach Installation von `pytest`, `fastapi`, `httpx`, `pyyaml` |
 | Abdeckung | `python3 -m coverage run --source=botboy -m pytest`, dann `coverage report` |
 | Duplikate | `diff -rq` über die beiden `bundled`-Bäume |
 | Datenbanken | `grep` auf `sqlite3.connect` und auf `*.db`-Literale, plus Lesen von `botboy/db_mixin.py` |
 | Skript-Oberfläche | Zählung der `SKILL.md`-Dateien und der `scripts/`-Verzeichnisse |
+
+**Korrektur am eigenen Messverfahren (18.10.2026).** Die Fremdabhängigkeiten wurden zunächst mit einem Suchmuster erhoben, das auf `[\.\s]` endete. Ein `import x` am Zeilenende hat danach kein Zeichen mehr, auf das das Muster passt, also blieb jeder so geschriebene Import unentdeckt — unter anderem `import uvicorn` in `gateway/server.py` und `import aiohttp` in `core/state.py` und `llm/integration.py`. Das Ergebnis „2 von 291 Modulen" war dadurch zu niedrig. Die Messung ist auf eine Begehung des Syntaxbaums umgestellt; die richtige Zahl ist **17 von 151** Paketmodulen. Alle Abhängigkeitsaussagen in diesem Dokument tragen den korrigierten Wert. **Methodische Folge:** Ein zeilenbasiertes Suchmuster ist für die Frage „wird X importiert?" ungeeignet, weil Importe in Funktionskörpern, mit Alias oder am Zeilenende systematisch durchfallen. Für diese Frage gilt künftig der Syntaxbaum als Messverfahren.
 
 Evidenzstufen wie im Vorbericht: **[GESICHERT]** eigene Messung, Primärquelle oder Standard · **[ETABLIERT]** Sekundärquelle oder breit akzeptiertes Fachwissen · **[HERSTELLERANGABE]** · **[HYPOTHESE]** eigene Schlussfolgerung oder Schätzung · **[UNVERIFIZIERT]**.
 
@@ -82,7 +84,7 @@ Der Entwickler schreibt den Code nicht selbst. Das ist keine Nebenbemerkung, son
 
 | Größe | Wert | Evidenz |
 |---|---|---|
-| Python-Module | 291 | [GESICHERT] |
+| Python-Dateien im Repository | 291 (davon Paket `botboy/`: 151) | [GESICHERT] |
 | Python-Zeilen | 47.330 | [GESICHERT] |
 | Markdown-Dateien | 256 | [GESICHERT] |
 | YAML-Dateien | 75 | [GESICHERT] |
@@ -90,7 +92,7 @@ Der Entwickler schreibt den Code nicht selbst. Das ist keine Nebenbemerkung, son
 | Testergebnis | 395 bestanden, 2 übersprungen, 74 Subtests, 35 s | [GESICHERT] |
 | Abdeckung gesamt | 64 % (15.818 Anweisungen, 5.670 nicht abgedeckt) | [GESICHERT] |
 | Version | `0.6.0-dev` in `setup.py` und `botboy/__init__.py` | [GESICHERT] |
-| Module mit Fremdimport | 2 von 291 | [GESICHERT] |
+| Paketmodule mit Fremdimport | 17 von 151 | [GESICHERT] |
 | Dateien über 800 Zeilen | 5 | [GESICHERT] |
 | Dateien unter 60 Zeilen | 66 | [GESICHERT] |
 
@@ -123,8 +125,12 @@ Ein Fachthema verteilt sich auf sechs Module ohne erkennbare Grenze: `tasks.py` 
 |---|---|---|
 | `pyyaml` (als Pflicht geführt) | 3 lazy Importe in Funktionskörpern (`skills/manager.py`, `skills/ldf.py`, `core/config.py`) | weiche Option, nicht Pflicht |
 | `fastapi` | 4 Stellen in `routes_ws.py`, `routes_tasks.py`, `routes_core.py`, `errors.py` (dort über `find_spec` abgesichert) | nur der FastAPI-Pfad |
-| `uvicorn`, `websockets`, `aiohttp`, `httpx`, `psutil` | kein Import gefunden | Liste ist falsch |
-| `docker`, `sentence-transformers`, `vosk`, `pyaudio` | kein Import gefunden | Liste ist falsch |
+| `uvicorn` | lazy in `gateway/server.py`, dort auch aufgerufen | echte Abhängigkeit des FastAPI-Pfads |
+| `aiohttp` | lazy in `core/state.py` und `llm/integration.py`, mit Rückfall | echte Abhängigkeit, **unabhängig** vom FastAPI-Pfad |
+| `vosk`, `pyaudio` | lazy in `voice/listener.py` mit Verfügbarkeitsprüfung | echte, optionale Abhängigkeit |
+| `websockets` | kein Import; von `release_acceptance` und `tests/test_release_cli_gateway.py` als Standardlaufzeit zugesichert | Zusicherung ohne Nutzung |
+| `httpx` | kein Import im Paket; von `fastapi.testclient` benötigt | Testabhängigkeit |
+| `psutil`, `docker`, `sentence-transformers` | kein Import im ganzen Repository | Liste ist falsch |
 
 `sentence-transformers` zieht PyTorch nach, `vosk` und `pyaudio` brauchen Systembibliotheken. Wer der Liste folgt, installiert ein Vielfaches des Nötigen für Funktionen, die der Code nicht aufruft. Das ist zugleich das billigste Aufräumergebnis des ganzen Vorhabens [GESICHERT].
 
@@ -260,7 +266,7 @@ Jede Zeile: Vorgabe aus dem Zielkonzept, gemessener Zustand im Repo, Urteil, Auf
 | P5 | Fortgeschriebenes Hash-Ketten-Audit | HMAC nur in Auth, CSRF, Secrets; keine Verkettung, kein Kettenkopf, kein Anker | **offen** | A3: Kettentabelle, geschlüsselte Commitments, externer Anker |
 | P6 | Das System verleiht sich nie selbst Rechte | `authorization_version` im Cache-Bereich vorhanden; keine Selbstvergabe gefunden | **erfüllt** | halten; A4 ergänzt den Test, der es festschreibt |
 | P7 | Fail closed | `enable_auth` steht per Vorgabe auf `False`, Suite grün mit abgeschalteter Authentisierung | **Konflikt** | A7: sichere Vorgaben, Starterweigerung, Vorgabetest |
-| P8 | Standardbibliothek zuerst | 2 von 291 Modulen mit Fremdimport; `requirements.txt` listet 13 Pakete, 9 davon ohne Import | **teilweise** | A1 entfernt `fastapi`; A8 stuft Abhängigkeiten; `requirements.txt` auf Wirklichkeit kürzen |
+| P8 | Standardbibliothek zuerst | 17 von 151 Paketmodulen mit Fremdimport (`fastapi` 10, `yaml` 3, `aiohttp` 2, `uvicorn`/`vosk`/`pyaudio` je 1); 3 der 13 gelisteten Pakete ohne jede Referenz | **teilweise** | A1 entfernt `fastapi` und `uvicorn`; `aiohttp` und `yaml` bleiben und brauchen eigene Entscheidungen; `requirements.txt` auf Wirklichkeit kürzen |
 | P9 | Kein Shell-Werkzeug | `shell=True` null Treffer (gut), aber 75 `scripts/`-Verzeichnisse über `subprocess` gestartet | **Konflikt** | A6: drei Stufen, Ziel null Skripte im ausgelieferten Paket |
 | P10 | Eine SQLite-Datei | Neun Dateien; Zugriff zentral über `_SQLiteMixin` | **Konflikt** | A2: eine Datei, ein Schema, ein Migrationslauf |
 | P11 | Lernschleife nur mit menschlicher Übernahme | `reflection_memory.py` 44 %, `security/replay_harness.py` 62 %, `replay_diff.py` 85 % vorhanden; Übernahmeweg nicht belegt | **teilweise** | F5: Vorschlag, Wirkungsmessung per Replay, Übernahme durch Menschen |
@@ -300,7 +306,7 @@ Acht Entscheidungen, jede mit Alternativen, Trade-off-Matrix und maschineller Ab
 
 **Entscheidung:** Die `simple_*`-Familie wird der einzige HTTP-Pfad. `botboy/gateway/server.py`, `routes_core.py`, `routes_tasks.py`, `routes_ws.py`, `routes_auth.py`, `routes_fleet.py`, `routes_orgs.py` und der `fastapi`-Zweig in `errors.py` fallen weg. Die 11 Sicherheitstestmodule, die heute über `fastapi.testclient` laufen, werden auf den Standardbibliotheks-Pfad portiert, **bevor** der FastAPI-Pfad gelöscht wird.
 
-**Begründung:** Der prinzipientreue Pfad ist mit 79 % gegen 75 % der besser geprüfte [GESICHERT]. Der Zweibetrieb verdoppelt die Angriffsfläche und erzeugt die gefährlichste Form von Sicherheitsarbeit: Grenzen werden auf dem Pfad geprüft, der nicht ausgeliefert werden soll. Und `fastapi` ist der einzige harte Fremdimport im Paket, also fällt mit ihm P8 von „teilweise" auf „erfüllt".
+**Begründung:** Der prinzipientreue Pfad ist mit 79 % gegen 75 % der besser geprüfte [GESICHERT]. Der Zweibetrieb verdoppelt die Angriffsfläche und erzeugt die gefährlichste Form von Sicherheitsarbeit: Grenzen werden auf dem Pfad geprüft, der nicht ausgeliefert werden soll. Mit dem Pfad entfallen zwei der sechs Fremdabhängigkeiten, `fastapi` und `uvicorn` — die mit 10 betroffenen Modulen größte Gruppe. **P8 ist damit nicht erfüllt:** `aiohttp` in `core/state.py` und `llm/integration.py` sowie `yaml` in drei Modulen bleiben und brauchen je eine eigene Entscheidung.
 
 | Option | Prinzipien | Sicherheit | Aufwand | Latenz | Wartung | Funktionsverlust |
 |---|---|---|---|---|---|---|
@@ -591,7 +597,7 @@ Zuordnung der größten Bestandsteile. Vollständige Zuordnung aller 291 Module 
 | Eigenschaft | Heute | Ziel | Richtung |
 |---|---|---|---|
 | Angriffsfläche HTTP | zwei Pfade, 2.783 Anweisungen | ein Pfad, 1.610 | besser |
-| Fremdabhängigkeit im Kern | `fastapi` | keine | besser |
+| Fremdabhängigkeiten im Paket | `fastapi`, `uvicorn`, `aiohttp`, `yaml`, `vosk`, `pyaudio` | `aiohttp`, `yaml` (plus optional Sprache) | besser, nicht null |
 | Transaktion über Fachbereiche | unmöglich | gegeben | besser |
 | Manipulationserkennung im Protokoll | keine | Kette plus Anker | besser |
 | Schreibdurchsatz | neun unabhängige Schreiber | ein Schreiber | schlechter, beherrschbar |
@@ -791,7 +797,7 @@ Neun Schnitte. Jeder ist als Vorbedingung, Aktion, Nachbedingung formuliert, dam
 |---|---|---|---|
 | Python-Zeilen | 47.330 | 30.000 bis 34.000 | R2 doppelter Baum, R5 rund 1.173 Anweisungen, R6 rund 900 Anweisungen, R9 Skriptwegfall [HYPOTHESE] |
 | Module | 291 | 180 bis 210 | R2, R5, R6, R7-Bündelung [HYPOTHESE] |
-| Harte Fremdabhängigkeiten | 1 (`fastapi`) plus `pyyaml` als Pflicht | 0 | R1, R5 [GESICHERT in der Richtung] |
+| Fremdabhängigkeiten im Paket | 6 (`fastapi`, `uvicorn`, `aiohttp`, `yaml`, `vosk`, `pyaudio`), `pyyaml` als Pflicht deklariert | 2 im Kern (`aiohttp`, `yaml`) plus optionale Sprache | R1, R5 [GESICHERT in der Richtung] |
 | HTTP-Pfade | 2 | 1 | R5 [GESICHERT] |
 | Datenbankdateien | 9 | 1 | R8 [GESICHERT in der Richtung] |
 | Markdown im Wurzelverzeichnis | 11 Pläne, 4.172 Zeilen | 6 Dateien, ein gültiger Plan | R4 [GESICHERT] |
@@ -903,7 +909,7 @@ Alle rechtlichen Punkte sind Orientierung, keine Rechtsberatung.
 |---|---|---|
 | „nie real gelaufen", nur gegen Nachbildungen geprüft | 395 Tests grün, 2 übersprungen, 74 Subtests, 35 s | **widerlegt** [GESICHERT] |
 | Testlage unbekannt, keine Zahlen | 64 % Abdeckung, 15.818 Anweisungen | **ersetzt durch Messung** |
-| Stdlib-only als Prinzip, noch nicht geprüft | 2 von 291 Modulen mit Fremdimport; `setup.py` korrekt gestuft; `requirements.txt` falsch | **präzisiert** |
+| Stdlib-only als Prinzip, noch nicht geprüft | 17 von 151 Paketmodulen mit Fremdimport; `setup.py` korrekt gestuft; `requirements.txt` falsch | **präzisiert, nachdem die erste Messung zu niedrig war (siehe 1.1)** |
 | „breit gebaut, an zwei Tagen veröffentlicht" | Repo zeigt Pläne von V1 bis V7 und laufende Commits; die Zweitagesliste stammt aus ARCHITEKTUR.md, nicht aus dem Repo | **gegenstandslos für dieses Repo** |
 | Erste Maßnahme: echter Modell-Lauf (O-01) | bleibt gültig, aber nicht als Erstmaßnahme: der Entscheidungspunkt mit 0 % Abdeckung sticht | **neu eingeordnet** |
 | Replay-Prüfstand bauen (O-12) | `security/replay_harness.py` und `replay_diff.py` existieren, 62 % und 85 % | **teilweise schon gebaut** |

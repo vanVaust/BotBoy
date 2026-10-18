@@ -1,13 +1,18 @@
 # BotBoy declares its dependencies in setup.py, not here.
 #
-# The core runs on the Python standard library plus PyYAML:
+# Core — standard library plus PyYAML:
 #     pip install .
 #
-# Optional feature sets (see extras_require in setup.py for what each one is for):
+# Running the test suite — needs the standard runtime as well, because eleven
+# test modules import fastapi at module scope:
+#     pip install ".[dev]"
+#
+# Other optional feature sets (see extras_require in setup.py for what each
+# entry is for and where it is imported):
 #     pip install ".[standard]"   FastAPI gateway path
 #     pip install ".[full]"       voice input
-#     pip install ".[dev]"        test and lint tooling
 #
-# This file exists only so that `pip install -r requirements.txt` still works.
-# It installs the core requirements and nothing else.
+# This file exists only so that `pip install -r requirements.txt` keeps working.
+# It installs the core requirement and nothing else, so it is NOT enough to run
+# the tests.
 pyyaml>=6.0
