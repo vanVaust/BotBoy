@@ -47,17 +47,26 @@ setup(
     python_requires=">=3.10",
     install_requires=["pyyaml>=6.0"],
     extras_require={
+        # Each entry below is imported somewhere, or asserted as part of the
+        # standard-runtime contract by release_acceptance.check_standard_runtime
+        # and tests/test_release_cli_gateway.py. Anything that is neither does
+        # not belong here: a dependency nobody imports is a promise about
+        # software that does not exist.
         "standard": [
             # 0.139.x is the latest FastAPI line before the OpenAPI/ForwardRef
             # regression observed with BotBoy's postponed route annotations.
             "fastapi>=0.109.0,<0.139.0",
+            # Lazily imported and invoked in botboy/gateway/server.py.
             "uvicorn[standard]>=0.27.0",
+            # Asserted by the standard-runtime check; retires with the FastAPI path.
             "websockets>=12.0",
             "aiohttp>=3.9.0",
+            # Required by fastapi.testclient.TestClient, which the gateway
+            # boundary tests use.
             "httpx>=0.26.0",
-            "psutil>=5.9.0",
         ],
-        "full": ["docker>=7.0.0", "sentence-transformers>=2.2.0", "vosk>=0.3.45", "pyaudio>=0.2.13"],
+        # Lazily imported with graceful degradation in botboy/voice/listener.py.
+        "full": ["vosk>=0.3.45", "pyaudio>=0.2.13"],
         "dev": ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "bandit>=1.7.0", "black>=24.0.0"],
     },
     entry_points={
