@@ -1,3 +1,10 @@
+> **Historisch — nicht mehr gültig.**
+> Abgelöst durch `ARCHITEKTUR.md` vom 18.10.2026. Dieses Dokument bleibt
+> als Quelle der Entstehungsgeschichte erhalten; noch offene Vorhaben daraus
+> stehen in `docs/backlog.md`. Zahlen und Zusagen hier sind nicht geprüft.
+
+---
+
 # BOTBOY V2 V3 Execution Backlog
 
 ## Purpose
