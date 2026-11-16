@@ -42,7 +42,7 @@ class ExecutionTenantApprovalIntegrationTests(unittest.TestCase):
         self.bot = BotBoy(config)
         self.assertTrue(self.bot.initialize())
         self.app = create_app(self.bot, host="127.0.0.1", port=8765)
-        self.client = TestClient(self.app)
+        self.client = TestClient(self.app, base_url="http://localhost:8765")
         self.client.__enter__()
         self.headers = {"Authorization": "Bearer " + self.app.state.bot_auth.create_pair(
             "alice", ["user"], org_id="tenant-a").access_token}

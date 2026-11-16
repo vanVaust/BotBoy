@@ -40,6 +40,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from botboy.gateway.request_boundary import check_request_boundary, docs_enabled
 from botboy.gateway.security import TrustedProxyHeaderMiddleware, default_bind_host, resolve_cors_origins, validate_remote_gateway_readiness
 from botboy.gateway.app_context import GatewayAppContext
 from botboy.gateway.dashboard_payload import enrich_dashboard_payload as shared_enrich_dashboard_payload
@@ -135,8 +136,9 @@ def create_app(bot, *, host: str = default_bind_host(), port: int = 8765) -> Any
         title="BotBoy API",
         description="BotBoy AI Agent Framework REST API",
         version=getattr(bot, "VERSION", "0.6.0-dev"),
-        docs_url="/docs",
-        redoc_url="/redoc",
+        docs_url="/docs" if docs_enabled() else None,
+        redoc_url="/redoc" if docs_enabled() else None,
+        openapi_url="/openapi.json" if docs_enabled() else None,
         lifespan=lifespan,
     )
 
@@ -172,7 +174,9 @@ def create_app(bot, *, host: str = default_bind_host(), port: int = 8765) -> Any
             # If the user has the CSRF cookie, they MUST provide the header.
             if cookie_token:
                 if not verify_csrf_token(header_token, cookie_token):
-                    raise HTTPException(status_code=403, detail="CSRF token validation failed")
+                    from starlette.responses import JSONResponse
+
+                    return JSONResponse({"error": "CSRF token validation failed"}, status_code=403)
             
             # For now, if no cookie is present, we pass through (assuming it's a CLI/API client).
             
@@ -180,6 +184,27 @@ def create_app(bot, *, host: str = default_bind_host(), port: int = 8765) -> Any
         return response
 
     app.add_middleware(TrustedProxyHeaderMiddleware)
+
+    @app.middleware("http")
+    async def enforce_request_boundary(request: Request, call_next):
+        from starlette.responses import JSONResponse
+
+        content_length = request.headers.get("content-length", "")
+        has_body = (content_length.isdigit() and int(content_length) > 0) or bool(
+            request.headers.get("transfer-encoding")
+        ) or (request.method in {"POST", "PUT", "PATCH"} and not content_length)
+        decision = check_request_boundary(
+            method=request.method,
+            host_header=request.headers.get("host"),
+            origin=request.headers.get("origin"),
+            content_type=request.headers.get("content-type"),
+            has_body=has_body,
+            bind_host=host,
+            port=port,
+        )
+        if not decision.allowed:
+            return JSONResponse(decision.to_dict(), status_code=decision.status)
+        return await call_next(request)
 
     config = getattr(bot, "config", None)
     security = getattr(config, "security", None)

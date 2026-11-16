@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
+from botboy.gateway.request_boundary import check_request_boundary
 from botboy.gateway.security import default_bind_host, origin_allowed, validate_remote_gateway_readiness
 from botboy.gateway.secrets import PrincipalStore, SecretStore
 from botboy.gateway.simple_handler_surface import SimpleHandlerSurface
@@ -67,8 +68,29 @@ class SimpleAPIHandler(SimpleHandlerSurface, BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
         pass
 
+    def _enforce_boundary(self, method: str) -> bool:
+        try:
+            content_length = int(self.headers.get("Content-Length", 0) or 0)
+        except ValueError:
+            content_length = 0
+        decision = check_request_boundary(
+            method=method,
+            host_header=self.headers.get("Host"),
+            origin=self.headers.get("Origin"),
+            content_type=self.headers.get("Content-Type"),
+            has_body=content_length > 0 or bool(self.headers.get("Transfer-Encoding")),
+            bind_host=self.server_host,
+            port=self.server_port,
+        )
+        if decision.allowed:
+            return True
+        self._json(decision.to_dict(), decision.status)
+        return False
+
     def do_GET(self) -> None:
         self._assign_request_id()
+        if not self._enforce_boundary("GET"):
+            return
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
         params = parse_qs(parsed.query)
@@ -98,6 +120,8 @@ class SimpleAPIHandler(SimpleHandlerSurface, BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         self._assign_request_id()
+        if not self._enforce_boundary("POST"):
+            return
         if not self._verify_csrf():
             return
             
@@ -129,6 +153,8 @@ class SimpleAPIHandler(SimpleHandlerSurface, BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         self._assign_request_id()
+        if not self._enforce_boundary("DELETE"):
+            return
         if not self._verify_csrf():
             return
             
@@ -142,6 +168,8 @@ class SimpleAPIHandler(SimpleHandlerSurface, BaseHTTPRequestHandler):
 
     def do_OPTIONS(self) -> None:
         self._assign_request_id()
+        if not self._enforce_boundary("OPTIONS"):
+            return
         self.send_response(200)
         self._cors_headers()
         self.send_header("Content-Length", "0")

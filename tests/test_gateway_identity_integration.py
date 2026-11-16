@@ -36,7 +36,7 @@ class GatewayIdentityIntegrationTest(unittest.TestCase):
         self.store.upsert_principal("alice", "password", "admin", "tenant-a")
         self.store.upsert_principal("bob", "password", "user", "tenant-b")
         self.store.upsert_principal("root", "password", "system", "platform")
-        self.client = TestClient(self.app)
+        self.client = TestClient(self.app, base_url="http://localhost:8765")
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
 

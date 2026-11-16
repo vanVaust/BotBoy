@@ -108,7 +108,7 @@ class ReleaseCliGatewayTest(unittest.TestCase):
     def test_remote_readiness_allows_nonlocal_with_auth_secret(self) -> None:
         config = BotBoyConfig()
         config.security.enable_auth = True
-        config.security.jwt_secret = "x" * 32
+        config.security.jwt_secret = "unit-test-secret-9f3a7c1d5e2b8a46"
         config.security.rate_limit_enabled = True
         report = build_remote_readiness_report(config, host="0.0.0.0", port=8765)
         self.assertTrue(report["ok"], report)
@@ -117,7 +117,7 @@ class ReleaseCliGatewayTest(unittest.TestCase):
     def test_remote_readiness_blocks_wildcard_cors_for_nonlocal_bind(self) -> None:
         config = BotBoyConfig()
         config.security.enable_auth = True
-        config.security.jwt_secret = "x" * 32
+        config.security.jwt_secret = "unit-test-secret-9f3a7c1d5e2b8a46"
         with patch.dict(os.environ, {"BOTBOY_CORS_ALLOW_ORIGINS": "*"}):
             report = build_remote_readiness_report(config, host="0.0.0.0", port=8765)
         self.assertFalse(report["ok"])

@@ -13,6 +13,8 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
+from botboy.gateway.security import secret_strength_problem
+
 
 @dataclass(frozen=True)
 class AuthPrincipal:
@@ -83,6 +85,9 @@ class JWTAuth:
             raise ValueError("JWT secret must be configured")
         if len(secret) < self.MIN_SECRET_LEN:
             raise ValueError(f"JWT secret must be at least {self.MIN_SECRET_LEN} characters")
+        problem = secret_strength_problem(secret)
+        if problem:
+            raise ValueError(f"JWT secret rejected: {problem}")
         self._secret = secret.encode()
         self._revocation_store = revocation_store
         self._local_revoked_jtis = set()

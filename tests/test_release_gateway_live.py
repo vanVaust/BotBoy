@@ -110,7 +110,7 @@ class ReleaseGatewayLiveTest(unittest.TestCase):
         bot = self._make_bot()
         task_id, trace_run_id = self._seed_task_store(bot)
         app = create_app(bot, host=default_bind_host(), port=8765)
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://localhost:8765") as client:
             health = client.get("/health")
             status = client.get("/api/status")
             skills = client.get("/api/skills")
@@ -222,8 +222,8 @@ class ReleaseGatewayLiveTest(unittest.TestCase):
         self.assertIn("tasks", scheduler.json())
         self.assertEqual(cors.headers.get("access-control-allow-origin"), "http://127.0.0.1:8765")
 
-        with TestClient(app) as client:
-            with client.websocket_connect("/ws/chat") as websocket:
+        with TestClient(app, base_url="http://localhost:8765") as client:
+            with client.websocket_connect("/ws/chat", headers={"Host": "localhost:8765"}) as websocket:
                 websocket.send_text("status")
                 ws_message = websocket.receive_json()
 

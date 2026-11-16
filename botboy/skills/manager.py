@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import base64
+import fnmatch
 import glob
 import hashlib
 import json
@@ -16,6 +17,7 @@ import time
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -587,18 +589,79 @@ class BuiltinSkills:
         except Exception as e:
             return {"success": False, "output": f"Web search unavailable: {e}", "type": "web"}
 
+    _FILE_SEARCH_MAX_RESULTS = 20
+
+    @staticmethod
+    def _validate_file_search_pattern(pattern: str) -> Optional[str]:
+        normalized = pattern.replace("\\", "/")
+        if "\x00" in normalized or len(normalized) > 256:
+            return "Invalid or overly long pattern."
+        if normalized.startswith(("/", "~")) or re.match(r"^[A-Za-z]:", normalized):
+            return "Only patterns relative to the home directory are allowed."
+        if any(part == ".." for part in normalized.split("/")):
+            return "Parent-directory segments ('..') are not allowed."
+        return None
+
+    @staticmethod
+    def _file_search_matches(relative_parts: tuple[str, ...], pattern_parts: tuple[str, ...]) -> bool:
+        """Match **/<pattern> without crossing path separators or hidden dirs."""
+        patterns = ("**",) + pattern_parts
+
+        @lru_cache(maxsize=None)
+        def match(path_idx: int, pattern_idx: int) -> bool:
+            if pattern_idx == len(patterns):
+                return path_idx == len(relative_parts)
+            part = patterns[pattern_idx]
+            if part == "**":
+                return match(path_idx, pattern_idx + 1) or (
+                    path_idx < len(relative_parts)
+                    and not relative_parts[path_idx].startswith(".")
+                    and match(path_idx + 1, pattern_idx)
+                )
+            return (
+                path_idx < len(relative_parts)
+                and (not relative_parts[path_idx].startswith(".") or part.startswith("."))
+                and fnmatch.fnmatchcase(relative_parts[path_idx], part)
+                and match(path_idx + 1, pattern_idx + 1)
+            )
+
+        return match(0, 0)
+
     @staticmethod
     async def file_search(command: str) -> dict:
-        """file search <pattern> — glob-based, restricted to home dir."""
+        """file search <pattern> — glob-like search confined to the home tree."""
         prefix_re = re.compile(r"^file\s+(search\s+)?", re.IGNORECASE)
         pattern = prefix_re.sub("", command).strip()
         if not pattern:
             return {"success": False, "output": "Usage: file search <pattern>", "type": "file"}
+        problem = BuiltinSkills._validate_file_search_pattern(pattern)
+        if problem:
+            return {"success": False, "output": f"File search rejected: {problem}", "type": "file"}
         try:
-            home = str(Path.home())
-            safe_pattern = pattern.replace("..", "").replace("//", "/")
-            search_path = os.path.join(home, "**", safe_pattern)
-            matches = glob.glob(search_path, recursive=True)[:20]
+            home = Path.home().resolve()
+            pattern_parts = tuple(part for part in pattern.replace("\\", "/").split("/") if part and part != ".")
+            matches: List[str] = []
+            # Do not traverse symlinked directories, including links that point
+            # outside home: filtering glob results *after* traversal is weaker.
+            for root, dirs, files in os.walk(home, followlinks=False):
+                directory = Path(root)
+                dirs[:] = sorted(
+                    name for name in dirs
+                    if not (directory / name).is_symlink()
+                    and not getattr(directory / name, "is_junction", lambda: False)()
+                )
+                for name in dirs + sorted(files):
+                    candidate = directory / name
+                    resolved = candidate.resolve()
+                    if not resolved.is_relative_to(home):
+                        continue
+                    relative = candidate.relative_to(home)
+                    if BuiltinSkills._file_search_matches(relative.parts, pattern_parts):
+                        matches.append(str(candidate))
+                        if len(matches) >= BuiltinSkills._FILE_SEARCH_MAX_RESULTS:
+                            break
+                if len(matches) >= BuiltinSkills._FILE_SEARCH_MAX_RESULTS:
+                    break
             if matches:
                 output = f"Found {len(matches)} file(s):\n" + "\n".join(matches)
             else:

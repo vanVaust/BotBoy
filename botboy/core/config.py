@@ -347,7 +347,10 @@ class BotBoyConfig:
 
     def has_jwt_secret(self) -> bool:
         """Check whether a usable JWT secret is configured."""
-        return bool(self.resolve_jwt_secret())
+        from botboy.gateway.security import secret_strength_problem
+
+        secret = self.resolve_jwt_secret()
+        return bool(secret) and not secret_strength_problem(secret)
 
     def resolve_bootstrap_secret(self) -> str:
         """Return the bootstrap login secret, if configured."""

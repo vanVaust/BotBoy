@@ -104,7 +104,7 @@ class ReleaseUiAcceptanceTest(unittest.TestCase):
         create_app = _load_fastapi_gateway_factory()
         TestClient = _load_fastapi_testclient()
         app = create_app(bot, host=default_bind_host(), port=8765)
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://localhost:8765") as client:
             fastapi_response = client.get("/api/dashboard")
 
         self.assertEqual(fastapi_response.status_code, 200, fastapi_response.text)
@@ -148,7 +148,7 @@ class ReleaseUiAcceptanceTest(unittest.TestCase):
         create_app = _load_fastapi_gateway_factory()
         TestClient = _load_fastapi_testclient()
         app = create_app(bot, host=default_bind_host(), port=8765)
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://localhost:8765") as client:
             index = client.get("/")
             dashboard = client.get("/static/dashboard.html")
             renderer = client.get("/static/control_center_renderer.js")
