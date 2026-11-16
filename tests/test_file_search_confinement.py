@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -60,6 +61,30 @@ class FileSearchConfinementTests(unittest.TestCase):
         self.assertNotIn("link.txt", names)
         for match in result["data"]["matches"]:
             self.assertTrue(Path(match).resolve().is_relative_to(self.home))
+
+    @unittest.skipUnless(os.name == "nt", "NTFS junctions exist only on Windows")
+    def test_never_enters_ntfs_junction_on_supported_python_versions(self) -> None:
+        junction = self.home / "junction"
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(junction), str(self.outside)],
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+        original_scandir = os.scandir
+
+        def guarded_scandir(path):
+            if Path(path) == junction:
+                raise AssertionError("file search traversed an NTFS junction")
+            return original_scandir(path)
+
+        with patch("os.scandir", side_effect=guarded_scandir):
+            result = search("*.txt", self.home)
+        self.assertTrue(result["success"], result)
+        self.assertEqual(
+            {Path(value).name for value in result["data"]["matches"]},
+            {"top.txt", "notes.txt"},
+        )
 
     def test_result_limit_and_hidden_filenames(self) -> None:
         for idx in range(40):

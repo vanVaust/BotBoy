@@ -645,11 +645,25 @@ class BuiltinSkills:
             # outside home: filtering glob results *after* traversal is weaker.
             for root, dirs, files in os.walk(home, followlinks=False):
                 directory = Path(root)
-                dirs[:] = sorted(
-                    name for name in dirs
-                    if not (directory / name).is_symlink()
-                    and not getattr(directory / name, "is_junction", lambda: False)()
-                )
+                safe_dirs: List[str] = []
+                for name in dirs:
+                    child = directory / name
+                    try:
+                        resolved_child = child.resolve()
+                        # Path.is_junction() is unavailable on Python 3.10.
+                        # Comparing the paths also catches NTFS junctions on
+                        # that supported runtime, before os.walk enters them.
+                        if (
+                            child.is_symlink()
+                            or getattr(child, "is_junction", lambda: False)()
+                            or resolved_child != child.absolute()
+                            or not resolved_child.is_relative_to(home)
+                        ):
+                            continue
+                    except (OSError, RuntimeError):
+                        continue
+                    safe_dirs.append(name)
+                dirs[:] = sorted(safe_dirs)
                 for name in dirs + sorted(files):
                     candidate = directory / name
                     resolved = candidate.resolve()
