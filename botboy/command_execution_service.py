@@ -48,7 +48,27 @@ class CommandExecutionService:
             "source": "local",
         }
 
-    def _approval_required(self, command: str) -> bool:
+    _DESTRUCTIVE_COMMANDS = ("history clear", "forget")
+
+    @classmethod
+    def is_destructive_command(cls, command: str) -> bool:
+        normalized = " ".join(str(command or "").lower().split())
+        return any(
+            normalized == name or normalized.startswith(name + " ")
+            for name in cls._DESTRUCTIVE_COMMANDS
+        )
+
+    @staticmethod
+    def _is_local_operator(approval_context: Optional[dict]) -> bool:
+        context = approval_context or {}
+        return context.get("source") == "local" and context.get("reason") == "local_default"
+
+    def _approval_required(self, command: str, approval_context: Optional[dict] = None) -> bool:
+        # Builtin history/memory deletion has no skill contract.  Keep the
+        # trusted CLI default, but block gateway-originated deletion without a
+        # real server-issued, scope-bound approval.
+        if self.is_destructive_command(command) and not self._is_local_operator(approval_context):
+            return True
         if not self.bot.skills:
             return False
         contract = self.bot.skills.get_contract_for_command(command.strip())
@@ -303,7 +323,7 @@ class CommandExecutionService:
                 raise AuthorizationError("roles_expanded")
             if not persisted.scopes.issuperset(security_context.scopes):
                 raise AuthorizationError("scopes_expanded")
-        if not check_approval or not self._approval_required(command):
+        if not check_approval or not self._approval_required(command, approval_context):
             return
         if store is None or task_ctx is None or not self._has_server_approval(approval_context):
             raise AuthorizationError("Server-issued approval required at final execution boundary")
@@ -607,7 +627,7 @@ class CommandExecutionService:
         else:
             command = stripped_command
 
-        if self._approval_required(command) and not self._has_server_approval(effective_approval_context):
+        if self._approval_required(command, effective_approval_context) and not self._has_server_approval(effective_approval_context):
             return self._authorization_failure(
                 "Server-issued approval required for this command.",
                 task_ctx=task_ctx,

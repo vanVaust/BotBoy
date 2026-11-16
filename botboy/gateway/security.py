@@ -129,6 +129,30 @@ def origin_allowed(origin: str, *, host: str = "", port: int = DEFAULT_GATEWAY_P
     return "*" in allowed or normalized in allowed
 
 
+_PLACEHOLDER_SECRET_MARKERS = (
+    "change_me", "change-me", "changeme", "replace_me", "replace-me", "replaceme",
+    "your_secret", "your-secret", "yoursecret", "placeholder", "do_not_use",
+    "dont_use", "insecure", "example",
+)
+_MIN_DISTINCT_SECRET_CHARS = 12
+
+
+def secret_strength_problem(secret: str) -> str:
+    """Reject known published placeholders and conspicuously weak JWT secrets.
+
+    This is a safety screen, not a way to prove entropy.  Operators must still
+    generate the secret using a cryptographically secure random generator.
+    """
+    value = str(secret or "").strip()
+    if len(value) < 32:
+        return "secret must be at least 32 characters"
+    if any(marker in value.lower() for marker in _PLACEHOLDER_SECRET_MARKERS):
+        return "secret looks like a documentation placeholder; generate a random one"
+    if len(set(value)) < _MIN_DISTINCT_SECRET_CHARS:
+        return f"secret has fewer than {_MIN_DISTINCT_SECRET_CHARS} distinct characters"
+    return ""
+
+
 def _config_auth_enabled(config: Any) -> bool:
     security = getattr(config, "security", None)
     return bool(getattr(security, "enable_auth", False))
@@ -137,11 +161,13 @@ def _config_auth_enabled(config: Any) -> bool:
 def _config_jwt_secret_configured(config: Any) -> bool:
     if config is not None and hasattr(config, "resolve_jwt_secret"):
         try:
-            return bool(str(config.resolve_jwt_secret() or "").strip())
+            candidate = str(config.resolve_jwt_secret() or "").strip()
         except (OSError, RuntimeError):
             return False
+        return bool(candidate) and not secret_strength_problem(candidate)
     security = getattr(config, "security", None)
-    return bool(str(getattr(security, "jwt_secret", "") or "").strip())
+    candidate = str(getattr(security, "jwt_secret", "") or "").strip()
+    return bool(candidate) and not secret_strength_problem(candidate)
 
 
 def _config_rate_limit_enabled(config: Any) -> bool:

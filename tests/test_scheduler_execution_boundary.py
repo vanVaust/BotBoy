@@ -33,7 +33,7 @@ class SchedulerExecutionBoundaryTests(unittest.TestCase):
         self.assertTrue(self.bot.initialize())
         self.bot.scheduler.stop()
         self.app = create_app(self.bot, host="127.0.0.1", port=8765)
-        self.client = TestClient(self.app)
+        self.client = TestClient(self.app, base_url="http://localhost:8765")
         self.client.__enter__()
         self.principals = self.app.state.bot_principal_store()
         self.principals.upsert_principal("alice", "password-a", role="user", org_id="tenant-a")

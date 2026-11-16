@@ -12,7 +12,7 @@ class WebSocketTenantIntegrationTest(unittest.TestCase):
 
     def test_socket_command_binds_login_tenant_and_rejects_unscoped_commands(self):
         login = self.login()
-        with self.client.websocket_connect("/ws/chat", headers=self.headers(login)) as socket:
+        with self.client.websocket_connect("/ws/chat", headers={**self.headers(login), "Host": "localhost:8765"}) as socket:
             socket.send_json({"command": "calculate 7 * 8"})
             result = socket.receive_json()
             self.assertTrue(result.get("success"), result)
@@ -25,7 +25,7 @@ class WebSocketTenantIntegrationTest(unittest.TestCase):
 
     def test_password_reset_closes_existing_socket_on_next_message(self):
         login = self.login()
-        with self.client.websocket_connect("/ws/chat", headers=self.headers(login)) as socket:
+        with self.client.websocket_connect("/ws/chat", headers={**self.headers(login), "Host": "localhost:8765"}) as socket:
             socket.send_json({"command": "calculate 1 + 1"})
             self.assertTrue(socket.receive_json().get("success"))
             self.store.upsert_principal("alice", "changed-password", "admin", "tenant-a")
@@ -38,7 +38,7 @@ class WebSocketTenantIntegrationTest(unittest.TestCase):
         key_store = self.app.state.bot_api_key_store()
         key = key_store.generate(role="admin", org_id="tenant-a")
         login = self.login(api_key=key.full_key)
-        with self.client.websocket_connect("/ws/chat", headers=self.headers(login)) as socket:
+        with self.client.websocket_connect("/ws/chat", headers={**self.headers(login), "Host": "localhost:8765"}) as socket:
             socket.send_json({"command": "calculate 1 + 1"})
             self.assertTrue(socket.receive_json().get("success"))
             key_store.revoke(key.key_id)

@@ -65,7 +65,7 @@ class SQLiteLifecycleTests(unittest.TestCase):
     def test_app_lifespan_closes_its_auth_stores_and_keeps_shared_bot_alive(self):
         bot = self.bot()
         app = create_app(bot)
-        with TestClient(app):
+        with TestClient(app, base_url="http://localhost:8765"):
             stores = [app.state.bot_principal_store(), app.state.bot_api_key_store(),
                       app.state.bot_auth._revocation_store]
             connections = [store._get_conn() for store in stores]

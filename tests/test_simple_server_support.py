@@ -101,7 +101,7 @@ class AccessAndPrincipalSupportTests(unittest.TestCase):
 
     def test_auth_and_approval_context(self) -> None:
         self.handler.auth_enabled = True
-        self.handler.auth = JWTAuth("x" * 32)
+        self.handler.auth = JWTAuth("unit-test-secret-9f3a7c1d5e2b8a46")
         pair = self.handler.auth.create_pair(
             AuthPrincipal(principal_id="admin-user", roles=["admin"], principal_type="admin")
         )
@@ -157,9 +157,9 @@ class AccessAndPrincipalSupportTests(unittest.TestCase):
                     rate_limit_requests=5,
                     rate_limit_window_seconds=30,
                     auth_api_keys_enabled=True,
-                    jwt_secret="x" * 32,
+                    jwt_secret="unit-test-secret-9f3a7c1d5e2b8a46",
                 ),
-                resolve_jwt_secret=lambda: "x" * 32,
+                resolve_jwt_secret=lambda: "unit-test-secret-9f3a7c1d5e2b8a46",
                 resolve_api_key_store_path=lambda: str(self.root / "api_keys-state.sqlite"),
                 resolve_principal_db_path=lambda: str(self.root / "principals-state.sqlite"),
             )

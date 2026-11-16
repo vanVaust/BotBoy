@@ -165,6 +165,9 @@ Der aktuelle reproduzierbare Release-Stand steht in `botboy/data/STATUS_SNAPSHOT
 
 ## Hinweise
 
+- Browser-Zugriffe auf beide Gateways werden auch ohne lokale Authentifizierung auf erlaubte Host-/Origin-Werte und JSON-Request-Bodies geprueft. `BOTBOY_ALLOWED_HOSTS` erlaubt zusaetzliche Hostnamen; ein Wildcard-Wert schaltet die Loopback-Hostpruefung nicht aus. `BOTBOY_ENABLE_DOCS=true` aktiviert die standardmaessig deaktivierten FastAPI-Dokumentationsseiten.
+- Fuer aktivierte Authentifizierung ist ein dauerhaft konfigurierter, kryptografisch zufaellig erzeugter JWT-Schluessel erforderlich (`BOTBOY_JWT_SECRET` oder `BOTBOY_JWT_SECRET_FILE`). Ein leerer Wert wird im authentifizierten Betrieb nicht automatisch erzeugt und gespeichert. Bekannte Beispielwerte und auffaellig schwache Schluessel werden abgewiesen. Bei einem Schluesselwechsel werden vorhandene JWTs ungueltig.
+- `file search` durchsucht ausschliesslich das Home-Verzeichnis und folgt keinen Verzeichnis-Symlinks oder Windows-Junctions. Absolute Suchmuster und Elternverzeichnis-Segmente werden abgewiesen.
 - Externe Task-Ausfuehrung braucht einen geprueften SecurityContext. Globale zustandsbezogene CLI-Kommandos ueber HTTP/WebSocket/MCP sind gesperrt; dafuer sind autorisierte Ressourcen-APIs zu verwenden. CLI und lokales MCP-stdio bleiben Operator-Schnittstellen.
 - `/api/tasks/{id}/approve` stellt einen serverseitigen, befristeten Grant aus. `/resume` verwendet dessen ID in `X-BotBoy-Approval`. Ein Boolean oder die Adminrolle ersetzt den Grant nicht. Der finale Ausfuehrungsversuch beansprucht ihn atomar; nach einem Ausfuehrungsfehler braucht ein Retry eine neue Freigabe.
 - Passwort-/Rollen-/Tenant-Aenderungen, deaktivierte Principals und widerrufene API-Keys invalidieren die betroffenen Login-Credentials. Nach dem Upgrade ist eine erneute Anmeldung fuer alte Login-Tokens erforderlich.

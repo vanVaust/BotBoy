@@ -6,6 +6,7 @@ import secrets
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from botboy.gateway.app_context import GatewayAppContext, _current_principal, _current_org, _current_roles
+from botboy.gateway.request_boundary import check_request_boundary
 
 
 async def _send_ws_json_safe(websocket: WebSocket, payload: dict) -> bool:
@@ -29,6 +30,18 @@ def create_ws_router(ctx: GatewayAppContext) -> APIRouter:
 
     @router.websocket("/ws/chat")
     async def websocket_chat(websocket: WebSocket):
+        boundary = check_request_boundary(
+            method="GET",
+            host_header=websocket.headers.get("host"),
+            origin=websocket.headers.get("origin"),
+            content_type=None,
+            has_body=False,
+            bind_host=ctx.host,
+            port=ctx.port,
+        )
+        if not boundary.allowed:
+            await _close_ws_safe(websocket, code=1008)
+            return
         token_info = None
         token = ctx.auth.extract_bearer_token(
             websocket.headers.get("authorization") or websocket.headers.get("Authorization") or ""

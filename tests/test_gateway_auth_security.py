@@ -14,19 +14,19 @@ from botboy.gateway.secrets import PrincipalStore, SecretStore, _verify_key
 
 class GatewayAuthSecurityTest(unittest.TestCase):
     def test_jwt_verify_returns_none_for_invalid_base64_payload(self) -> None:
-        auth = JWTAuth("x" * 32)
+        auth = JWTAuth("unit-test-secret-9f3a7c1d5e2b8a46")
         token = "header.invalid***.sig"
         self.assertIsNone(auth.verify(token))
 
     def test_jwt_verify_returns_none_for_invalid_json_payload(self) -> None:
-        auth = JWTAuth("x" * 32)
+        auth = JWTAuth("unit-test-secret-9f3a7c1d5e2b8a46")
         header = _b64url_encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
         payload = _b64url_encode(base64.urlsafe_b64encode(b"not-json"))
         token = f"{header}.{payload}.{auth._sign(header, payload)}"
         self.assertIsNone(auth.verify(token))
 
     def test_jwt_verify_returns_none_for_non_object_json_payload(self) -> None:
-        auth = JWTAuth("x" * 32)
+        auth = JWTAuth("unit-test-secret-9f3a7c1d5e2b8a46")
         header = _b64url_encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
         payload = _b64url_encode(json.dumps(["not", "an", "object"]).encode())
         token = f"{header}.{payload}.{auth._sign(header, payload)}"
@@ -85,7 +85,7 @@ class GatewayAuthSecurityTest(unittest.TestCase):
         self.assertEqual(replacement.role, "worker")
 
     def test_jwt_round_trip_preserves_org_id(self) -> None:
-        auth = JWTAuth("x" * 32)
+        auth = JWTAuth("unit-test-secret-9f3a7c1d5e2b8a46")
         pair = auth.create_pair("alice", ["user"], org_id="tenant-a")
         info = auth.verify(pair.access_token)
         self.assertIsNotNone(info)
@@ -98,7 +98,7 @@ class GatewayAuthSecurityTest(unittest.TestCase):
         self.assertEqual(refreshed_info.org_id, "tenant-a")
 
     def test_jwt_rejects_missing_or_invalid_org_id_claim(self) -> None:
-        auth = JWTAuth("x" * 32)
+        auth = JWTAuth("unit-test-secret-9f3a7c1d5e2b8a46")
         pair = auth.create_pair("alice", ["user"], org_id="tenant-a")
         header, payload, _sig = pair.access_token.split(".")
         claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
@@ -114,7 +114,7 @@ class GatewayAuthSecurityTest(unittest.TestCase):
             self.assertIsNone(auth.verify(mutated))
 
     def test_jwt_refresh_rejects_missing_or_invalid_org_id_claim(self) -> None:
-        auth = JWTAuth("x" * 32)
+        auth = JWTAuth("unit-test-secret-9f3a7c1d5e2b8a46")
         pair = auth.create_pair("alice", ["user"], org_id="tenant-a")
         header, payload, _sig = pair.refresh_token.split(".")
         claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
@@ -131,7 +131,7 @@ class GatewayAuthSecurityTest(unittest.TestCase):
 
 
     def test_refresh_rejects_changed_principal_role_or_tenant(self) -> None:
-        auth = JWTAuth("x" * 32)
+        auth = JWTAuth("unit-test-secret-9f3a7c1d5e2b8a46")
         store = PrincipalStore()
         self.addCleanup(store.close)
         store.upsert_principal("alice", "password", role="user", org_id="tenant-a")
@@ -173,7 +173,7 @@ class GatewayAuthSecurityTest(unittest.TestCase):
         self.assertEqual(getattr(org_error.exception, "status_code", None), 401)
 
     def test_jwt_revocation(self) -> None:
-        auth = JWTAuth("x" * 32)
+        auth = JWTAuth("unit-test-secret-9f3a7c1d5e2b8a46")
         pair = auth.create_pair("admin")
         self.assertIsNotNone(auth.verify(pair.access_token))
         self.assertTrue(auth.revoke_token(pair.access_token))
@@ -184,7 +184,7 @@ class GatewayAuthSecurityTest(unittest.TestCase):
 
     def test_signed_malformed_claims_are_rejected_for_access_and_refresh(self):
         import time
-        auth = JWTAuth("x" * 32)
+        auth = JWTAuth("unit-test-secret-9f3a7c1d5e2b8a46")
         now = int(time.time())
         claims = {"sub": "alice", "roles": ["user"], "iat": now, "exp": now + 60, "jti": "test-id", "org_id": "tenant-a"}
         for field, values in {"exp": ("tomorrow", None, True, float("nan")), "iat": ("yesterday", None, True), "jti": ([], "", None), "roles": ([], ["admin", 42], ["invalid-role"]), "sub": ("", [], None), "src": ([], {}, 123), "ptype": ([], {}), "credential_version": ([], {}, 123)}.items():
@@ -204,7 +204,7 @@ class GatewayAuthSecurityTest(unittest.TestCase):
             store = TokenRevocationStore(str(Path(temp) / "tokens.db"))
             try:
                 # Two independent auth instances emulate independent gateway processes.
-                auths = [JWTAuth("x" * 32, revocation_store=store) for _ in range(2)]
+                auths = [JWTAuth("unit-test-secret-9f3a7c1d5e2b8a46", revocation_store=store) for _ in range(2)]
                 pair = auths[0].create_pair("alice", org_id="tenant-a")
                 with ThreadPoolExecutor(max_workers=8) as pool:
                     results = list(pool.map(lambda index: auths[index % 2].refresh(pair.refresh_token), range(16)))

@@ -309,7 +309,7 @@ class GatewayHardeningTest(unittest.TestCase):
         with patch("botboy.gateway.server.PrincipalStore", return_value=_RejectingPrincipalStore()):
             app = create_app(bot, host="127.0.0.1", port=8765)
             FastAPI, TestClient = _load_fastapi_primitives()
-            with TestClient(app) as client:
+            with TestClient(app, base_url="http://localhost:8765") as client:
                 response = client.post("/api/auth/login", json={"username": "mallory", "password": "wrong"})
 
         self.assertEqual(response.status_code, 401, response.text)
@@ -357,7 +357,7 @@ class GatewayHardeningTest(unittest.TestCase):
 
         app = FastAPI()
         app.include_router(create_task_router(ctx))
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://localhost:8765") as client:
             response = client.post("/api/tasks/task-1/reassign", json={"worker_id": "reviewer"})
 
         self.assertEqual(response.status_code, 200, response.text)
@@ -382,8 +382,8 @@ class GatewayHardeningTest(unittest.TestCase):
 
         bot.process_command = _raise
         app = create_app(bot, host="127.0.0.1", port=8765)
-        with TestClient(app) as client:
-            with client.websocket_connect("/ws/chat") as websocket:
+        with TestClient(app, base_url="http://localhost:8765") as client:
+            with client.websocket_connect("/ws/chat", headers={"Host": "localhost:8765"}) as websocket:
                 websocket.send_text("status")
                 message = websocket.receive_json()
 
