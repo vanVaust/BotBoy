@@ -145,6 +145,25 @@ def locate_repository(ctx: NativeSkillContext, user_path: str) -> Repository:
     return Repository(worktree=worktree, git_dir=git_dir, relative=workspace.relative(ctx.workspace_root, worktree))
 
 
+async def _terminate(process) -> None:
+    """Kill git and, on Windows, the real git.exe the cmd\\git.exe launcher spawned."""
+    if process.returncode is None:
+        if os.name == "nt":
+            killer = await asyncio.create_subprocess_exec(
+                "taskkill", "/T", "/F", "/PID", str(process.pid),
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )
+            await killer.wait()
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+    try:
+        await asyncio.wait_for(process.wait(), timeout=5)
+    except asyncio.TimeoutError:
+        pass
+
+
 async def _run_git(repo: Repository, args: Sequence[str], *, forced: bool = True,
                    allow_truncation: bool = True) -> str:
     argv: List[str] = [_git_executable(), "--no-pager", "--no-optional-locks",
@@ -164,36 +183,39 @@ async def _run_git(repo: Repository, args: Sequence[str], *, forced: bool = True
         )
         cap = MAX_GIT_OUTPUT
 
-        async def drain(stream, limit: int, *, kill_on_overflow: bool) -> tuple:
+        async def drain(stream, limit: int) -> tuple:
             # communicate() would buffer everything before the cap applies; a
             # huge patch could exhaust memory. Keep at most limit+1 bytes.
             kept = bytearray()
-            overflow = False
             while True:
                 chunk = await stream.read(64 * 1024)
                 if not chunk:
-                    break
+                    return bytes(kept), False
                 if len(kept) <= limit:
                     kept += chunk[: limit + 1 - len(kept)]
                 if len(kept) > limit:
-                    overflow = True
-                    if kill_on_overflow:
-                        process.kill()
-                        break
-            return bytes(kept), overflow
+                    return bytes(kept), True
 
+        stdout_task = asyncio.ensure_future(drain(process.stdout, cap))
+        stderr_task = asyncio.ensure_future(drain(process.stderr, MAX_GIT_STDERR))
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + GIT_TIMEOUT_SECONDS
+        stderr = b""
         try:
-            (stdout, overflow), (stderr, _) = await asyncio.wait_for(
-                asyncio.gather(
-                    drain(process.stdout, cap, kill_on_overflow=True),
-                    drain(process.stderr, MAX_GIT_STDERR, kill_on_overflow=False),
-                ),
-                timeout=GIT_TIMEOUT_SECONDS,
-            )
-            await asyncio.wait_for(process.wait(), timeout=GIT_TIMEOUT_SECONDS)
+            stdout, overflow = await asyncio.wait_for(stdout_task, timeout=GIT_TIMEOUT_SECONDS)
+            if overflow:
+                # Stop reading at once: on Windows the git.exe launcher has a
+                # child that keeps the pipes open, so waiting for EOF on
+                # stderr would hang until the timeout.
+                stderr_task.cancel()
+                await _terminate(process)
+            else:
+                stderr, _ = await asyncio.wait_for(stderr_task, timeout=max(0.1, deadline - loop.time()))
+                await asyncio.wait_for(process.wait(), timeout=max(0.1, deadline - loop.time()))
         except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
+            stdout_task.cancel()
+            stderr_task.cancel()
+            await _terminate(process)
             raise GitError(f"git {args[0]} exceeded {GIT_TIMEOUT_SECONDS:g}s") from None
     if overflow:
         if not allow_truncation:
