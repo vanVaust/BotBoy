@@ -19,6 +19,7 @@ recursive-include botboy/data/evals *.json
 recursive-include botboy/data/evals/replays *.jsonl
 recursive-include botboy/web *
 recursive-include botboy/bundled *
+recursive-include botboy/skills/native/manifests *.md
 recursive-include skills *
 recursive-include examples/skills *
 recursive-include tests *.py
