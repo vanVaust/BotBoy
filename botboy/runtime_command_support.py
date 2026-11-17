@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from botboy.command_effects import MEMORY_DELETE_COMMANDS, SCHEDULE_REMOVE_SUBCOMMANDS
+
 
 def handle_memory_command(bot, command: str, *, first: str) -> dict:
     if first in ("remember", "store", "save"):
@@ -39,7 +41,7 @@ def handle_memory_command(bot, command: str, *, first: str) -> dict:
             return {"success": True, "output": f"No results for '{query}'.", "type": "memory"}
         return {"success": False, "output": "Memory not available.", "type": "memory"}
 
-    if first in ("forget", "delete"):
+    if first in MEMORY_DELETE_COMMANDS:
         query = command[len(first):].strip()
         if not query:
             return {"success": False, "output": f"Usage: {first} <query>", "type": "memory"}
@@ -115,7 +117,7 @@ def handle_schedule(bot, command: str) -> dict:
         except Exception as exc:
             return {"success": False, "output": f"Schedule add error: {exc}", "type": "schedule"}
 
-    if sub in ("cancel", "remove", "delete") and len(parts) > 2:
+    if sub in SCHEDULE_REMOVE_SUBCOMMANDS and len(parts) > 2:
         task_id = parts[2]
         bot.scheduler.cancel(task_id)
         return {"success": True, "output": f"Cancelled task {task_id[:8]}", "type": "schedule"}

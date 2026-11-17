@@ -39,9 +39,10 @@ class FileSearchConfinementTests(unittest.TestCase):
         self.assertEqual([Path(p).name for p in result["data"]["matches"]], ["notes.txt"])
 
     def test_previous_dot_stripping_bypass_cannot_escape(self) -> None:
+        # A component of dots is a hidden name and is refused before any walk.
         result = search("....//*", self.home)
-        self.assertTrue(result["success"], result)
-        self.assertEqual(result["data"]["matches"], [])
+        self.assertFalse(result["success"], result)
+        self.assertIn("rejected", result["output"])
 
     def test_absolute_parent_home_drive_and_null_are_rejected(self) -> None:
         patterns = ("/etc/*", "../outside/*", "docs/../../outside/*", "~/*", "C:\\Windows\\*", "..\\outside\\*", "\x00", "a" * 300)
@@ -93,7 +94,35 @@ class FileSearchConfinementTests(unittest.TestCase):
         result = search("*.log", self.home)
         self.assertEqual(len(result["data"]["matches"]), BuiltinSkills._FILE_SEARCH_MAX_RESULTS)
         self.assertNotIn(".secret.log", [Path(p).name for p in result["data"]["matches"]])
-        self.assertIn(".secret.log", [Path(p).name for p in search(".*.log", self.home)["data"]["matches"]])
+        self.assertFalse(result["data"]["complete"])
+        self.assertEqual(result["data"]["stop_reason"], "result_limit")
+
+    def test_hidden_paths_are_never_searchable(self) -> None:
+        (self.home / ".ssh").mkdir()
+        (self.home / ".ssh" / "id_ed25519").write_text("key")
+        (self.home / ".secret.log").write_text("inside")
+        for pattern in (".*.log", ".ssh/*", "docs/.hidden", ".\\.ssh\\*"):
+            with self.subTest(pattern=pattern):
+                result = search(pattern, self.home)
+                self.assertFalse(result["success"], result)
+                self.assertIn("Hidden", result["output"])
+        for pattern in ("*", "**/*", "id_*", "*ed25519"):
+            with self.subTest(pattern=pattern):
+                names = {Path(p).name for p in search(pattern, self.home)["data"]["matches"]}
+                self.assertNotIn("id_ed25519", names)
+                self.assertNotIn(".secret.log", names)
+
+    def test_budgets_stop_walk_and_report_incomplete(self) -> None:
+        for idx in range(30):
+            (self.home / "docs" / f"bulk{idx}.dat").write_text("x")
+        with patch.object(BuiltinSkills, "_FILE_SEARCH_MAX_ENTRIES", 10):
+            result = search("nothing-matches-*.xyz", self.home)
+        self.assertTrue(result["success"], result)
+        self.assertEqual(result["data"]["stop_reason"], "entry_budget")
+        self.assertFalse(result["data"]["complete"])
+        self.assertIn("incomplete", result["output"])
+        complete = search("nothing-matches-*.xyz", self.home)
+        self.assertTrue(complete["data"]["complete"])
 
 
 if __name__ == "__main__":

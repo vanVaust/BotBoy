@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import base64
 import fnmatch
 import glob
@@ -590,6 +591,10 @@ class BuiltinSkills:
             return {"success": False, "output": f"Web search unavailable: {e}", "type": "web"}
 
     _FILE_SEARCH_MAX_RESULTS = 20
+    # Budgets bound worst-case cost of one request on a large home tree; the
+    # walk runs in a worker thread so it never stalls the gateway event loop.
+    _FILE_SEARCH_MAX_ENTRIES = 50_000
+    _FILE_SEARCH_TIME_BUDGET_S = 5.0
 
     @staticmethod
     def _validate_file_search_pattern(pattern: str) -> Optional[str]:
@@ -598,13 +603,20 @@ class BuiltinSkills:
             return "Invalid or overly long pattern."
         if normalized.startswith(("/", "~")) or re.match(r"^[A-Za-z]:", normalized):
             return "Only patterns relative to the home directory are allowed."
-        if any(part == ".." for part in normalized.split("/")):
+        parts = normalized.split("/")
+        if any(part == ".." for part in parts):
             return "Parent-directory segments ('..') are not allowed."
+        # Dot-directories hold credentials (.ssh, .gnupg, .aws, .config) and
+        # this skill is reachable from remote surfaces; they are never listed.
+        if any(part.startswith(".") and part not in (".",) for part in parts):
+            return "Hidden files and directories are not searchable."
         return None
 
     @staticmethod
     def _file_search_matches(relative_parts: tuple[str, ...], pattern_parts: tuple[str, ...]) -> bool:
-        """Match **/<pattern> without crossing path separators or hidden dirs."""
+        """Match **/<pattern> without crossing path separators or hidden entries."""
+        if any(part.startswith(".") for part in relative_parts):
+            return False
         patterns = ("**",) + pattern_parts
 
         @lru_cache(maxsize=None)
@@ -614,18 +626,74 @@ class BuiltinSkills:
             part = patterns[pattern_idx]
             if part == "**":
                 return match(path_idx, pattern_idx + 1) or (
-                    path_idx < len(relative_parts)
-                    and not relative_parts[path_idx].startswith(".")
-                    and match(path_idx + 1, pattern_idx)
+                    path_idx < len(relative_parts) and match(path_idx + 1, pattern_idx)
                 )
             return (
                 path_idx < len(relative_parts)
-                and (not relative_parts[path_idx].startswith(".") or part.startswith("."))
                 and fnmatch.fnmatchcase(relative_parts[path_idx], part)
                 and match(path_idx + 1, pattern_idx + 1)
             )
 
         return match(0, 0)
+
+    @staticmethod
+    def _file_search_walk(
+        home: Path,
+        pattern_parts: tuple[str, ...],
+        *,
+        max_results: int,
+        max_entries: int,
+        time_budget_s: float,
+    ) -> tuple[List[str], str]:
+        """Return (matches, stop_reason); stop_reason is '' if the walk completed."""
+        deadline = time.monotonic() + time_budget_s
+        matches: List[str] = []
+        visited = 0
+        # Do not traverse symlinked directories, including links that point
+        # outside home: filtering glob results *after* traversal is weaker.
+        for root, dirs, files in os.walk(home, followlinks=False):
+            directory = Path(root)
+            safe_dirs: List[str] = []
+            for name in dirs:
+                if name.startswith("."):
+                    continue
+                child = directory / name
+                try:
+                    resolved_child = child.resolve()
+                    # Path.is_junction() is unavailable on Python 3.10.
+                    # Comparing the paths also catches NTFS junctions on
+                    # that supported runtime, before os.walk enters them.
+                    if (
+                        child.is_symlink()
+                        or getattr(child, "is_junction", lambda: False)()
+                        or resolved_child != child.absolute()
+                        or not resolved_child.is_relative_to(home)
+                    ):
+                        continue
+                except (OSError, RuntimeError):
+                    continue
+                safe_dirs.append(name)
+            dirs[:] = sorted(safe_dirs)
+            for name in dirs + sorted(f for f in files if not f.startswith(".")):
+                visited += 1
+                if visited > max_entries:
+                    return matches, "entry_budget"
+                if visited % 256 == 0 and time.monotonic() > deadline:
+                    return matches, "time_budget"
+                candidate = directory / name
+                # Every directory on the path was verified above, so only a
+                # symlinked file can point outside home.
+                if candidate.is_symlink():
+                    try:
+                        if not candidate.resolve().is_relative_to(home):
+                            continue
+                    except (OSError, RuntimeError):
+                        continue
+                if BuiltinSkills._file_search_matches(candidate.relative_to(home).parts, pattern_parts):
+                    matches.append(str(candidate))
+                    if len(matches) >= max_results:
+                        return matches, "result_limit"
+        return matches, ""
 
     @staticmethod
     async def file_search(command: str) -> dict:
@@ -640,48 +708,24 @@ class BuiltinSkills:
         try:
             home = Path.home().resolve()
             pattern_parts = tuple(part for part in pattern.replace("\\", "/").split("/") if part and part != ".")
-            matches: List[str] = []
-            # Do not traverse symlinked directories, including links that point
-            # outside home: filtering glob results *after* traversal is weaker.
-            for root, dirs, files in os.walk(home, followlinks=False):
-                directory = Path(root)
-                safe_dirs: List[str] = []
-                for name in dirs:
-                    child = directory / name
-                    try:
-                        resolved_child = child.resolve()
-                        # Path.is_junction() is unavailable on Python 3.10.
-                        # Comparing the paths also catches NTFS junctions on
-                        # that supported runtime, before os.walk enters them.
-                        if (
-                            child.is_symlink()
-                            or getattr(child, "is_junction", lambda: False)()
-                            or resolved_child != child.absolute()
-                            or not resolved_child.is_relative_to(home)
-                        ):
-                            continue
-                    except (OSError, RuntimeError):
-                        continue
-                    safe_dirs.append(name)
-                dirs[:] = sorted(safe_dirs)
-                for name in dirs + sorted(files):
-                    candidate = directory / name
-                    resolved = candidate.resolve()
-                    if not resolved.is_relative_to(home):
-                        continue
-                    relative = candidate.relative_to(home)
-                    if BuiltinSkills._file_search_matches(relative.parts, pattern_parts):
-                        matches.append(str(candidate))
-                        if len(matches) >= BuiltinSkills._FILE_SEARCH_MAX_RESULTS:
-                            break
-                if len(matches) >= BuiltinSkills._FILE_SEARCH_MAX_RESULTS:
-                    break
+            matches, stop_reason = await asyncio.to_thread(
+                BuiltinSkills._file_search_walk,
+                home,
+                pattern_parts,
+                max_results=BuiltinSkills._FILE_SEARCH_MAX_RESULTS,
+                max_entries=BuiltinSkills._FILE_SEARCH_MAX_ENTRIES,
+                time_budget_s=BuiltinSkills._FILE_SEARCH_TIME_BUDGET_S,
+            )
             if matches:
                 output = f"Found {len(matches)} file(s):\n" + "\n".join(matches)
             else:
                 output = f"No files matching '{pattern}' found."
+            if stop_reason in ("entry_budget", "time_budget"):
+                output += "\n(Search stopped early: budget exhausted; results may be incomplete.)"
             return {"success": True, "output": output, "type": "file",
-                    "data": {"pattern": pattern, "matches": matches}}
+                    "data": {"pattern": pattern, "matches": matches,
+                             "complete": stop_reason == "",
+                             "stop_reason": stop_reason}}
         except Exception as e:
             return {"success": False, "output": f"File search error: {e}", "type": "file"}
 

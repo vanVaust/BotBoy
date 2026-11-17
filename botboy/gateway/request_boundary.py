@@ -117,6 +117,35 @@ def _valid_origin(value: str) -> bool:
         return False
 
 
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _host_header_port(host_header: str) -> Optional[int]:
+    raw = host_header.strip()
+    tail = raw[raw.rfind("]") + 1 :] if raw.startswith("[") else raw
+    if ":" not in tail:
+        return None
+    return int(tail.rsplit(":", 1)[1])
+
+
+def _origin_matches_host(origin: str, host_header: str, host: str) -> bool:
+    """Same-origin test that treats an omitted port as the scheme default.
+
+    Browsers omit default ports in ``Origin`` (``http://localhost``) while a
+    client may send ``Host: localhost:80``.  The server cannot see the scheme
+    behind a TLS terminator, so a Host without port accepts the origin's own
+    scheme default; an explicit Host port must equal the origin's port.
+    """
+    parsed = urlsplit(origin)
+    if (parsed.hostname or "").lower() != host:
+        return False
+    origin_port = parsed.port or _DEFAULT_PORTS[parsed.scheme.lower()]
+    host_port = _host_header_port(host_header)
+    if host_port is None:
+        return parsed.port is None
+    return origin_port == host_port
+
+
 def check_request_boundary(
     *,
     method: str,
@@ -136,8 +165,7 @@ def check_request_boundary(
     if origin_value:
         if not _valid_origin(origin_value):
             return BoundaryDecision(False, 403, "origin_not_allowed", "Origin not allowed")
-        parsed = urlsplit(origin_value)
-        same_origin = bool(host) and parsed.netloc.lower() == str(host_header or "").strip().lower()
+        same_origin = bool(host) and _origin_matches_host(origin_value, str(host_header or ""), host)
         # An explicitly configured wildcard CORS policy must NOT disable this
         # browser security boundary.  Exact dev origins remain supported.
         permitted = origin_value in resolve_cors_origins(host=bind_host, port=port)

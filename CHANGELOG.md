@@ -10,6 +10,22 @@ was tatsächlich geschah, zeigt `git log`. Es wird hier nicht rückwirkend erfun
 
 ## [Unreleased]
 
+### Sicherheit
+
+- Löschsperre umgehbar: `delete <query>` (Alias von `forget`) löschte Erinnerungen
+  über das Gateway ohne Freigabe; `schedule cancel|remove|delete` war gar nicht
+  erfasst. Alle löschenden Builtins stehen jetzt in `botboy/command_effects.py`,
+  das Router, Handler und Freigabeprüfung gemeinsam importieren.
+- LLM-Planschritte (`PlanningEngine.execute`) liefen mit der impliziten
+  Operator-Freigabe der lokalen CLI; sie tragen jetzt die Herkunft `planner`.
+- JWT-Schlüsselprüfung: Die Regel „mind. 12 verschiedene Zeichen“ lehnte ~1,7 %
+  gültiger `secrets.token_hex(16)`-Schlüssel ab. Ersetzt durch eine effektive Länge
+  (sequenzielle Läufe und Wiederholungsmuster werden abgezogen); 0 Fehlablehnungen
+  bei 300.000 Stichproben je Generator.
+- `file search`: versteckte Pfade nie durchsuchbar, Eintrags- und Zeitbudget,
+  Ausführung im Worker-Thread statt in der Event-Loop.
+- Same-Origin-Prüfung behandelt einen fehlenden Port als Standardport des Schemas.
+
 ### Entfernt
 
 - `botboy/bundled_assets/` — byte-identische Kopie von `botboy/bundled/`,

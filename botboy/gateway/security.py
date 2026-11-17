@@ -134,7 +134,50 @@ _PLACEHOLDER_SECRET_MARKERS = (
     "your_secret", "your-secret", "yoursecret", "placeholder", "do_not_use",
     "dont_use", "insecure", "example",
 )
-_MIN_DISTINCT_SECRET_CHARS = 12
+# A secret is reduced to its "effective length": characters predictable from
+# their predecessor (positions 3.. of an ascending/descending run such as
+# ``abcdef`` or ``54321``) are discounted, and a periodic secret counts only
+# its period.  Thresholds keep the false-reject probability for documented
+# generators negligible: a run of >= 3 needs two consecutive successor
+# steps (p <= (2/16)**2 per position for hex), so 32 random hex characters
+# would need 13 such positions to fall below 20.  The previous
+# 12-distinct-characters rule rejected ~1.7 % of ``secrets.token_hex(16)``.
+_MIN_DISTINCT_SECRET_CHARS = 8
+_MIN_EFFECTIVE_SECRET_CHARS = 20
+
+
+def _predictable_run_chars(value: str) -> int:
+    predictable = 0
+    for direction in (1, -1):
+        run = 1
+        for prev, cur in zip(value, value[1:]):
+            run = run + 1 if ord(cur) - ord(prev) == direction else 1
+            if run >= 3:
+                predictable += 1 if run > 3 else 2
+    return predictable
+
+
+def _shortest_period(value: str) -> int:
+    # Smallest p with value[i] == value[i - p] for all i >= p (KMP failure
+    # function, O(n)).
+    n = len(value)
+    fail = [0] * n
+    k = 0
+    for i in range(1, n):
+        while k and value[i] != value[k]:
+            k = fail[k - 1]
+        if value[i] == value[k]:
+            k += 1
+        fail[i] = k
+    return n - fail[-1] if n else 0
+
+
+def _effective_secret_length(value: str) -> int:
+    effective = len(value) - _predictable_run_chars(value)
+    period = _shortest_period(value)
+    if period <= len(value) // 2:
+        effective = min(effective, period)
+    return effective
 
 
 def secret_strength_problem(secret: str) -> str:
@@ -150,6 +193,8 @@ def secret_strength_problem(secret: str) -> str:
         return "secret looks like a documentation placeholder; generate a random one"
     if len(set(value)) < _MIN_DISTINCT_SECRET_CHARS:
         return f"secret has fewer than {_MIN_DISTINCT_SECRET_CHARS} distinct characters"
+    if _effective_secret_length(value) < _MIN_EFFECTIVE_SECRET_CHARS:
+        return "secret is dominated by sequential runs or a repeated pattern"
     return ""
 
 

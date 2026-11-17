@@ -29,6 +29,30 @@ class JwtSecretStrengthTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     JWTAuth(weak)
 
+    def test_sequential_and_periodic_secrets_are_rejected(self) -> None:
+        for weak in (
+            "abcdefghijklmnopqrstuvwxyz123456",
+            "Passwort1234Passwort1234Passwort1234",
+            "9876543210zyxwvutsrqQWERTYUIOPAS",
+        ):
+            with self.subTest(secret=weak[:12]):
+                self.assertTrue(secret_strength_problem(weak))
+
+    def test_documented_generators_are_never_rejected(self) -> None:
+        # The former 12-distinct-characters rule rejected ~1.7 % of
+        # secrets.token_hex(16) outputs; 20k samples would catch ~340 of them.
+        import uuid
+
+        generators = (
+            lambda: secrets.token_hex(16),
+            lambda: secrets.token_hex(32),
+            lambda: secrets.token_urlsafe(24),
+            lambda: uuid.uuid4().hex,
+        )
+        for generate in generators:
+            rejected = [value for value in (generate() for _ in range(20_000)) if secret_strength_problem(value)]
+            self.assertEqual(rejected, [])
+
     def test_short_secret_is_rejected_by_readiness_too(self) -> None:
         self.assertIn("32", secret_strength_problem("short-but-varied-0123456789"))
 

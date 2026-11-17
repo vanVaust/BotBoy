@@ -66,6 +66,24 @@ class BoundaryDecisionTests(unittest.TestCase):
             self.assertTrue(check(host_header="bot.internal:8765").allowed)
             self.assertFalse(check(host_header="evil.example").allowed)
 
+    def test_same_origin_treats_omitted_port_as_scheme_default(self) -> None:
+        with patch.dict(os.environ, {"BOTBOY_ALLOWED_HOSTS": "bot.internal"}):
+            self.assertTrue(check(host_header="localhost:80", origin="http://localhost").allowed)
+            self.assertTrue(check(host_header="localhost", origin="http://localhost").allowed)
+            self.assertTrue(check(host_header="bot.internal", origin="https://bot.internal").allowed)
+            self.assertTrue(check(host_header="bot.internal:443", origin="https://bot.internal").allowed)
+            self.assertTrue(check(host_header="[::1]:8765", origin="http://[::1]:8765").allowed)
+            # bot.internal is an allowed Host but not a configured CORS origin,
+            # so only the same-origin rule can admit these requests.
+            for host_header, origin in (
+                ("bot.internal:8765", "http://bot.internal"),
+                ("bot.internal", "http://bot.internal:8765"),
+                ("bot.internal:80", "https://bot.internal"),
+                ("bot.internal:8765", "http://other.internal:8765"),
+            ):
+                with self.subTest(host=host_header, origin=origin):
+                    self.assertEqual(check(host_header=host_header, origin=origin).code, "origin_not_allowed")
+
     def test_wildcards_cannot_disable_loopback_browser_boundary(self) -> None:
         with patch.dict(os.environ, {"BOTBOY_ALLOWED_HOSTS": "*", "BOTBOY_CORS_ALLOW_ORIGINS": "*"}):
             self.assertIn("localhost", allowed_hosts("127.0.0.1"))
