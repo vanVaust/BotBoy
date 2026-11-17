@@ -170,6 +170,14 @@ class ForgeWorkspaceTests(unittest.TestCase):
         self.assertEqual(both["data"]["executable"], 1)
         self.assertIn("trigger.reserved", both["output"])
 
+    def test_crlf_manifest_lints_like_the_loader_reads_it(self) -> None:
+        # Regression: Windows CI wrote fixtures with CRLF; the code block was
+        # missed, so a valid skill was reported as not executable.
+        crlf = forge.lint_skill_text(GOOD.replace("\n", "\r\n"), "skills/crlf/SKILL.md")
+        lf = forge.lint_skill_text(GOOD, "skills/lf/SKILL.md")
+        self.assertTrue(crlf.executable)
+        self.assertEqual(codes(crlf, "error"), codes(lf, "error"))
+
     def test_audit_covers_discovered_skills(self) -> None:
         audit = self.call("forge audit")
         self.assertEqual({Path(r["source"]).parent.name for r in audit["data"]["reports"]}, {"good", "bad"})

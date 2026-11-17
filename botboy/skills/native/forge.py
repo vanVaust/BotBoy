@@ -111,6 +111,9 @@ def _trigger_owners(skill_manager: Any) -> Dict[str, str]:
 
 def lint_skill_text(content: str, source: str, *, skill_manager: Any = None) -> LintReport:
     """Lint SKILL.md ``content``; ``source`` is used for messages and contract paths."""
+    # The loader reads SKILL.md with universal newlines (Path.read_text); lint
+    # what the loader sees, or CRLF files (Windows checkouts) lose their code.
+    content = content.replace("\r\n", "\n").replace("\r", "\n")
     from botboy.skills.ldf import parse_layer_definition_text
     from botboy.skills.manager import _build_skill_contract
     from botboy.skills.runtime import _blocked_reason
