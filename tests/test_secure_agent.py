@@ -283,6 +283,24 @@ class InvariantTests(unittest.TestCase):
         result = run(SecureAgent(backend, executor), "t")
         self.assertTrue(result.answer.endswith("END"))
 
+    def test_static_approval_points(self):
+        agent = SecureAgent(ScriptedBackend(), FakeTools())
+        tools = default_tools()
+        cases = {
+            "trusted write": (plan(step("s1", "memory.store", text=lit("x"))), []),
+            "untrusted write": (plan(step("s1", "web.search", query=lit("q")),
+                                     step("s2", "memory.store", text=ref("s1"))), ["s2"]),
+            "inherited taint": (plan(step("s1", "memory.search", query=lit("q")),
+                                     step("s2", "hash.sha256", text=ref("s1")),
+                                     step("s3", "memory.store", text=ref("s2"))), ["s3"]),
+            "clean inherit": (plan(step("s1", "hash.sha256", text=lit("q")),
+                                   step("s2", "memory.store", text=ref("s1"))), []),
+            "destructive": (plan(step("s1", "memory.delete", query=lit("x"))), ["s1"]),
+        }
+        for label, (text, expected) in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(agent.approval_points(parse_plan(text, tools)), expected)
+
     def test_answer_substitution_is_single_pass(self):
         backend = ScriptedBackend(plan(
             step("s1", "memory.search", query=lit("a")),
@@ -478,6 +496,35 @@ class BotBoyIntegrationTests(unittest.TestCase):
         self.assertIn("No results", self.cmd("search second continuation")["output"])
         self.assertTrue(self.cmd(f"agent --approve {second['approval_id']}")["success"])
         self.assertIn("Found 1", self.cmd("search second continuation")["output"])
+
+    def test_an_approval_is_consumed_by_one_execution(self):
+        # Review finding: one approval authorised two identical writes.
+        self.cmd("remember zebra x")
+        self.use_backend(ScriptedBackend(plan(step("s1", "memory.search", query=lit("zebra")),
+                                              step("s2", "memory.store", text=ref("s1")),
+                                              step("s3", "memory.store", text=ref("s1")))))
+        first = self.cmd("agent copy twice")["data"]
+        resumed = self.cmd(f"agent --approve {first['approval_id']}")
+        self.assertEqual(resumed["data"]["status"], "approval_required")
+        self.assertEqual([s["status"] for s in resumed["data"]["steps"]], ["ok", "ok", "approval_required"])
+        self.assertIn("Found 2", self.cmd("search zebra")["output"])
+        self.assertTrue(self.cmd(f"agent --approve {resumed['data']['approval_id']}")["success"])
+        self.assertIn("Found 3", self.cmd("search zebra")["output"])
+
+    def test_one_shot_surface_refuses_plans_that_would_pause(self):
+        # Review finding: `botboy exec` cannot resume, so refuse before running.
+        self.cmd("remember zebra x")
+        self.bot.one_shot = True
+        self.use_backend(ScriptedBackend(plan(step("s0", "memory.store", text=lit("side effect")),
+                                              step("s1", "memory.search", query=lit("zebra")),
+                                              step("s2", "memory.store", text=ref("s1")))))
+        refused = self.cmd("agent copy")
+        self.assertFalse(refused["success"])
+        self.assertIn("Nothing was executed", refused["output"])
+        self.assertIn("s2", refused["output"])
+        self.assertIn("No results", self.cmd("search side effect")["output"])
+        self.use_backend(ScriptedBackend(plan(step("s1", "calc", expression=lit("6*7")), answer="{s1}")))
+        self.assertTrue(self.cmd("agent compute")["success"])
 
     def test_resume_is_bound_to_the_starting_principal(self):
         self.cmd("remember zebra x")

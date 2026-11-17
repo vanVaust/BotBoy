@@ -8,7 +8,7 @@ import secrets
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Optional
 
-from botboy.agent.plan import AgentPlan, Literal, PlanError, parse_plan
+from botboy.agent.plan import AgentPlan, Literal, PlanError, Ref, parse_plan
 from botboy.agent.policy import Decision, Labeled, Trust, Verdict, evaluate
 from botboy.agent.tools import ToolArgumentError, ToolSpec, default_tools
 
@@ -168,7 +168,10 @@ class SecureAgent:
         earlier writes, and the pending step sees the same inputs it was
         approved for.
         """
-        approved_set = frozenset(approved)
+        # Each approval authorises one execution: it is consumed when used, so
+        # a later step with the same digest (same tool, values, labels) needs
+        # its own approval.
+        remaining_approvals = set(approved)
         run = AgentRun(task=task, status="completed", plan=plan)
         outputs: dict[str, Labeled] = {}
         start = 0
@@ -191,7 +194,9 @@ class SecureAgent:
                 )
                 for name, source in planned.args.items()
             }
-            decision: Decision = evaluate(tool, args, approved_set)
+            decision: Decision = evaluate(tool, args, frozenset(remaining_approvals))
+            if decision.allowed and decision.reason.startswith("approved:"):
+                remaining_approvals.discard(decision.digest)
             record = StepRecord(planned.step_id, tool.name, "ok", args=args, digest=decision.digest,
                                 reason=decision.reason)
             run.steps.append(record)
@@ -221,6 +226,28 @@ class SecureAgent:
             outputs[planned.step_id] = output
         self._render_answer(run, plan, outputs)
         return run
+
+    def approval_points(self, plan: AgentPlan) -> list[str]:
+        """Step ids that can stop for approval, decided before anything runs.
+
+        Trust is static in a plan: literals are trusted, a ref carries its
+        tool's declared output trust (``inherit`` joins its inputs). Values
+        are not needed to know that a destructive call or a write of
+        possibly untrusted data will need an approval.
+        """
+        untrusted: dict[str, bool] = {}
+        points: list[str] = []
+        for planned in plan.steps:
+            tool = self.tools[planned.tool]
+            arg_untrusted = [isinstance(source, Ref) and untrusted[source.step_id]
+                             for source in planned.args.values()]
+            if tool.effect == "destructive" or (tool.effect == "write" and any(arg_untrusted)):
+                points.append(planned.step_id)
+            if tool.output_trust == "inherit":
+                untrusted[planned.step_id] = any(arg_untrusted)
+            else:
+                untrusted[planned.step_id] = tool.output_trust == "untrusted"
+        return points
 
     async def _invoke(self, tool: ToolSpec, step_id: str, args: dict[str, Labeled],
                       record: StepRecord) -> Labeled:
