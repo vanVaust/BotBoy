@@ -419,7 +419,8 @@ class BotBoyIntegrationTests(unittest.TestCase):
         self.assertIn("run it yourself: forget zebra", pending["output"])
         # Destructive steps are not resumable through the agent at all: the
         # operator runs the shown command directly (server-side gate).
-        approved = self.cmd(f"agent --approve {digest}")
+        self.assertNotIn("approval_id", pending["data"])
+        approved = self.cmd(f"agent --approve {'0' * 32}")
         self.assertFalse(approved["success"])
         self.assertIn("No pending agent run", approved["output"])
         self.assertIn("Found 1", self.cmd("search zebra")["output"])
@@ -431,7 +432,7 @@ class BotBoyIntegrationTests(unittest.TestCase):
         self.use_backend(ScriptedBackend(poisoning))
         pending = self.cmd("agent copy my zebra note")
         self.assertEqual(pending["data"]["status"], "approval_required")
-        digest = pending["data"]["steps"][1]["digest"]
+        digest = pending["data"]["approval_id"]
         self.assertIn(f"agent --approve {digest}", pending["output"])
         self.assertIn("Found 1", self.cmd("search zebra")["output"])
         resume_backend = ScriptedBackend()  # resuming must not call the planner
@@ -450,17 +451,39 @@ class BotBoyIntegrationTests(unittest.TestCase):
                          step("s3", "memory.store", text=ref("s2")), answer="{s3}")
         self.use_backend(ScriptedBackend(plan_text))
         pending = self.cmd("agent copy zebra notes")
-        digest = pending["data"]["steps"][2]["digest"]
+        digest = pending["data"]["approval_id"]
         self.assertIn("Found 1", self.cmd("search trusted")["output"])
         self.use_backend(ScriptedBackend())
         self.assertTrue(self.cmd(f"agent --approve {digest}")["success"])
         self.assertIn("Found 1", self.cmd("search trusted")["output"])
 
+    def test_identical_pending_calls_resume_their_own_runs(self):
+        # Review finding: keyed by call digest, the second run overwrote the
+        # first and approving the first resumed the second continuation.
+        self.cmd("remember zebra x")
+        first_plan = plan(step("s1", "memory.search", query=lit("zebra")),
+                          step("s2", "memory.store", text=ref("s1")),
+                          step("s3", "memory.store", text=lit("first continuation")))
+        second_plan = plan(step("s1", "memory.search", query=lit("zebra")),
+                           step("s2", "memory.store", text=ref("s1")),
+                           step("s3", "memory.store", text=lit("second continuation")))
+        self.use_backend(ScriptedBackend(first_plan))
+        first = self.cmd("agent one")["data"]
+        self.use_backend(ScriptedBackend(second_plan))
+        second = self.cmd("agent two")["data"]
+        self.assertEqual(first["steps"][1]["digest"], second["steps"][1]["digest"])
+        self.assertNotEqual(first["approval_id"], second["approval_id"])
+        self.assertTrue(self.cmd(f"agent --approve {first['approval_id']}")["success"])
+        self.assertIn("Found 1", self.cmd("search first continuation")["output"])
+        self.assertIn("No results", self.cmd("search second continuation")["output"])
+        self.assertTrue(self.cmd(f"agent --approve {second['approval_id']}")["success"])
+        self.assertIn("Found 1", self.cmd("search second continuation")["output"])
+
     def test_resume_is_bound_to_the_starting_principal(self):
         self.cmd("remember zebra x")
         self.use_backend(ScriptedBackend(plan(step("s1", "memory.search", query=lit("zebra")),
                                               step("s2", "memory.store", text=ref("s1")))))
-        digest = self.cmd("agent copy")["data"]["steps"][1]["digest"]
+        digest = self.cmd("agent copy")["data"]["approval_id"]
         other = asyncio.run(self.bot.process_command(f"agent --approve {digest}", principal="mallory"))
         self.assertIn("No pending agent run", other["output"])
 
@@ -490,8 +513,8 @@ class BotBoyIntegrationTests(unittest.TestCase):
         self.bot.llm = None
         self.assertIn("requires an enabled LLM", self.cmd("agent do something")["output"])
         self.assertIn("Usage", self.cmd("agent")["output"])
-        self.assertIn("64-character", self.cmd("agent --approve abc")["output"])
-        self.assertIn("exactly one digest", self.cmd("agent --approve abc task")["output"])
+        self.assertIn("32-character approval id", self.cmd("agent --approve abc")["output"])
+        self.assertIn("exactly one approval id", self.cmd("agent --approve abc task")["output"])
 
     def test_agent_is_not_reachable_from_authenticated_remote_surfaces(self):
         from botboy.command_execution_service import CommandExecutionService

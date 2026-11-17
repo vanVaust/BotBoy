@@ -191,7 +191,7 @@ Beurer-Kellner et al. 2025). Code: `botboy/agent/`, Tests: `tests/test_secure_ag
    (Suchanfrage nach außen, Löschauswahl, Dateimuster, Anweisung) → `denied`.
    Löschen und das Speichern fremder Inhalte → `approval_required` mit SHA-256 über
    Werkzeug, Werte und Labels; freigegeben wird genau dieser Aufruf:
-   `agent --approve <digest>`. Die Freigabe setzt den gespeicherten Lauf am wartenden
+   `agent --approve <freigabe-id>` (eigene ID je Lauf, gebunden an den Digest). Die Freigabe setzt den gespeicherten Lauf am wartenden
    Schritt fort (15 min gültig, einmalig, nur für denselben Principal); es wird nicht neu
    geplant und kein erledigter Schritt wiederholt. Verbot gewinnt gegen Freigabe.
 4. **Quarantäne-LLM** – `llm.extract` verarbeitet fremde Daten ohne Werkzeuge; seine
