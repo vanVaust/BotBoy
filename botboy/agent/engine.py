@@ -78,6 +78,9 @@ class AgentRun:
     untrusted_origins: tuple[str, ...] = ()
     plan: Optional[AgentPlan] = None
     error: str = ""
+    # Outputs of completed steps; with ``pending`` they let a caller resume an
+    # approved run without re-planning or replaying completed writes.
+    outputs: dict[str, Labeled] = field(default_factory=dict)
 
     @property
     def pending(self) -> Optional[StepRecord]:
@@ -157,11 +160,28 @@ class SecureAgent:
             return AgentRun(task=task, status="plan_error", error=str(exc))
         return await self.execute_plan(task, plan, approved=approved)
 
-    async def execute_plan(self, task: str, plan: AgentPlan, *, approved: Iterable[str] = ()) -> AgentRun:
+    async def execute_plan(self, task: str, plan: AgentPlan, *, approved: Iterable[str] = (),
+                           resume_from: Optional[AgentRun] = None) -> AgentRun:
+        """Run ``plan``; with ``resume_from`` continue at that run's pending step.
+
+        Completed steps are not executed again, so an approval never replays
+        earlier writes, and the pending step sees the same inputs it was
+        approved for.
+        """
         approved_set = frozenset(approved)
         run = AgentRun(task=task, status="completed", plan=plan)
         outputs: dict[str, Labeled] = {}
-        for planned in plan.steps:
+        start = 0
+        if resume_from is not None:
+            pending = resume_from.pending
+            if pending is None or resume_from.plan is not plan:
+                raise ValueError("resume_from must be an approval_required run of the same plan")
+            done = [step for step in resume_from.steps if step.status == "ok"]
+            run.steps.extend(done)
+            outputs.update(resume_from.outputs)
+            start = len(done)
+        run.outputs = outputs
+        for planned in plan.steps[start:]:
             tool = self.tools[planned.tool]
             args = {
                 name: (
@@ -216,7 +236,7 @@ class SecureAgent:
             command = tool.build_command({name: value.value for name, value in args.items()})
             record.command = command
             result = await self._execute_command(command)
-            text = str(result.get("output", "") or "")
+            text = tool.output_text(result)
             ok = bool(result.get("success", False))
             reason = "" if ok else (text[:300] or str(result.get("type", "tool failed")))
         if not ok:
