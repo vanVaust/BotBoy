@@ -181,8 +181,15 @@ class SafeEvaluator:
             return list(values)
 
         def safe_sum(values: Any, start: Any = 0) -> Any:
+            # Numbers only: summing lists concatenates a growing list per item
+            # (quadratic) inside one call that never ticks the budget. Lists
+            # are joined with + in the program instead.
+            items = self._as_sequence(values, "sum")
+            for value in (start, *items):
+                if isinstance(value, bool) or not isinstance(value, (int, float, complex)):
+                    raise ExprError("sum() adds numbers only; join lists with +")
             total = start
-            for value in self._as_sequence(values, "sum"):
+            for value in items:
                 total = self._binop(ast.Add(), total, value)
             return total
 

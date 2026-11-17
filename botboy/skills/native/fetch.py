@@ -35,7 +35,7 @@ import time
 import zlib
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from email.message import Message
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
@@ -427,11 +427,34 @@ def readable(response: FetchResponse) -> Tuple[str, str, List[Dict[str, str]]]:
         return " ".join(parser.title.split()), parser.text(), parser.links
     text = _decode(response.body, response.charset)
     if response.content_type in {"application/json", "application/ld+json"}:
+        # Pretty-printing adds indentation per element and nesting level: an
+        # 800-deep array of 200k zeros grew a 400 KB body to hundreds of MB.
+        # Indent only when the result stays within a small multiple of the body.
         try:
-            text = json.dumps(json.loads(text), indent=2, ensure_ascii=False)
-        except json.JSONDecodeError:
-            pass
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, RecursionError):
+            parsed = None
+        if parsed is not None and _json_depth(parsed, MAX_PRETTY_JSON_DEPTH) <= MAX_PRETTY_JSON_DEPTH:
+            text = json.dumps(parsed, indent=2, ensure_ascii=False)
     return "", text, []
+
+
+MAX_PRETTY_JSON_DEPTH = 16
+
+
+def _json_depth(value: Any, limit: int) -> int:
+    """Nesting depth of ``value``, stopping once ``limit`` is exceeded (iterative)."""
+    deepest = 0
+    stack = [(value, 1)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, (dict, list)):
+            if depth > limit:
+                return depth
+            deepest = max(deepest, depth)
+            children = item.values() if isinstance(item, dict) else item
+            stack.extend((child, depth + 1) for child in children if isinstance(child, (dict, list)))
+    return deepest
 
 
 def policy_for(ctx: NativeSkillContext, max_bytes: int) -> FetchPolicy:

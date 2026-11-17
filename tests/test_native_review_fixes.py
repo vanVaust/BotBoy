@@ -304,3 +304,35 @@ class FourthReviewRoundTests(unittest.TestCase):
         self.assertLess(time.perf_counter() - started, 1.0)
         self.assertIn("summary", result.unified)
         self.assertEqual(diff_texts(a, a).unified, "")
+
+
+class FifthReviewRoundTests(unittest.TestCase):
+    def test_sum_rejects_sequences(self) -> None:
+        from botboy.skills.native.expr import ExprError, evaluate_expression
+
+        started = time.perf_counter()
+        with self.assertRaisesRegex(ExprError, "numbers only"):
+            evaluate_expression("sum([[0] for i in range(10000)], [])")
+        self.assertLess(time.perf_counter() - started, 1.0)
+        self.assertEqual(evaluate_expression("sum([1, 2, 3.5])"), 6.5)
+
+    def test_projection_happens_after_limit(self) -> None:
+        rows = [{f"k{i}": i} for i in range(20_000)]
+        dataset = data_skill.Dataset(path="x", columns=[f"k{i}" for i in range(20_000)], rows=rows)
+        query = data_skill.parse_query(["select", ",".join(f"k{i}" for i in range(800)), "limit", "1"])
+        started = time.perf_counter()
+        result_rows, columns, matched = data_skill.execute_query(dataset, query)
+        self.assertLess(time.perf_counter() - started, 1.0)
+        self.assertEqual((len(result_rows), matched, len(columns)), (1, 20_000, 800))
+
+    def test_deep_json_is_not_pretty_printed(self) -> None:
+        body = ("[" * 800 + ",".join(["0"] * 200_001) + "]" * 800).encode()
+        response = fetch_skill.FetchResponse(url="https://example.org/a.json", status=200, reason="OK",
+                                             content_type="application/json", charset="utf-8", body=body,
+                                             truncated=False)
+        _, text, _ = fetch_skill.readable(response)
+        self.assertLessEqual(len(text), len(body))
+        shallow = fetch_skill.FetchResponse(url="https://example.org/b.json", status=200, reason="OK",
+                                            content_type="application/json", charset="utf-8",
+                                            body=b'{"a": [1, 2]}', truncated=False)
+        self.assertIn('\n  "a"', fetch_skill.readable(shallow)[1])

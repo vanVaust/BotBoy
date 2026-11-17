@@ -524,7 +524,10 @@ def execute_query(dataset: Dataset, query: Query) -> Tuple[List[Dict[str, Any]],
             if column not in columns:
                 raise SkillUsageError(f"Cannot select unknown column {column!r}; available: {', '.join(columns[:40])}")
         columns = list(query.select)
-        rows = [{col: row.get(col) for col in columns} for row in rows]
+        # Count and limit first: projecting every match across many selected
+        # columns before the limit exhausted memory on sparse data.
+        matched = len(rows)
+        return [{col: row.get(col) for col in columns} for row in rows[: query.limit]], columns, matched
     matched = len(rows)
     return rows[: query.limit], columns, matched
 
