@@ -25,6 +25,9 @@ async def handle_intelligence_route(
 ) -> dict | None:
     roles = roles or []
 
+    if first == "agent":
+        return await _handle_agent(bot, command, principal=principal, roles=roles)
+
     if first == "plan" and bot.planner:
         task = command[4:].strip()
         if not task:
@@ -206,3 +209,75 @@ async def handle_intelligence_route(
             return {"success": False, "output": f"LLM error: {exc}", "type": "llm"}
 
     return None
+
+
+# Agent steps run through process_command with this context: never the implicit
+# local-operator grant, so approval-gated commands stay gated (defence in depth
+# beneath the agent's own data-flow policy).
+AGENT_APPROVAL_CONTEXT = {"granted": False, "explicit": False, "reason": "agent_step", "source": "agent"}
+
+_AGENT_USAGE = "Usage: agent [--approve <sha256>]... <task>"
+
+
+def _parse_agent_command(command: str) -> tuple[list[str], str]:
+    tokens = command.split()[1:]
+    approved: list[str] = []
+    while len(tokens) >= 2 and tokens[0] == "--approve":
+        digest = tokens[1].lower()
+        if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+            raise ValueError("--approve expects a 64-character SHA-256 hex digest")
+        approved.append(digest)
+        tokens = tokens[2:]
+    return approved, " ".join(tokens)
+
+
+def _format_agent_run(run) -> str:
+    lines = [f"Agent: {run.status}"]
+    for step in run.steps:
+        args = ", ".join(
+            f"{name}={value.value[:60]!r}{'' if value.trust.value == 'trusted' else ' [untrusted]'}"
+            for name, value in step.args.items()
+        )
+        lines.append(f"  {step.step_id} {step.tool}({args}) -> {step.status}"
+                     + (f": {step.reason}" if step.reason and step.status != "ok" else ""))
+    if run.status == "approval_required" and run.pending is not None:
+        lines.append(f"  Approve exactly this call with: agent --approve {run.pending.digest} <same task>")
+    if run.status == "completed":
+        marker = ""
+        if run.answer_trust.value == "untrusted":
+            origins = ", ".join(run.untrusted_origins)
+            marker = f"\n[contains untrusted content from: {origins}]"
+        lines.append(f"Answer: {run.answer}{marker}")
+    elif run.error:
+        lines.append(f"Reason: {run.error}")
+    return "\n".join(lines)
+
+
+async def _handle_agent(bot, command: str, *, principal: str, roles: list[str]) -> dict:
+    from botboy.agent import SecureAgent
+
+    try:
+        approved, task = _parse_agent_command(command)
+    except ValueError as exc:
+        return {"success": False, "output": f"{exc}. {_AGENT_USAGE}", "type": "agent"}
+    if not task:
+        return {"success": False, "output": _AGENT_USAGE, "type": "agent"}
+    backend = getattr(getattr(bot, "llm", None), "_backend", None)
+    if backend is None:
+        return {"success": False, "output": "Agent requires an enabled LLM backend.", "type": "agent"}
+
+    async def execute(step_command: str) -> dict:
+        return await bot.process_command(
+            step_command,
+            principal=principal,
+            roles=list(roles),
+            approval_context=dict(AGENT_APPROVAL_CONTEXT),
+        )
+
+    run = await SecureAgent(backend, execute).run(task, approved=approved)
+    return {
+        "success": run.status == "completed",
+        "output": _format_agent_run(run),
+        "type": "agent",
+        "data": run.to_dict(),
+    }

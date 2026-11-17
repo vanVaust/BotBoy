@@ -175,6 +175,30 @@ Der aktuelle reproduzierbare Release-Stand steht in `botboy/data/STATUS_SNAPSHOT
 - `botboy/data/STATUS_SNAPSHOT.json` Release-Snapshot
 - `.github/workflows/release-verification.yml` CI-Gate fuer Build, Install und Release-Tests
 
+## Agent-Modus (`agent <aufgabe>`)
+
+Mehrschrittige Aufgaben mit Werkzeugen, abgesichert gegen Prompt-Injection nach dem
+Plan-then-Execute-Muster mit Herkunftsverfolgung (CaMeL, Debenedetti et al. 2025;
+Beurer-Kellner et al. 2025). Code: `botboy/agent/`, Tests: `tests/test_secure_agent.py`.
+
+1. **Planen** – das LLM sieht nur die Aufgabe und den Werkzeugkatalog und liefert einen
+   festen Plan (JSON, max. 8 Schritte, nur Rückwärtsverweise). Werkzeugergebnisse
+   erreicht der Planer nie; eingeschleuste Texte können also nicht ändern, *welche*
+   Werkzeuge laufen.
+2. **Ausführen** – jeder Wert trägt ein Label `trusted`/`untrusted`. Ergebnisse von
+   Speicher, Web und Dateinamen sind `untrusted`; abgeleitete Werte erben das Label.
+3. **Prüfen vor jedem Aufruf** – `untrusted` darf nie in einen Steuerparameter
+   (Suchanfrage nach außen, Löschauswahl, Dateimuster, Anweisung) → `denied`.
+   Löschen und das Speichern fremder Inhalte → `approval_required` mit SHA-256 über
+   Werkzeug, Werte und Labels; freigegeben wird genau dieser Aufruf:
+   `agent --approve <digest> <aufgabe>`. Verbot gewinnt gegen Freigabe.
+4. **Quarantäne-LLM** – `llm.extract` verarbeitet fremde Daten ohne Werkzeuge; seine
+   Ausgabe bleibt `untrusted`.
+
+Agent-Schritte laufen ohne die implizite Operator-Freigabe der CLI; die serverseitige
+Löschsperre greift also zusätzlich. Über authentifizierte Remote-Schnittstellen ist
+`agent` gesperrt. Die Antwort markiert Inhalte fremder Herkunft.
+
 ## Hinweise
 
 - Browser-Zugriffe auf beide Gateways werden auch ohne lokale Authentifizierung auf erlaubte Host-/Origin-Werte und JSON-Request-Bodies geprueft. `BOTBOY_ALLOWED_HOSTS` erlaubt zusaetzliche Hostnamen; ein Wildcard-Wert schaltet die Loopback-Hostpruefung nicht aus. `BOTBOY_ENABLE_DOCS=true` aktiviert die standardmaessig deaktivierten FastAPI-Dokumentationsseiten.

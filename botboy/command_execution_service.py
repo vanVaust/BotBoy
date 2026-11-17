@@ -271,7 +271,7 @@ class CommandExecutionService:
             "delete", "memories", "memstats", "worker", "workers", "schedule", "handoff",
             "a2a", "reflect", "reflection", "performance", "eval", "evals", "skilllib",
             "skilllibrary", "skillroute", "contract", "contracts", "system",
-            "plan", "think", "archetypes", "intent", "hsearch", "hybrid-search",
+            "plan", "think", "agent", "archetypes", "intent", "hsearch", "hybrid-search",
         }
         if first in stateful:
             raise AuthorizationError("Use the authorized resource API for this command family")
