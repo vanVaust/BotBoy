@@ -89,6 +89,9 @@ def handle_runtime_command(
 
     if args.command in {"exec", "task", "worker"}:
         command = resolve_exec_command(args)
+        # Routes that pause for a later approval read this: the process ends
+        # after this command, so nothing pending could ever be resumed.
+        bot.one_shot = True
         result = asyncio.run(bot.process_command(command, principal="local-cli"))
         print(result.get("output", ""))
         return 0 if result.get("success") else 1

@@ -10,6 +10,13 @@ was tatsächlich geschah, zeigt `git log`. Es wird hier nicht rückwirkend erfun
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- `agent <aufgabe>`: Agent-Schleife nach Plan-then-Execute mit Herkunftslabels,
+  Datenflussprüfung vor jedem Werkzeugaufruf, argumentgebundenen Freigaben und
+  Quarantäne-LLM (`botboy/agent/`). 9 Werkzeuge auf Basis vorhandener Builtins;
+  24 Tests inkl. Injection-Suite (5 harmlose Aufgaben erfüllt, 5 Angriffe ohne Wirkung).
+
 ### Sicherheit
 
 - Löschsperre umgehbar: `delete <query>` (Alias von `forget`) löschte Erinnerungen
