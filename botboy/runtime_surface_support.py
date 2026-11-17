@@ -26,6 +26,15 @@ def build_help_response(bot) -> dict:
     system info           Platform and runtime info
     time / date           Current UTC and local time
 
+  SKILLS (native, executable; ws/data/repo/forge read only the workspace)
+    expr <program>        Sandboxed math/statistics evaluator (vars, lists, budgets)
+    text stats|keywords|summarize|diff|regex <text>  Inline text analytics
+    ws list|read|grep|stat|summarize|keywords|chunk|diff  Workspace file tools
+    data schema|head|stats|query <file> ...  CSV/JSON/JSONL queries
+    fetch <url>           SSRF-safe web page fetch as readable text
+    repo status|log|diff|branches|show  Read-only git inspection
+    forge lint|audit|scaffold  Validate and scaffold SKILL.md skills
+
   SCHEDULER  [Phase 0]
     schedule list         List scheduled tasks
     schedule add "<name>" "<cron>"  Add scheduled task
