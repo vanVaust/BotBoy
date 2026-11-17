@@ -133,7 +133,9 @@ class RepoSkillTests(unittest.TestCase):
         git(evil, "commit", "-q", "-m", "r")
         blob = subprocess.run(["git", "rev-parse", "HEAD:r"], cwd=evil, capture_output=True, text=True,
                               check=True).stdout.strip()
-        (evil / ".git" / "objects" / blob[:2] / blob[2:]).unlink()
+        obj = evil / ".git" / "objects" / blob[:2] / blob[2:]
+        os.chmod(obj, 0o644)  # git writes objects read-only; Windows refuses to unlink those
+        obj.unlink()
         git(evil, "config", "core.repositoryformatversion", "1")
         git(evil, "config", "extensions.partialclone", "origin")
         git(evil, "config", "remote.origin.url", str(self.project))
