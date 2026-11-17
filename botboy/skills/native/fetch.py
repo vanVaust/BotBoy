@@ -312,7 +312,12 @@ def fetch_url(url: str, policy: FetchPolicy, resolver: Resolver = _default_resol
 
 
 class _ReadableHTML(HTMLParser):
-    _SKIP = {"script", "style", "noscript", "svg", "template", "iframe", "canvas", "head"}
+    _SKIP = {"script", "style", "noscript", "svg", "template", "iframe", "canvas"}
+    # Head content is suppressed separately: </head> is optional in HTML and
+    # HTMLParser does not synthesise it, so a depth counter would swallow
+    # the whole body of such pages.
+    _BODY_START = {"body", "p", "div", "main", "article", "section", "header", "footer", "nav",
+                   "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "table", "a", "span", "img", "pre"}
     _BLOCK = {"p", "div", "section", "article", "header", "footer", "main", "aside", "nav", "li", "ul", "ol",
               "table", "tr", "br", "hr", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "blockquote", "dd", "dt",
               "figcaption", "form"}
@@ -324,6 +329,7 @@ class _ReadableHTML(HTMLParser):
         self.title = ""
         self.links: List[Dict[str, str]] = []
         self._skip_depth = 0
+        self._in_head = False
         self._in_title = False
         self._current_link: Optional[Dict[str, str]] = None
         self.meta_charset: Optional[str] = None
@@ -339,6 +345,11 @@ class _ReadableHTML(HTMLParser):
                 self.meta_charset = charset.strip()
         if tag == "title":
             self._in_title = True
+        if tag == "head":
+            self._in_head = True
+            return
+        if self._in_head and tag in self._BODY_START:
+            self._in_head = False
         if tag in self._SKIP:
             self._skip_depth += 1
             return
@@ -361,6 +372,9 @@ class _ReadableHTML(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         if tag == "title":
             self._in_title = False
+        if tag == "head":
+            self._in_head = False
+            return
         if tag in self._SKIP:
             self._skip_depth = max(0, self._skip_depth - 1)
             return
@@ -375,7 +389,7 @@ class _ReadableHTML(HTMLParser):
     def handle_data(self, data: str) -> None:
         if self._in_title:
             self.title += data
-        if self._skip_depth:
+        if self._skip_depth or self._in_head:
             return
         self.parts.append(data)
         if self._current_link is not None:

@@ -33,6 +33,7 @@ from botboy.skills.native.base import (
 
 MAX_FILE_BYTES = 20 * 1024 * 1024
 MAX_ROWS = 200_000
+MAX_RENDER_CELLS = 100_000
 MAX_LIMIT = 1000
 DEFAULT_LIMIT = 50
 MAX_DATA_ROWS = 200
@@ -88,11 +89,21 @@ def _flatten(record: Any, prefix: str = "", depth: int = 0) -> Dict[str, Any]:
     for key, value in record.items():
         name = f"{prefix}.{key}" if prefix else str(key)
         if isinstance(value, dict) and depth < MAX_FLATTEN_DEPTH:
-            flat.update(_flatten(value, name, depth + 1))
+            nested = _flatten(value, name, depth + 1)
+            clash = flat.keys() & nested.keys()
         elif isinstance(value, (dict, list)):
-            flat[name] = json.dumps(value, ensure_ascii=False, sort_keys=True)
+            nested = {name: json.dumps(value, ensure_ascii=False, sort_keys=True)}
+            clash = flat.keys() & nested.keys()
         else:
-            flat[name] = value
+            nested = {name: value}
+            clash = flat.keys() & nested.keys()
+        if clash:
+            # {"a.b": 1, "a": {"b": 2}} would silently keep only one value.
+            raise SkillUsageError(
+                f"JSON keys collide after flattening: {sorted(clash)[0]!r} is both a dotted key "
+                "and a nested path; rename one of them"
+            )
+        flat.update(nested)
     return flat
 
 
@@ -352,9 +363,20 @@ def parse_query(tokens: Sequence[str]) -> Query:
 
 
 def _is_value_position(body: List[str], clause: str) -> bool:
-    # In "where status == limit", the token after an operator is a value even
-    # if it spells a clause keyword.
-    return clause == "where" and bool(body) and body[-1].lower() in _OPERATORS
+    """True where the clause grammar needs a column or value next.
+
+    There a keyword spelling (a column named ``order``, ``limit``, ``group``)
+    is data, not the start of a new clause.
+    """
+    if not body:
+        return clause in {"where", "select", "group", "sort", "agg"}
+    last = body[-1].lower()
+    if clause == "where":
+        # "where status == limit": a value; "where a == 1 and order == 2": a column.
+        return last in _OPERATORS or last in {"and", "or"}
+    if clause in {"select", "group", "sort", "agg"}:
+        return last.endswith(",")
+    return False
 
 
 def _parse_conditions(tokens: Sequence[str]) -> List[List[Condition]]:
@@ -631,7 +653,18 @@ def _execute(ctx: NativeSkillContext, tokens: List[str]) -> dict:
         return _stats(dataset, args[1])
     query = parse_query(args[1:])
     rows, columns, matched = execute_query(dataset, query)
-    body = render_rows(rows, columns, query.output_format)
+    if not query.select and not query.group_by and not query.aggregates:
+        # Sparse JSON: show only columns the returned rows actually use.
+        used = {column for row in rows for column in row}
+        columns = [column for column in columns if column in used]
+    shown = rows
+    if columns and len(rows) * len(columns) > MAX_RENDER_CELLS:
+        # Rendering expands every row across every column before output
+        # truncation; bound that work first.
+        shown = rows[: max(1, MAX_RENDER_CELLS // len(columns))]
+    body = render_rows(shown, columns, query.output_format)
+    if len(shown) < len(rows):
+        body += f"\n(rendered {len(shown)} of {len(rows)} rows: {len(columns)} columns exceed the render budget)"
     body, _ = truncate(body, 12000)
     header = f"{dataset.path}: {matched} matching row(s)" + (f", showing {len(rows)}" if matched > len(rows) else "")
     return result(

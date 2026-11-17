@@ -341,9 +341,35 @@ class DiffResult:
     inline: str
 
 
+# difflib matching is quadratic in the worst case (many unique, reordered
+# lines); above this many line pairs only a multiset summary is computed.
+MAX_DIFF_LINE_PAIRS = 4_000_000
+
+
+def _summary_diff(a_lines: List[str], b_lines: List[str], a_label: str, b_label: str) -> DiffResult:
+    from collections import Counter
+
+    if a_lines == b_lines:
+        return DiffResult(unified="", added_lines=0, removed_lines=0, similarity=1.0, inline="")
+    only_a = Counter(a_lines) - Counter(b_lines)
+    only_b = Counter(b_lines) - Counter(a_lines)
+    removed, added = sum(only_a.values()), sum(only_b.values())
+    total = max(len(a_lines) + len(b_lines), 1)
+    similarity = 1.0 - (removed + added) / total
+    note = (f"--- {a_label}\n+++ {b_label}\n"
+            f"(files too large for a line-by-line diff within the work budget: "
+            f"{len(a_lines)} x {len(b_lines)} lines; showing a summary)\n"
+            f"lines only in {a_label}: {removed}, only in {b_label}: {added}"
+            + ("" if removed or added else "; same lines, different order"))
+    return DiffResult(unified=note, added_lines=added, removed_lines=removed,
+                      similarity=round(min(similarity, 0.9999) if a_lines != b_lines else 1.0, 4), inline="")
+
+
 def diff_texts(a: str, b: str, *, a_label: str = "a", b_label: str = "b", context: int = 3) -> DiffResult:
     a_lines = a.splitlines()
     b_lines = b.splitlines()
+    if len(a_lines) * len(b_lines) > MAX_DIFF_LINE_PAIRS:
+        return _summary_diff(a_lines, b_lines, a_label, b_label)
     unified_lines = list(difflib.unified_diff(a_lines, b_lines, fromfile=a_label, tofile=b_label, n=context, lineterm=""))
     # splitlines() drops the final terminator, so "x" and "x\n" would look
     # identical; report the difference the way diff(1) does.

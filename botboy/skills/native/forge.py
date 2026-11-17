@@ -129,6 +129,12 @@ def lint_skill_text(content: str, source: str, *, skill_manager: Any = None) -> 
         report.add("error", "frontmatter.dashes",
                    "BotBoy's loader splits the file on every '---'; remove '---' from the frontmatter values.")
     try:
+        # Anchors/aliases let a few hundred bytes describe a structure that
+        # str() expands to gigabytes (billion-laughs). Manifests never need
+        # them, so refuse before building any objects.
+        if any(isinstance(event, yaml.AliasEvent) for event in yaml.parse(frontmatter, Loader=yaml.SafeLoader)):
+            report.add("error", "yaml.alias", "YAML aliases (*name) are not allowed in skill manifests.")
+            return report
         meta = yaml.safe_load(frontmatter)
     except yaml.YAMLError as exc:
         report.add("error", "yaml.invalid", f"Frontmatter is not valid YAML: {str(exc).splitlines()[0]}")
@@ -147,6 +153,9 @@ def lint_skill_text(content: str, source: str, *, skill_manager: Any = None) -> 
                    f"name {name!r} belongs to a packaged native skill; the router ignores custom skills "
                    "with that name, so none of its triggers would ever run.")
     description = meta.get("description")
+    if description is not None and not isinstance(description, str):
+        report.add("error", "description.type", "'description' must be a single string.")
+        description = None
     if not description or not str(description).strip():
         report.add("error", "description.missing", "'description' is required; routing and humans rely on it.")
     elif len(str(description).strip()) < 20:

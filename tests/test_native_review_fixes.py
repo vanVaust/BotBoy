@@ -230,3 +230,77 @@ class ThirdReviewRoundTests(unittest.TestCase):
         self.assertEqual(fetch_skill.charset_from_content_type('text/plain; charset="ISO-8859-1"'), "iso-8859-1")
         self.assertEqual(fetch_skill.charset_from_content_type("text/html;charset = utf-8"), "utf-8")
         self.assertIsNone(fetch_skill.charset_from_content_type("text/plain"))
+
+
+class FourthReviewRoundTests(unittest.TestCase):
+    def test_yaml_alias_bombs_are_refused_before_expansion(self) -> None:
+        levels = ["a0: &a0 [x, x, x, x, x, x, x, x, x, x]"]
+        for i in range(1, 10):
+            levels.append(f"a{i}: &a{i} [" + ", ".join([f"*a{i - 1}"] * 10) + "]")
+        text = ("---\nname: bomb-skill\n" + "\n".join(levels) + "\ndescription: *a9\ntriggers: [bomb]\n---\n")
+        started = time.perf_counter()
+        report = forge.lint_skill_text(text, "s/SKILL.md")
+        self.assertLess(time.perf_counter() - started, 1.0)
+        self.assertIn("yaml.alias", {finding.code for finding in report.findings})
+
+    def test_non_string_description_is_a_finding(self) -> None:
+        text = "---\nname: x-skill\ndescription: [a, b]\ntriggers: [xcount]\n---\n"
+        self.assertIn("description.type", {f.code for f in forge.lint_skill_text(text, "s/SKILL.md").findings})
+
+    def test_html_without_closing_head_keeps_body(self) -> None:
+        response = fetch_skill.FetchResponse(
+            url="https://example.org/", status=200, reason="OK", content_type="text/html", charset="utf-8",
+            body=b"<html><head><title>Demo</title><body><p>Useful text.</p><a href='/x'>link</a></body></html>",
+            truncated=False,
+        )
+        title, text, links = fetch_skill.readable(response)
+        self.assertEqual(title, "Demo")
+        self.assertIn("Useful text.", text)
+        self.assertEqual(len(links), 1)
+
+    def test_clause_keywords_work_as_column_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "o.csv").write_text("order,amount,limit\n1,10,5\n2,20,6\n", encoding="utf-8")
+            ctx = NativeSkillContext(workspace_root=root)
+
+            def query(text):
+                return asyncio.run(data_skill.run(f"data query o.csv {text}", ctx))
+
+            self.assertEqual([r["amount"] for r in query("where order == 2")["data"]["rows"]], [20])
+            self.assertEqual(query("select order, limit")["data"]["columns"], ["order", "limit"])
+            self.assertEqual([r["order"] for r in query("sort order desc limit 1")["data"]["rows"]], [2])
+            self.assertEqual(len(query("where amount > 5 order by amount limit 1")["data"]["rows"]), 1)
+
+    def test_flattened_key_collisions_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "c.json").write_text('[{"a.b": 10, "a": {"b": 20}}]', encoding="utf-8")
+            ctx = NativeSkillContext(workspace_root=root)
+            result = asyncio.run(data_skill.run("data query c.json", ctx))
+        self.assertFalse(result["success"])
+        self.assertIn("collide", result["output"])
+
+    def test_sparse_query_rendering_is_bounded(self) -> None:
+        import json as jsonlib
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "s.json").write_text(jsonlib.dumps([{f"f{i}": i} for i in range(20_000)]), encoding="utf-8")
+            ctx = NativeSkillContext(workspace_root=root)
+            started = time.perf_counter()
+            result = asyncio.run(data_skill.run("data query s.json limit 1000", ctx))
+        self.assertLess(time.perf_counter() - started, 5.0)
+        self.assertTrue(result["success"], result["output"])
+        self.assertLessEqual(len(result["data"]["columns"]), 1000)
+
+    def test_large_reordered_diff_is_bounded(self) -> None:
+        a = "\n".join(str(i) for i in range(20_000))
+        lines = [str(i) for i in range(20_000)]
+        for i in range(0, len(lines) - 1, 2):
+            lines[i], lines[i + 1] = lines[i + 1], lines[i]
+        started = time.perf_counter()
+        result = diff_texts(a, "\n".join(lines))
+        self.assertLess(time.perf_counter() - started, 1.0)
+        self.assertIn("summary", result.unified)
+        self.assertEqual(diff_texts(a, a).unified, "")
