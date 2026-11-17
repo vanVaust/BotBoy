@@ -26,6 +26,14 @@ was tatsächlich geschah, zeigt `git log`. Es wird hier nicht rückwirkend erfun
   Ausführung im Worker-Thread statt in der Event-Loop.
 - Same-Origin-Prüfung behandelt einen fehlenden Port als Standardport des Schemas.
 
+### Behoben
+
+- Befehls-Cache: Präfixe ohne eigenen Eintrag wurden 30 s zwischengespeichert. Dadurch
+  lieferte ein zweites `save x` die alte Bestätigung („id=1“) und speicherte nichts,
+  ein zweites `delete x` meldete „Deleted 1“ ohne zu löschen. Cachen ist jetzt pro
+  Präfix freigeschaltet (nur bekannte reine Lesebefehle), unbekannte Präfixe werden
+  nie gecacht.
+
 ### Entfernt
 
 - `botboy/bundled_assets/` — byte-identische Kopie von `botboy/bundled/`,
