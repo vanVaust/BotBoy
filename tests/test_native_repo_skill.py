@@ -233,3 +233,52 @@ class RepoOutputCapTests(unittest.TestCase):
         self.assertLessEqual(len(text.encode()), 4096)
         with self.assertRaisesRegex(GitError, "refusing a partial result"):
             asyncio.run(repo_skill._run_git(repo, ["show", "HEAD"], allow_truncation=False))
+
+
+@unittest.skipUnless(GIT, "git is not installed")
+class RepoRedirectionTests(unittest.TestCase):
+    """Review finding: .git/commondir made git read a repository outside the workspace."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = Path(tmp.name).resolve()
+        self.outside = base / "private"
+        self.outside.mkdir()
+        git(self.outside, "init", "-q")
+        git(self.outside, "config", "user.email", "t@example.invalid")
+        git(self.outside, "config", "user.name", "T")
+        (self.outside / "secret.txt").write_text("s\n", encoding="utf-8")
+        git(self.outside, "add", "secret.txt")
+        git(self.outside, "commit", "-q", "-m", "PRIVATE COMMIT MESSAGE")
+        self.root = base / "workspace"
+        self.ctx = NativeSkillContext(workspace_root=self.root)
+        self.fake = self.root / "fake" / ".git"
+        self.fake.mkdir(parents=True)
+
+    def call(self, command: str) -> dict:
+        return asyncio.run(repo_skill.run(command, self.ctx))
+
+    def test_commondir_redirect_is_refused(self) -> None:
+        (self.fake / "HEAD").write_text("ref: refs/heads/master\n", encoding="utf-8")
+        (self.fake / "commondir").write_text(str(self.outside / ".git"), encoding="utf-8")
+        result = self.call("repo show HEAD fake")
+        self.assertFalse(result["success"])
+        self.assertNotIn("PRIVATE", result["output"])
+        self.assertIn("commondir", result["output"])
+
+    def test_alternates_symlinks_and_includes_are_refused(self) -> None:
+        shutil.rmtree(self.fake.parent)
+        project = self.root / "fake"
+        project.mkdir(parents=True)
+        git(project, "init", "-q")
+        alternates = project / ".git" / "objects" / "info" / "alternates"
+        alternates.write_text(str(self.outside / ".git" / "objects"), encoding="utf-8")
+        self.assertIn("alternates", self.call("repo log fake")["output"])
+        alternates.unlink()
+        git(project, "config", "include.path", str(self.outside / ".git" / "config"))
+        self.assertIn("program-executing", self.call("repo log fake")["output"])
+        git(project, "config", "--unset", "include.path")
+        if os.name != "nt":
+            (project / ".git" / "refs" / "heads" / "leak").symlink_to(self.outside / ".git" / "refs" / "heads" / "master")
+            self.assertIn("symbolic link", self.call("repo log fake")["output"])

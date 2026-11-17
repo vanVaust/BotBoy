@@ -148,3 +148,85 @@ class SecondReviewRoundTests(unittest.TestCase):
         report = forge.lint_skill_text(text, "s/SKILL.md")
         self.assertIn("name.native", {finding.code for finding in report.findings})
         self.assertFalse(report.executable)
+
+
+class ThirdReviewRoundTests(unittest.TestCase):
+    def test_markdown_stripping_is_linear_and_equivalent(self) -> None:
+        import random
+        import re as regex
+
+        from botboy.skills.native import textkit
+
+        for text in ("[" * 200_000, "```" * 100_000, "![" * 100_000 + "]"):
+            started = time.perf_counter()
+            textkit.strip_markup(text, ".md")
+            self.assertLess(time.perf_counter() - started, 1.0)
+        link_re = regex.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+        fence_re = regex.compile(r"```.*?```", regex.DOTALL)
+        rng = random.Random(7)
+        for _ in range(3000):
+            text = "".join(rng.choice("ab![]()`\n ") for _ in range(rng.randint(0, 40)))
+            self.assertEqual(textkit._strip_links(text), link_re.sub(r"\1", text), text)
+            self.assertEqual(textkit._strip_fences(text), fence_re.sub("\n", text), text)
+
+    def test_duplicate_csv_headers_keep_every_column(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "x.csv").write_text("amount,amount\n10,20\n30,40\n", encoding="utf-8")
+            ctx = NativeSkillContext(workspace_root=root)
+            result = asyncio.run(data_skill.run("data query x.csv agg sum:amount sum:amount_2", ctx))
+        self.assertTrue(result["success"], result["output"])
+        self.assertEqual(result["data"]["rows"], [{"sum_amount": 40, "sum_amount_2": 60}])
+
+    def test_sparse_schema_is_linear(self) -> None:
+        rows = [{f"field_{i}": i} for i in range(20_000)]
+        dataset = data_skill.Dataset(path="x", columns=[f"field_{i}" for i in range(20_000)], rows=rows)
+        started = time.perf_counter()
+        schema = data_skill._schema(dataset)
+        self.assertLess(time.perf_counter() - started, 2.0)
+        self.assertEqual(schema["data"]["columns"][5]["nulls"], 19_999)
+
+    def test_non_ascii_url_is_percent_encoded(self) -> None:
+        policy = fetch_skill.FetchPolicy()
+        target = fetch_skill.vet_url("https://example.org/wiki/München?q=café&x=%41",
+                                     policy, resolver=lambda host, port: ["93.184.216.34"])
+        self.assertEqual(target.path, "/wiki/M%C3%BCnchen?q=caf%C3%A9&x=%41")
+        target.path.encode("ascii")
+
+    def test_malformed_link_does_not_abort_extraction(self) -> None:
+        response = fetch_skill.FetchResponse(
+            url="https://example.org/", status=200, reason="OK", content_type="text/html", charset="utf-8",
+            body=b"<p>Useful text</p><a href='http://['>bad</a>", truncated=False, redirects=[],
+            elapsed_ms=1.0,
+        )
+        title, text, _links = fetch_skill.readable(response)
+        self.assertIn("Useful text", text)
+
+    def test_final_newline_difference_is_reported(self) -> None:
+        result = diff_texts("hello", "hello\n")
+        self.assertIn("No newline at end of file", result.unified)
+        self.assertLess(result.similarity, 1.0)
+        self.assertEqual(diff_texts("same\n", "same\n").unified, "")
+
+    def test_concatenated_gzip_members_are_all_decoded(self) -> None:
+        import gzip
+
+        body = gzip.compress(b"first half\n") + gzip.compress(b"second half\n")
+
+        class GzipResponse:
+            def __init__(self):
+                self.chunks = [body, b""]
+
+            def getheader(self, name, default=None):
+                return {"Content-Encoding": "gzip", "Content-Length": str(len(body))}.get(name, default)
+
+            def read1(self, _size):
+                return self.chunks.pop(0)
+
+        data, truncated = fetch_skill._read_body(GzipResponse(), fetch_skill.FetchPolicy(), time.monotonic() + 5)
+        self.assertEqual((data, truncated), (b"first half\nsecond half\n", False))
+
+    def test_quoted_charset_is_parsed(self) -> None:
+        self.assertEqual(fetch_skill.charset_from_content_type('text/plain; charset="ISO-8859-1"'), "iso-8859-1")
+        self.assertEqual(fetch_skill.charset_from_content_type("text/html;charset = utf-8"), "utf-8")
+        self.assertIsNone(fetch_skill.charset_from_content_type("text/plain"))

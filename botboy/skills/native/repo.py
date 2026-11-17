@@ -63,6 +63,9 @@ _DANGEROUS_CONFIG = [
         r"^remote\..+\.(uploadpack|receivepack|promisor|proxy|vcs)$",
         r"^extensions\.partialclone$",
         r"^(uploadpack|protocol|credential)\.",
+        # Included files may live outside the workspace.
+        r"^include\.path$",
+        r"^includeif\..+\.path$",
     )
 ]
 _FORCED_CONFIG = (
@@ -133,6 +136,33 @@ def _clean_env(home: str) -> Dict[str, str]:
     return env
 
 
+# Files through which a real .git directory can make git read another
+# repository's config, refs or objects outside the workspace.
+_REDIRECTING_METADATA = (
+    "commondir",
+    "objects/info/alternates",
+    "objects/info/http-alternates",
+    "gitdir",
+)
+_METADATA_SCAN_LIMIT = 100_000
+
+
+def _refuse_redirected_metadata(git_dir: Path) -> None:
+    for relative in _REDIRECTING_METADATA:
+        if os.path.lexists(git_dir / relative):
+            raise GitError(f"'.git/{relative}' redirects git outside this repository; refused")
+    # A symlink anywhere in the metadata (refs, objects, config, HEAD) can
+    # point outside the workspace as well.
+    scanned = 0
+    for current, dirs, files in os.walk(git_dir, followlinks=False):
+        for name in dirs + files:
+            scanned += 1
+            if scanned > _METADATA_SCAN_LIMIT:
+                raise GitError("'.git' has too many entries to verify; refused")
+            if os.path.islink(os.path.join(current, name)):
+                raise GitError("'.git' contains a symbolic link; refused")
+
+
 def locate_repository(ctx: NativeSkillContext, user_path: str) -> Repository:
     worktree = workspace.resolve(ctx.workspace_root, user_path, expect="dir")
     git_dir = worktree / ".git"
@@ -142,6 +172,7 @@ def locate_repository(ctx: NativeSkillContext, user_path: str) -> Repository:
         raise GitError(f"No git repository at {user_path or '.'} (missing .git directory)") from exc
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
         raise GitError("'.git' must be a real directory inside the workspace (gitfiles and links are refused)")
+    _refuse_redirected_metadata(git_dir)
     return Repository(worktree=worktree, git_dir=git_dir, relative=workspace.relative(ctx.workspace_root, worktree))
 
 

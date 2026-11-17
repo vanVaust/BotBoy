@@ -36,7 +36,8 @@ import zlib
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from email.message import Message
+from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
 from botboy.skills.native.base import NativeSkillContext, SkillUsageError, failure, parse_options, result, split_command, truncate
 
@@ -162,9 +163,11 @@ def vet_url(url: str, policy: FetchPolicy, resolver: Resolver = _default_resolve
         reason = address_block_reason(candidate, policy)
         if reason:
             raise FetchError(f"Blocked {host}: {reason}")
-    path = parts.path or "/"
+    # http.client sends the request line as ASCII: percent-encode non-ASCII
+    # characters, keeping existing escapes and URL delimiters.
+    path = quote(parts.path or "/", safe="/%:@!$&'()*+,;=~-._")
     if parts.query:
-        path += "?" + parts.query
+        path += "?" + quote(parts.query, safe="=&%/:?@!$'()*+,;~-._")
     normalized = urlunsplit((scheme, parts.netloc, parts.path or "/", parts.query, ""))
     return Target(url=normalized, scheme=scheme, host=host, port=port, path=path, address=addresses[0])
 
@@ -203,6 +206,14 @@ class FetchResponse:
     elapsed_ms: float = 0.0
 
 
+def charset_from_content_type(header: str) -> Optional[str]:
+    """Charset parameter of a Content-Type header, quoted or not."""
+    message = Message()
+    message["content-type"] = header or ""
+    # get_content_charset handles quoting and whitespace (charset="iso-8859-1").
+    return message.get_content_charset()
+
+
 def _read_body(response: http.client.HTTPResponse, policy: FetchPolicy, deadline: float) -> Tuple[bytes, bool]:
     encoding = (response.getheader("Content-Encoding") or "identity").strip().lower()
     if encoding not in {"identity", "gzip", "deflate", ""}:
@@ -234,6 +245,13 @@ def _read_body(response: http.client.HTTPResponse, policy: FetchPolicy, deadline
         if decompressor is not None:
             # max_length bounds memory even for a decompression bomb.
             output += decompressor.decompress(chunk, policy.max_bytes + 1 - len(output))
+            # A gzip body may hold several members; each ends the current
+            # decompressor and leaves the rest in unused_data.
+            while encoding == "gzip" and decompressor.eof and decompressor.unused_data \
+                    and len(output) <= policy.max_bytes:
+                rest = decompressor.unused_data
+                decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+                output += decompressor.decompress(rest, policy.max_bytes + 1 - len(output))
             if raw_read > HARD_MAX_BYTES and len(output) <= policy.max_bytes:
                 raise FetchError(f"Compressed body exceeds {HARD_MAX_BYTES} bytes")
         else:
@@ -275,14 +293,14 @@ def fetch_url(url: str, policy: FetchPolicy, resolver: Resolver = _default_resol
                 continue
             content_type_header = response.getheader("Content-Type") or ""
             content_type = content_type_header.split(";", 1)[0].strip().lower()
-            charset_match = re.search(r"charset=([\w\-:.]+)", content_type_header, re.IGNORECASE)
+            declared_charset = charset_from_content_type(content_type_header)
             if content_type and not content_type.startswith(_TEXTUAL_TYPES):
                 raise FetchError(f"Refusing non-text content type {content_type!r}")
             body, truncated = _read_body(response, policy, deadline)
             return FetchResponse(
                 url=target.url, status=response.status, reason=response.reason or "",
                 content_type=content_type or "text/plain",
-                charset=charset_match.group(1) if charset_match else None,
+                charset=declared_charset,
                 body=body, truncated=truncated, redirects=redirects,
                 elapsed_ms=round((time.monotonic() - started) * 1000, 1),
             )
@@ -331,8 +349,13 @@ class _ReadableHTML(HTMLParser):
         if tag == "li":
             self.parts.append("- ")
         if tag == "a" and attributes.get("href") and self._skip_depth == 0:
-            href = urljoin(self.base_url, attributes["href"])
-            if urlsplit(href).scheme in ALLOWED_SCHEMES:
+            try:
+                href = urljoin(self.base_url, attributes["href"])
+                scheme = urlsplit(href).scheme
+            except ValueError:
+                # One malformed href (e.g. "http://[") must not discard the page.
+                return
+            if scheme in ALLOWED_SCHEMES:
                 self._current_link = {"href": href, "text": ""}
 
     def handle_endtag(self, tag: str) -> None:

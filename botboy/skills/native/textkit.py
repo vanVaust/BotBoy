@@ -345,6 +345,14 @@ def diff_texts(a: str, b: str, *, a_label: str = "a", b_label: str = "b", contex
     a_lines = a.splitlines()
     b_lines = b.splitlines()
     unified_lines = list(difflib.unified_diff(a_lines, b_lines, fromfile=a_label, tofile=b_label, n=context, lineterm=""))
+    # splitlines() drops the final terminator, so "x" and "x\n" would look
+    # identical; report the difference the way diff(1) does.
+    eof_differs = bool(a or b) and a.endswith(("\n", "\r")) != b.endswith(("\n", "\r"))
+    if eof_differs:
+        missing = a_label if not a.endswith(("\n", "\r")) else b_label
+        if not unified_lines:
+            unified_lines = [f"--- {a_label}", f"+++ {b_label}"]
+        unified_lines.append(f"\\ No newline at end of file ({missing})")
     # unified_diff emits exactly two file-header lines first; content lines
     # such as "++counter;" start with "+++" too, so skip headers by position.
     body = unified_lines[2:]
@@ -367,6 +375,8 @@ def diff_texts(a: str, b: str, *, a_label: str = "a", b_label: str = "b", contex
                 pieces.append("{+" + " ".join(b_words[j1:j2]) + "+}")
         inline = " ".join(pieces)
         similarity = word_matcher.ratio() if (a_words or b_words) else 1.0
+    if eof_differs:
+        similarity = min(similarity, 0.9999)
     return DiffResult(
         unified="\n".join(unified_lines),
         added_lines=added,
@@ -376,8 +386,61 @@ def diff_texts(a: str, b: str, *, a_label: str = "a", b_label: str = "b", contex
     )
 
 
-_MD_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
-_MD_LINK_RE = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+def _strip_fences(text: str) -> str:
+    """Replace ```...``` blocks by a newline in one left-to-right pass.
+
+    Same result as ``re.sub(r"```.*?```", "\\n", text, flags=re.DOTALL)``
+    but linear: the lazy regex rescanned the rest of the text from every
+    unclosed fence.
+    """
+    out: List[str] = []
+    pos = 0
+    while True:
+        start = text.find("```", pos)
+        if start == -1:
+            break
+        end = text.find("```", start + 3)
+        if end == -1:
+            break
+        out.append(text[pos:start])
+        out.append("\n")
+        pos = end + 3
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def _strip_links(text: str) -> str:
+    """Replace ``[label](target)`` / ``![label](target)`` by ``label`` in O(n).
+
+    Matches ``!?\\[([^\\]]*)\\]\\([^)]*\\)`` leftmost-first. Every ``[`` before the
+    first following ``]`` shares that ``]`` (and the same ``(...)``), so when one
+    fails they all fail and the scan jumps past it instead of rescanning; a
+    long run of ``[`` without ``]`` was quadratic with the regex.
+    """
+    out: List[str] = []
+    pos = 0
+    length = len(text)
+    while pos < length:
+        start = text.find("[", pos)
+        if start == -1:
+            break
+        close = text.find("]", start + 1)
+        if close == -1:
+            break
+        if close + 1 < length and text[close + 1] == "(":
+            end = text.find(")", close + 2)
+            if end != -1:
+                cut = start - 1 if start > pos and text[start - 1] == "!" else start
+                out.append(text[pos:cut])
+                out.append(text[start + 1:close])
+                pos = end + 1
+                continue
+        out.append(text[pos:close + 1])
+        pos = close + 1
+    out.append(text[pos:])
+    return "".join(out)
+
+
 _MD_PREFIX_RE = re.compile(r"^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)", re.MULTILINE)
 
 
@@ -385,8 +448,8 @@ def strip_markup(text: str, suffix: str = "") -> str:
     """Remove Markdown syntax that would otherwise pollute sentence scoring."""
     if suffix.lower() not in {".md", ".markdown", ".rst", ".txt", ""}:
         return text
-    text = _MD_FENCE_RE.sub("\n", text)
-    text = _MD_LINK_RE.sub(r"\1", text)
+    text = _strip_fences(text)
+    text = _strip_links(text)
     text = _MD_PREFIX_RE.sub("", text)
     return re.sub(r"[*_`]{1,3}", "", text)
 

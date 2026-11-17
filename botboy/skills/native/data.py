@@ -148,7 +148,7 @@ def load_dataset(ctx: NativeSkillContext, user_path: str, json_path: Optional[st
             header = next(reader)
         except StopIteration:
             return Dataset(rel, [], [], False)
-        header = [name.strip() or f"column_{idx + 1}" for idx, name in enumerate(header)]
+        header = _distinct_headers([name.strip() or f"column_{idx + 1}" for idx, name in enumerate(header)])
         try:
             for record in reader:
                 if not record:
@@ -218,6 +218,20 @@ class Condition:
 
 
 _EXACT_INT_RE = re.compile(r"[+-]?\d{1,300}")
+
+
+def _distinct_headers(names: Sequence[str]) -> List[str]:
+    """Rename repeated headers (amount, amount_2, ...) so no column is overwritten."""
+    seen: set = set()
+    result: List[str] = []
+    for name in names:
+        candidate, counter = name, 2
+        while candidate in seen:
+            candidate = f"{name}_{counter}"
+            counter += 1
+        seen.add(candidate)
+        result.append(candidate)
+    return result
 
 
 def _as_number(value: Any) -> Optional[Union[int, float]]:
@@ -526,17 +540,23 @@ def _infer_type(values: List[Any]) -> str:
 # ── actions ─────────────────────────────────────────────────────────────────
 
 def _schema(dataset: Dataset) -> dict:
+    # One pass over the populated cells: sparse JSON with a new key per row
+    # made the column-by-row scan quadratic (200k x 200k lookups).
+    present: Dict[str, List[Any]] = {column: [] for column in dataset.columns}
+    for row in dataset.rows:
+        for column, value in row.items():
+            if value is not None and value != "":
+                present.setdefault(column, []).append(value)
+    total = len(dataset.rows)
     columns_info: List[Dict[str, Any]] = []
     for column in dataset.columns:
-        values = [row.get(column) for row in dataset.rows]
-        present = [value for value in values if value is not None and value != ""]
-        distinct = len({json.dumps(value, sort_keys=True, default=str) for value in present})
+        values = present.get(column, [])
         columns_info.append({
             "column": column,
-            "type": _infer_type(present),
-            "nulls": len(values) - len(present),
-            "distinct": distinct,
-            "example": present[0] if present else None,
+            "type": _infer_type(values),
+            "nulls": total - len(values),
+            "distinct": len({json.dumps(value, sort_keys=True, default=str) for value in values}),
+            "example": values[0] if values else None,
         })
     table = format_table(columns_info, ["column", "type", "nulls", "distinct", "example"])
     note = f" (first {MAX_ROWS} rows)" if dataset.truncated else ""
