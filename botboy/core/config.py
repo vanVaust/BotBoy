@@ -65,6 +65,12 @@ class SkillsConfig:
     directory: str = field(default_factory=lambda: str(default_skills_dir()))
     auto_discover: bool = True
     validate_security: bool = True
+    # Only directory the filesystem-reading native skills (ws, data, repo,
+    # forge) may read. Empty means "<BotBoy home>/workspace".
+    workspace_root: str = ""
+    # Let ``fetch`` reach RFC1918/loopback hosts (home lab). Link-local,
+    # multicast and reserved ranges stay blocked regardless.
+    fetch_allow_private_networks: bool = False
 
 
 @dataclass
@@ -210,6 +216,10 @@ class BotBoyConfig:
         self.skills.directory = skills.get("directory", self.skills.directory)
         self.skills.auto_discover = skills.get("auto_discover", self.skills.auto_discover)
         self.skills.validate_security = skills.get("validate_security", self.skills.validate_security)
+        self.skills.workspace_root = str(skills.get("workspace_root", self.skills.workspace_root) or "")
+        self.skills.fetch_allow_private_networks = bool(
+            skills.get("fetch_allow_private_networks", self.skills.fetch_allow_private_networks)
+        )
 
         llm = data.get("llm", {})
         self.llm.enabled = llm.get("enabled", self.llm.enabled)
@@ -249,6 +259,11 @@ class BotBoyConfig:
         """Override with environment variables."""
         if v := os.getenv("BOTBOY_SKILLS_DIR"):
             self.skills.directory = v
+        if v := os.getenv("BOTBOY_WORKSPACE"):
+            self.skills.workspace_root = v
+        self.skills.fetch_allow_private_networks = self._env_bool(
+            "BOTBOY_FETCH_ALLOW_PRIVATE_NETWORKS", self.skills.fetch_allow_private_networks
+        )
         self.llm.enabled = self._env_bool("BOTBOY_LLM_ENABLED", self.llm.enabled)
         if v := os.getenv("BOTBOY_LLM_BACKEND"):
             self.llm.backend = v
@@ -421,6 +436,15 @@ class BotBoyConfig:
             return str(bundled_skills_dir())
         return resolved
 
+    def resolve_workspace_root(self) -> str:
+        """Return the directory filesystem-reading native skills are confined to."""
+        if v := os.getenv("BOTBOY_WORKSPACE"):
+            return self._resolve_path(v)
+        configured = str(self.skills.workspace_root or "").strip()
+        if configured:
+            return self._resolve_runtime_path(configured)
+        return str(runtime_home_dir() / "workspace")
+
     def to_dict(self) -> dict:
         return {
             "version": self.version,
@@ -455,6 +479,9 @@ class BotBoyConfig:
                 "resolved_directory": self.resolve_skills_dir(),
                 "auto_discover": self.skills.auto_discover,
                 "validate_security": self.skills.validate_security,
+                "workspace_root": self.skills.workspace_root,
+                "resolved_workspace_root": self.resolve_workspace_root(),
+                "fetch_allow_private_networks": self.skills.fetch_allow_private_networks,
             },
             "llm": {
                 "enabled": self.llm.enabled,

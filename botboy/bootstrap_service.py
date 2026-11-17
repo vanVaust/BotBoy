@@ -73,6 +73,17 @@ class BootstrapService:
                 validate_security=self.config.skills.validate_security,
             )
             self.bot.skills.load_all_skills()
+            configure_native = getattr(self.bot.skills, "configure_native_context", None)
+            if callable(configure_native):
+                workspace_root = self.config.resolve_workspace_root()
+                try:
+                    Path(workspace_root).mkdir(parents=True, exist_ok=True)
+                except OSError:
+                    pass
+                configure_native(
+                    workspace_root=workspace_root,
+                    fetch_allow_private_networks=self.config.skills.fetch_allow_private_networks,
+                )
 
             try:
                 self.bot.agent_skill_library = AgentSkillLibrary.load()

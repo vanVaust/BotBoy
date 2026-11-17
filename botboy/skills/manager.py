@@ -1,15 +1,12 @@
-"""Skills Manager — 9 builtin skills + SKILL.md auto-discovery parser."""
+"""Skills Manager — builtin skills, packaged native skills and SKILL.md discovery."""
 from __future__ import annotations
 
-import ast
 import asyncio
 import base64
 import fnmatch
 import glob
 import hashlib
 import json
-import math
-import operator
 import os
 import platform
 import re
@@ -20,7 +17,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+from botboy.skills.native.base import NativeSkillContext
 
 
 # ── Skill Metadata ─────────────────────────────────────────────────────────────
@@ -360,69 +359,23 @@ def parse_skill_md(path: str) -> Optional[Skill]:
 
 # ── AST-Safe Calculator ────────────────────────────────────────────────────────
 
-_SAFE_OPS = {
-    ast.Add: operator.add,
-    ast.Sub: operator.sub,
-    ast.Mult: operator.mul,
-    ast.Div: operator.truediv,
-    ast.FloorDiv: operator.floordiv,
-    ast.Mod: operator.mod,
-    ast.Pow: operator.pow,
-    ast.USub: operator.neg,
-    ast.UAdd: operator.pos,
-    ast.BitAnd: operator.and_,
-    ast.BitOr: operator.or_,
-    ast.BitXor: operator.xor,
-}
-
-_SAFE_FUNCS = {
-    name: getattr(math, name)
-    for name in dir(math)
-    if not name.startswith("_") and callable(getattr(math, name))
-}
-_SAFE_FUNCS.update({
-    "abs": abs, "round": round, "min": min, "max": max,
-    "sum": sum, "int": int, "float": float,
-})
-_SAFE_CONSTS = {"pi": math.pi, "e": math.e, "tau": math.tau, "inf": math.inf}
-
-
-def _safe_eval_node(node: ast.AST) -> Any:
-    if isinstance(node, ast.Expression):
-        return _safe_eval_node(node.body)
-    if isinstance(node, ast.Constant):
-        if isinstance(node.value, (int, float, complex)):
-            return node.value
-        raise ValueError(f"Unsupported constant type: {type(node.value)}")
-    if isinstance(node, ast.BinOp):
-        op = type(node.op)
-        if op not in _SAFE_OPS:
-            raise ValueError(f"Unsupported operator: {op}")
-        return _SAFE_OPS[op](_safe_eval_node(node.left), _safe_eval_node(node.right))
-    if isinstance(node, ast.UnaryOp):
-        op = type(node.op)
-        if op not in _SAFE_OPS:
-            raise ValueError(f"Unsupported unary operator: {op}")
-        return _SAFE_OPS[op](_safe_eval_node(node.operand))
-    if isinstance(node, ast.Call):
-        if not isinstance(node.func, ast.Name):
-            raise ValueError("Only simple function calls allowed")
-        func_name = node.func.id
-        if func_name not in _SAFE_FUNCS:
-            raise ValueError(f"Function not allowed: {func_name}")
-        args = [_safe_eval_node(a) for a in node.args]
-        return _SAFE_FUNCS[func_name](*args)
-    if isinstance(node, ast.Name):
-        if node.id in _SAFE_CONSTS:
-            return _SAFE_CONSTS[node.id]
-        raise ValueError(f"Undefined name: {node.id}")
-    raise ValueError(f"Unsupported AST node: {type(node).__name__}")
-
-
 def safe_calculate(expression: str) -> Any:
-    """Evaluate a mathematical expression safely using AST parsing."""
-    tree = ast.parse(expression.strip(), mode="eval")
-    return _safe_eval_node(tree)
+    """Evaluate a mathematical expression safely using AST parsing.
+
+    Delegates to the budgeted evaluator behind the ``expr`` skill so that
+    inputs like ``9**9**9`` are rejected instead of stalling the event loop.
+    """
+    from botboy.skills.native.expr import ExprError, evaluate_expression
+
+    try:
+        value = evaluate_expression(expression)
+    except ExprError as exc:
+        raise ValueError(str(exc)) from exc
+    # The calculator renders with str(); only scalars have bounded output.
+    # Lists and statistics over them belong to the `expr` skill.
+    if not isinstance(value, (int, float, complex)) or value is None:
+        raise ValueError("calculate returns numbers only; use `expr` for lists and statistics")
+    return value
 
 
 # ── Unit Conversion ────────────────────────────────────────────────────────────
@@ -878,8 +831,24 @@ _BUILTIN_CONTRACTS: Dict[str, Skill] = {
 }
 
 
+@lru_cache(maxsize=1)
+def _native_skills() -> Tuple[Tuple[Skill, Any], ...]:
+    """Packaged native skills as (trusted contract, coroutine handler) pairs."""
+    from botboy.skills.native.registry import load_native_manifests
+
+    loaded = []
+    for manifest in load_native_manifests(frozenset(_BUILTIN_TRIGGERS)):
+        contract = _build_skill_contract(manifest.meta, path=str(manifest.path), code="", trusted=True)
+        loaded.append((contract, manifest.handler))
+    return tuple(loaded)
+
+
 class SkillManager:
-    """Loads and routes to builtin + custom SKILL.md skills."""
+    """Loads and routes to builtin, native and custom SKILL.md skills.
+
+    Lookup order is builtin → native → custom, so trusted packaged skills can
+    never be shadowed by a discovered SKILL.md declaring the same trigger.
+    """
 
     def __init__(self, skills_dir: Optional[str] = None, auto_discover: bool = True,
                  validate_security: bool = True) -> None:
@@ -888,6 +857,37 @@ class SkillManager:
         self.validate_security = validate_security
         self._skills: Dict[str, Skill] = {}
         self._builtins = BuiltinSkills()
+        self._native: Dict[str, Skill] = {}
+        self._native_handlers: Dict[str, Any] = {}
+        self._native_triggers: Dict[str, str] = {}
+        for contract, handler in _native_skills():
+            self._native[contract.name] = contract
+            self._native_handlers[contract.name] = handler
+            for trigger in contract.triggers:
+                self._native_triggers[trigger.lower()] = contract.name
+        self.native_context = NativeSkillContext(skill_manager=self)
+
+    def configure_native_context(self, *, workspace_root: Optional[str] = None,
+                                 fetch_allow_private_networks: bool = False) -> None:
+        """Set the operator-controlled settings native skills run with."""
+        self.native_context.workspace_root = Path(workspace_root).expanduser() if workspace_root else None
+        self.native_context.fetch_allow_private_networks = bool(fetch_allow_private_networks)
+
+    def native_skill_names(self) -> List[str]:
+        return sorted(self._native)
+
+    def custom_skill_paths(self) -> Dict[str, str]:
+        return {name: skill.source_path for name, skill in self._skills.items()}
+
+    def trigger_owners(self) -> Dict[str, str]:
+        """Map every routable trigger to ``builtin:<name>``/``native:<name>``/``custom:<name>``."""
+        owners: Dict[str, str] = {}
+        for skill in self._skills.values():
+            for trigger in skill.triggers:
+                owners.setdefault(trigger.lower(), f"custom:{skill.name}")
+        owners.update({trigger: f"native:{name}" for trigger, name in self._native_triggers.items()})
+        owners.update({trigger: f"builtin:{name}" for trigger, name in _BUILTIN_TRIGGERS.items()})
+        return owners
 
     def load_all_skills(self) -> int:
         count = 0
@@ -906,21 +906,26 @@ class SkillManager:
 
     def list_skills(self) -> List[str]:
         builtins = list(set(_BUILTIN_TRIGGERS.values()))
-        custom = list(self._skills.keys())
-        return sorted(set(builtins + custom))
+        custom = [name for name in self._skills if name not in self._native]
+        return sorted(set(builtins + list(self._native) + custom))
 
     def list_contracts(self) -> List[Dict[str, Any]]:
         contracts = [skill.to_contract() for skill in _BUILTIN_CONTRACTS.values()]
-        contracts.extend(skill.to_contract() for skill in self._skills.values())
+        contracts.extend(skill.to_contract() for skill in self._native.values())
+        contracts.extend(skill.to_contract() for name, skill in self._skills.items() if name not in self._native)
         return sorted(contracts, key=lambda item: item["name"])
 
     def find_skill_for_command(self, command: str) -> Optional[str]:
-        """Return builtin method name or custom skill name, or None."""
+        """Return builtin method name, native or custom skill name, or None."""
         prefix = command.strip().lower().split()[0] if command.strip() else ""
         if prefix in _BUILTIN_TRIGGERS:
             return _BUILTIN_TRIGGERS[prefix]
+        if prefix in self._native_triggers:
+            return self._native_triggers[prefix]
         # Check custom skill triggers
         for skill in self._skills.values():
+            if skill.name in self._native:
+                continue
             if prefix in [t.lower() for t in skill.triggers]:
                 return skill.name
         return None
@@ -928,6 +933,8 @@ class SkillManager:
     def get_contract_for_skill(self, skill_name: str) -> Optional[Dict[str, Any]]:
         if skill_name in _BUILTIN_CONTRACTS:
             return _BUILTIN_CONTRACTS[skill_name].to_contract()
+        if skill_name in self._native:
+            return self._native[skill_name].to_contract()
         skill = self._skills.get(skill_name)
         return skill.to_contract() if skill else None
 
@@ -974,7 +981,26 @@ class SkillManager:
         handler = method_map.get(method_name)
         if handler:
             return await handler(command)
+        native_handler = self._native_handlers.get(method_name)
+        if native_handler is not None:
+            return await self._execute_native(method_name, native_handler, command)
         return None
+
+    async def _execute_native(self, name: str, handler: Any, command: str) -> dict:
+        started = time.perf_counter()
+        try:
+            outcome = await handler(command, self.native_context)
+        except Exception as exc:  # noqa: BLE001 - a skill bug must not crash routing
+            outcome = {
+                "success": False,
+                "output": f"{name} failed: {exc.__class__.__name__}: {exc}",
+                "type": name,
+                "data": {},
+            }
+        data = outcome.setdefault("data", {})
+        data.setdefault("skill", name)
+        data.setdefault("duration_ms", round((time.perf_counter() - started) * 1000, 3))
+        return outcome
 
     async def execute_custom(
         self,
@@ -1042,4 +1068,6 @@ class SkillManager:
         }
 
     def get_custom_skill(self, name: str) -> Optional[Skill]:
+        if name in self._native:
+            return None
         return self._skills.get(name)

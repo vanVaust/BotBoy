@@ -60,7 +60,22 @@ class CommandExecutionService:
         context = approval_context or {}
         return context.get("source") == "local" and context.get("reason") == "local_default"
 
-    def _approval_required(self, command: str, approval_context: Optional[dict] = None) -> bool:
+    _LOCAL_AUTH_SOURCES = frozenset({"local", "legacy", "task_lifecycle", "task_parent", "scheduler"})
+
+    @staticmethod
+    def contract_remote_policy(contract: Optional[dict]) -> str:
+        """Remote policy declared by a skill contract ('' when undeclared)."""
+        metadata = (contract or {}).get("metadata") or {}
+        return str(metadata.get("remote_policy", "") or "").strip().lower()
+
+    def _is_remote_request(self, approval_context: Optional[dict],
+                           security_context: Optional[SecurityContext] = None) -> bool:
+        if security_context is not None and security_context.auth_source not in self._LOCAL_AUTH_SOURCES:
+            return True
+        return not self._is_local_operator(approval_context)
+
+    def _approval_required(self, command: str, approval_context: Optional[dict] = None,
+                           security_context: Optional[SecurityContext] = None) -> bool:
         # Builtin history/memory deletion has no skill contract.  Keep the
         # trusted CLI default, but block gateway-originated deletion without a
         # real server-issued, scope-bound approval.
@@ -69,7 +84,17 @@ class CommandExecutionService:
         if not self.bot.skills:
             return False
         contract = self.bot.skills.get_contract_for_command(command.strip())
-        return bool(contract and contract.get("needs_approval"))
+        if not contract:
+            return False
+        if contract.get("needs_approval"):
+            return True
+        # Skills that read the workspace or reach the network declare
+        # remote_policy: approval. The local operator chose the workspace and
+        # typed the command; a remote caller must hold a server-issued grant.
+        return (
+            self.contract_remote_policy(contract) == "approval"
+            and self._is_remote_request(approval_context, security_context)
+        )
 
     @staticmethod
     def _has_server_approval(approval_context: dict) -> bool:
@@ -146,6 +171,14 @@ class CommandExecutionService:
         if self.bot.skills:
             approval_contract = self.bot.skills.get_contract_for_command(raw_command.strip())
             if approval_contract and approval_contract.get("needs_approval"):
+                return False
+            # Results that depend on files or the network go stale; never
+            # serve them from the response cache.
+            if approval_contract and (
+                approval_contract.get("allow_filesystem")
+                or approval_contract.get("allow_network")
+                or (approval_contract.get("metadata") or {}).get("cacheable") is False
+            ):
                 return False
         return True
 
@@ -320,7 +353,7 @@ class CommandExecutionService:
                 raise AuthorizationError("roles_expanded")
             if not persisted.scopes.issuperset(security_context.scopes):
                 raise AuthorizationError("scopes_expanded")
-        if not check_approval or not self._approval_required(command, approval_context):
+        if not check_approval or not self._approval_required(command, approval_context, security_context):
             return
         if store is None or task_ctx is None or not self._has_server_approval(approval_context):
             raise AuthorizationError("Server-issued approval required at final execution boundary")
@@ -626,7 +659,7 @@ class CommandExecutionService:
         else:
             command = stripped_command
 
-        if self._approval_required(command, effective_approval_context) and not self._has_server_approval(effective_approval_context):
+        if self._approval_required(command, effective_approval_context, security_context) and not self._has_server_approval(effective_approval_context):
             return self._authorization_failure(
                 "Server-issued approval required for this command.",
                 task_ctx=task_ctx,

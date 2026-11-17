@@ -402,7 +402,12 @@ def parse_layer_definition(path: str) -> Optional[LayerDefinition]:
         content = Path(path).read_text(encoding="utf-8")
     except OSError:
         return None
+    return parse_layer_definition_text(content, path)
 
+
+def parse_layer_definition_text(content: str, path: str) -> Optional[LayerDefinition]:
+    """Parse SKILL.md ``content`` as if it had been read from ``path``."""
+    content = content.replace("\r\n", "\n").replace("\r", "\n")
     # Split on YAML frontmatter delimiters
     parts = content.split("---")
     if len(parts) < 3:

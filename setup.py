@@ -64,6 +64,7 @@ setup(
             _collect_package_data("data")
             + _collect_package_data("web")
             + _collect_package_data("bundled")
+            + _collect_package_data("skills/native/manifests")
         )
     },
     python_requires=">=3.10",
