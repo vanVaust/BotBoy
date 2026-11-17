@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import time
 
 from botboy.tracing import get_trace_context
@@ -217,21 +218,21 @@ async def handle_intelligence_route(
 # beneath the agent's own data-flow policy).
 AGENT_APPROVAL_CONTEXT = {"granted": False, "explicit": False, "reason": "agent_step", "source": "agent"}
 
-_AGENT_USAGE = "Usage: agent <task>  |  agent --approve <sha256>"
+_AGENT_USAGE = "Usage: agent <task>  |  agent --approve <approval-id>"
 _PENDING_TTL_S = 15 * 60
 _PENDING_MAX = 32
 
 
 def _parse_agent_command(command: str) -> tuple[str, str]:
-    """Return (approval digest or "", task)."""
+    """Return (approval id or "", task)."""
     tokens = command.split()[1:]
     if tokens and tokens[0] == "--approve":
         if len(tokens) != 2:
-            raise ValueError("--approve takes exactly one digest and resumes the pending run")
-        digest = tokens[1].lower()
-        if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
-            raise ValueError("--approve expects a 64-character SHA-256 hex digest")
-        return digest, ""
+            raise ValueError("--approve takes exactly one approval id and resumes the pending run")
+        approval_id = tokens[1].lower()
+        if len(approval_id) != 32 or any(ch not in "0123456789abcdef" for ch in approval_id):
+            raise ValueError("--approve expects the 32-character approval id shown with the pending call")
+        return approval_id, ""
     return "", " ".join(tokens)
 
 
@@ -246,15 +247,23 @@ def _pending_runs(bot) -> dict:
     return store
 
 
-def _remember_pending(bot, run, principal: str) -> None:
+def _remember_pending(bot, run, principal: str) -> str:
+    """Store ``run`` under a fresh run-specific id; returns the id.
+
+    Keying by the call digest let two runs with an identical pending call
+    overwrite each other, so approving one resumed the other's continuation.
+    The id names exactly one run; the digest stays the approval binding.
+    """
     store = _pending_runs(bot)
     while len(store) >= _PENDING_MAX:
         store.pop(next(iter(store)))
-    store[run.pending.digest] = {"run": run, "principal": principal,
-                                 "expires": time.monotonic() + _PENDING_TTL_S}
+    approval_id = secrets.token_hex(16)
+    store[approval_id] = {"run": run, "principal": principal, "digest": run.pending.digest,
+                          "expires": time.monotonic() + _PENDING_TTL_S}
+    return approval_id
 
 
-def _format_agent_run(run) -> str:
+def _format_agent_run(run, approval_id: str = "") -> str:
     from botboy.agent import default_tools
 
     lines = [f"Agent: {run.status}"]
@@ -278,8 +287,9 @@ def _format_agent_run(run) -> str:
             # agent-approved steps; the operator runs the exact command directly.
             command = tool.build_command({name: value.value for name, value in pending.args.items()})
             lines.append(f"  Destructive step: review and run it yourself: {command}")
-        else:
-            lines.append(f"  Approve exactly this call and resume: agent --approve {pending.digest}")
+        elif approval_id:
+            lines.append(f"  Approve exactly this call and resume: agent --approve {approval_id}")
+            lines.append(f"  (binds call digest {pending.digest})")
     if run.status == "completed":
         marker = ""
         if run.answer_trust.value == "untrusted":
@@ -295,10 +305,10 @@ async def _handle_agent(bot, command: str, *, principal: str, roles: list[str]) 
     from botboy.agent import SecureAgent, default_tools
 
     try:
-        digest, task = _parse_agent_command(command)
+        approval_id, task = _parse_agent_command(command)
     except ValueError as exc:
         return {"success": False, "output": f"{exc}. {_AGENT_USAGE}", "type": "agent"}
-    if not digest and not task:
+    if not approval_id and not task:
         return {"success": False, "output": _AGENT_USAGE, "type": "agent"}
     backend = getattr(getattr(bot, "llm", None), "_backend", None)
     if backend is None:
@@ -313,26 +323,30 @@ async def _handle_agent(bot, command: str, *, principal: str, roles: list[str]) 
         )
 
     agent = SecureAgent(backend, execute)
-    if digest:
+    if approval_id:
         # Resume, never re-plan: re-planning would replay completed writes and
         # could change the pending call's inputs.
-        entry = _pending_runs(bot).pop(digest, None)
+        entry = _pending_runs(bot).pop(approval_id, None)
         if entry is None or entry["principal"] != principal:
             return {"success": False, "type": "agent",
                     "output": "No pending agent run for this approval (expired, already used, "
                               "or started by another principal). Run the task again."}
         pending_run = entry["run"]
-        run = await agent.execute_plan(pending_run.task, pending_run.plan, approved=[digest],
+        run = await agent.execute_plan(pending_run.task, pending_run.plan, approved=[entry["digest"]],
                                        resume_from=pending_run)
     else:
         run = await agent.run(task)
+    new_approval_id = ""
     if run.status == "approval_required" and run.pending is not None:
         tool = default_tools().get(run.pending.tool)
         if tool is not None and tool.effect != "destructive":
-            _remember_pending(bot, run, principal)
+            new_approval_id = _remember_pending(bot, run, principal)
+    data = run.to_dict()
+    if new_approval_id:
+        data["approval_id"] = new_approval_id
     return {
         "success": run.status == "completed",
-        "output": _format_agent_run(run),
+        "output": _format_agent_run(run, new_approval_id),
         "type": "agent",
-        "data": run.to_dict(),
+        "data": data,
     }
