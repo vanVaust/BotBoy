@@ -302,7 +302,7 @@ def _format_agent_run(run, approval_id: str = "") -> str:
 
 
 async def _handle_agent(bot, command: str, *, principal: str, roles: list[str]) -> dict:
-    from botboy.agent import SecureAgent, default_tools
+    from botboy.agent import PlanError, SecureAgent, default_tools
 
     try:
         approval_id, task = _parse_agent_command(command)
@@ -334,6 +334,19 @@ async def _handle_agent(bot, command: str, *, principal: str, roles: list[str]) 
         pending_run = entry["run"]
         run = await agent.execute_plan(pending_run.task, pending_run.plan, approved=[entry["digest"]],
                                        resume_from=pending_run)
+    elif getattr(bot, "one_shot", False):
+        # A one-shot process (`botboy exec`) exits before an approval could
+        # resume the run; refuse up front instead of running half a plan.
+        try:
+            plan = await agent.plan(task)
+        except PlanError as exc:
+            return {"success": False, "output": f"Agent: plan_error\nReason: {exc}", "type": "agent"}
+        points = agent.approval_points(plan)
+        if points:
+            return {"success": False, "type": "agent", "output": (
+                f"Agent: refused\nReason: steps {', '.join(points)} would need approval, which a one-shot "
+                "command cannot resume. Nothing was executed. Run the task in `botboy repl` or via the gateway.")}
+        run = await agent.execute_plan(task, plan)
     else:
         run = await agent.run(task)
     new_approval_id = ""
