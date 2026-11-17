@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from botboy.command_effects import MEMORY_DELETE_COMMANDS, SCHEDULE_REMOVE_SUBCOMMANDS
+from botboy.command_effects import MEMORY_DELETE_COMMANDS, MEMORY_WRITE_COMMANDS, SCHEDULE_REMOVE_SUBCOMMANDS
 
 
 def handle_memory_command(bot, command: str, *, first: str) -> dict:
-    if first in ("remember", "store", "save"):
+    if first in MEMORY_WRITE_COMMANDS:
         text = command[len(first):].strip()
         if not text:
             return {"success": False, "output": f"Usage: {first} <text>", "type": "memory"}

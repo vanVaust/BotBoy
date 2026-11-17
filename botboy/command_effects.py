@@ -38,3 +38,28 @@ def destructive_effect(command: str) -> Optional[str]:
 
 def is_destructive(command: str) -> bool:
     return destructive_effect(command) is not None
+
+
+MEMORY_WRITE_COMMANDS = frozenset({"remember", "store", "save"})
+SCHEDULE_WRITE_SUBCOMMANDS = frozenset({"add"}) | SCHEDULE_REMOVE_SUBCOMMANDS
+
+
+def mutates_state(command: str) -> bool:
+    """True if ``command`` may change data that cached reads return.
+
+    Used to invalidate the read cache: without it ``search x`` keeps
+    answering from a 30 s old entry after ``remember x``.
+    """
+    if is_destructive(command):
+        return True
+    parts = _tokens(command)
+    if not parts:
+        return False
+    first = parts[0]
+    sub = parts[1] if len(parts) > 1 else ""
+    if first in MEMORY_WRITE_COMMANDS:
+        return True
+    if first == "schedule" and sub in SCHEDULE_WRITE_SUBCOMMANDS:
+        return True
+    # Composite routes run arbitrary inner commands.
+    return first in {"agent", "task", "tasks", "handoff"}

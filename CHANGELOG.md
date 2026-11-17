@@ -33,6 +33,9 @@ was tatsächlich geschah, zeigt `git log`. Es wird hier nicht rückwirkend erfun
   ein zweites `delete x` meldete „Deleted 1“ ohne zu löschen. Cachen ist jetzt pro
   Präfix freigeschaltet (nur bekannte reine Lesebefehle), unbekannte Präfixe werden
   nie gecacht.
+- Veraltete Lesewerte: `search x` antwortete nach `remember x` bis zu 30 s aus dem
+  Cache. Jeder zustandsändernde Befehl (`command_effects.mutates_state`) leert jetzt
+  den Lese-Cache.
 
 ### Entfernt
 

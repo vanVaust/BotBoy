@@ -50,12 +50,23 @@ class CachedAliasRegressionTest(unittest.TestCase):
         def run(command):
             return asyncio.run(bot.process_command(command, principal="local-cli"))["output"]
 
+        self.assertIn("No results", run("search alpha"))  # primes the 30 s read cache
         self.assertIn("id=1", run("save alpha note"))
+        self.assertIn("Found 1", run("search alpha"))
         self.assertIn("id=2", run("save alpha note"))
         self.assertIn("Deleted 2", run("delete alpha"))
         self.assertIn("id=", run("save alpha note"))
         self.assertIn("Deleted 1", run("delete alpha"))
         self.assertIn("No results", run("search alpha"))
+
+    def test_writes_invalidate_cached_reads(self):
+        from botboy.command_effects import mutates_state
+
+        for command in ("remember x", "save x", "store x", "forget x", "delete x", "history clear",
+                        "schedule add a 5m", "schedule cancel a", "agent t"):
+            self.assertTrue(mutates_state(command), command)
+        for command in ("search x", "memories", "status", "schedule list", "history", ""):
+            self.assertFalse(mutates_state(command), command)
 
 
 if __name__ == "__main__":
