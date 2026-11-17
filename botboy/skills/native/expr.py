@@ -87,13 +87,15 @@ class _Budget:
     def __init__(self, limits: ExprLimits) -> None:
         self.limits = limits
         self.steps = 0
-        self.deadline = time.monotonic() + limits.max_seconds
+        # perf_counter, not monotonic: on Windows monotonic() advances in
+        # ~15.6 ms ticks, so a short budget could expire unnoticed.
+        self.deadline = time.perf_counter() + limits.max_seconds
 
     def tick(self) -> None:
         self.steps += 1
         if self.steps > self.limits.max_steps:
             raise ExprError(f"Step budget exceeded ({self.limits.max_steps} evaluation steps)")
-        if self.steps % 256 == 0 and time.monotonic() > self.deadline:
+        if self.steps % 256 == 0 and time.perf_counter() >= self.deadline:
             raise ExprError(f"Time budget exceeded ({self.limits.max_seconds:.1f}s)")
 
 
