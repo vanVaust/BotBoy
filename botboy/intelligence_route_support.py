@@ -241,7 +241,16 @@ def _format_agent_run(run) -> str:
         lines.append(f"  {step.step_id} {step.tool}({args}) -> {step.status}"
                      + (f": {step.reason}" if step.reason and step.status != "ok" else ""))
     if run.status == "approval_required" and run.pending is not None:
-        lines.append(f"  Approve exactly this call with: agent --approve {run.pending.digest} <same task>")
+        from botboy.agent import default_tools
+
+        tool = default_tools().get(run.pending.tool)
+        if tool is not None and tool.effect == "destructive":
+            # Destructive builtins stay behind the server-side gate even for
+            # agent-approved steps; the operator runs the exact command directly.
+            command = tool.build_command({name: value.value for name, value in run.pending.args.items()})
+            lines.append(f"  Destructive step: review and run it yourself: {command}")
+        else:
+            lines.append(f"  Approve exactly this call with: agent --approve {run.pending.digest} <same task>")
     if run.status == "completed":
         marker = ""
         if run.answer_trust.value == "untrusted":

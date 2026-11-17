@@ -386,7 +386,7 @@ class BotBoyIntegrationTests(unittest.TestCase):
         pending = self.cmd("agent delete my zebra notes")
         self.assertFalse(pending["success"])
         digest = pending["data"]["steps"][0]["digest"]
-        self.assertIn(f"agent --approve {digest}", pending["output"])
+        self.assertIn("run it yourself: forget zebra", pending["output"])
         # Even with the agent-level approval the server-side destructive gate
         # refuses: agent steps never carry the local-operator grant.
         self.use_backend(ScriptedBackend(destructive))
@@ -394,6 +394,21 @@ class BotBoyIntegrationTests(unittest.TestCase):
         self.assertEqual(approved["data"]["steps"][0]["status"], "failed")
         self.assertIn("approval required", approved["output"].lower())
         self.assertIn("Found 1", self.cmd("search zebra")["output"])
+
+    def test_agent_approval_resumes_untrusted_write(self):
+        self.cmd("remember zebra source text")
+        poisoning = plan(step("s1", "memory.search", query=lit("zebra")),
+                         step("s2", "memory.store", text=ref("s1")), answer="{s2}")
+        self.use_backend(ScriptedBackend(poisoning))
+        pending = self.cmd("agent copy my zebra note")
+        self.assertEqual(pending["data"]["status"], "approval_required")
+        digest = pending["data"]["steps"][1]["digest"]
+        self.assertIn(f"agent --approve {digest}", pending["output"])
+        self.assertIn("Found 1", self.cmd("search zebra")["output"])
+        self.use_backend(ScriptedBackend(poisoning))
+        done = self.cmd(f"agent --approve {digest} copy my zebra note")
+        self.assertTrue(done["success"], done["output"])
+        self.assertIn("Found 2", self.cmd("search zebra")["output"])
 
     def test_agent_usage_errors_and_missing_llm(self):
         self.bot.llm = None
