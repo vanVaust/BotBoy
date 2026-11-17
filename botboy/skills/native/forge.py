@@ -142,6 +142,10 @@ def lint_skill_text(content: str, source: str, *, skill_manager: Any = None) -> 
         report.add("error", "name.missing", "'name' is required (the directory name is used otherwise, which is fragile).")
     elif not _NAME_RE.fullmatch(name):
         report.add("warning", "name.format", f"name {name!r} should be lower-case kebab-case (a-z, 0-9, '-').")
+    if isinstance(name, str) and name.lower() in _native_skill_names():
+        report.add("error", "name.native",
+                   f"name {name!r} belongs to a packaged native skill; the router ignores custom skills "
+                   "with that name, so none of its triggers would ever run.")
     description = meta.get("description")
     if not description or not str(description).strip():
         report.add("error", "description.missing", "'description' is required; routing and humans rely on it.")
@@ -274,9 +278,17 @@ def lint_skill_text(content: str, source: str, *, skill_manager: Any = None) -> 
     return report
 
 
+def _native_skill_names() -> frozenset:
+    from botboy.skills.manager import _native_skills
+
+    return frozenset(str(contract.name).lower() for contract, _handler in _native_skills())
+
+
 def scaffold(name: str, trigger: str, *, description: str, level: str = "BEGINNER") -> str:
     if not _NAME_RE.fullmatch(name):
         raise SkillUsageError("name must be lower-case kebab-case (a-z, 0-9, '-')")
+    if name in _native_skill_names():
+        raise SkillUsageError(f"name {name!r} belongs to a packaged native skill")
     if not _TRIGGER_RE.fullmatch(trigger) or trigger in ROUTER_RESERVED_COMMANDS:
         raise SkillUsageError(f"trigger {trigger!r} is invalid or reserved")
     if level not in SECURITY_LEVELS[:2]:

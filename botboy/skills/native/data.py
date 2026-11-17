@@ -410,6 +410,26 @@ def _agg_name(func: str, column: Optional[str]) -> str:
     return func if column is None else f"{func}_{column}"
 
 
+def _distinct_agg_names(aggregates: Sequence[Tuple[str, Optional[str]]], *, taken: Sequence[str]) -> List[str]:
+    """Aggregate column names that never overwrite a group key or each other.
+
+    ``group by count`` on a column named ``count`` used to replace the group
+    key with the implicit count aggregate; colliding names get ``_agg``
+    (then ``_agg2``...) appended instead.
+    """
+    used = set(taken)
+    names: List[str] = []
+    for func, column in aggregates:
+        base = _agg_name(func, column)
+        name, counter = base, 1
+        while name in used:
+            name = f"{base}_agg" if counter == 1 else f"{base}_agg{counter}"
+            counter += 1
+        used.add(name)
+        names.append(name)
+    return names
+
+
 def _sort_key(column: str) -> Callable[[Dict[str, Any]], Tuple[int, int, Any]]:
     def key(row: Dict[str, Any]) -> Tuple[int, int, Any]:
         value = row.get(column)
@@ -440,17 +460,19 @@ def execute_query(dataset: Dataset, query: Query) -> Tuple[List[Dict[str, Any]],
             key = tuple(json.dumps(row.get(col), sort_keys=True, default=str) for col in query.group_by)
             buckets.setdefault(key, []).append(row)
             exemplars.setdefault(key, row)
+        agg_names = _distinct_agg_names(query.aggregates, taken=query.group_by)
         grouped: List[Dict[str, Any]] = []
         for key, members in buckets.items():
             record = {col: exemplars[key].get(col) for col in query.group_by}
-            for func, column in query.aggregates:
-                record[_agg_name(func, column)] = _aggregate(func, column, members)
+            for name, (func, column) in zip(agg_names, query.aggregates):
+                record[name] = _aggregate(func, column, members)
             grouped.append(record)
         rows = grouped
-        columns = query.group_by + [_agg_name(func, column) for func, column in query.aggregates]
+        columns = query.group_by + agg_names
     elif query.aggregates:
-        rows = [{_agg_name(func, column): _aggregate(func, column, rows) for func, column in query.aggregates}]
-        columns = list(rows[0])
+        agg_names = _distinct_agg_names(query.aggregates, taken=[])
+        rows = [{name: _aggregate(func, column, rows) for name, (func, column) in zip(agg_names, query.aggregates)}]
+        columns = list(agg_names)
     else:
         columns = list(dataset.columns)
     for column, _ in query.sort:

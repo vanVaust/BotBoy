@@ -92,3 +92,59 @@ class FetchDeadlineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SecondReviewRoundTests(unittest.TestCase):
+    def test_sentence_splitting_is_linear_on_punctuation_runs(self) -> None:
+        from botboy.skills.native.textkit import sentence_spans, split_sentences
+
+        for text in ("!" * 200_000, "x. " * 50_000, "a" + "." * 100_000 + "b"):
+            started = time.perf_counter()
+            sentence_spans(text)
+            self.assertLess(time.perf_counter() - started, 1.0)
+        self.assertEqual(split_sentences("Hello world! How are you? Fine, e.g. good."),
+                         ["Hello world!", "How are you?", "Fine, e.g. good."])
+
+    def test_comprehension_results_respect_expanded_size(self) -> None:
+        from botboy.skills.native.expr import ExprError, SafeEvaluator, evaluate_expression
+
+        program = ("a=[0]*10000; b=[0]*10000; c=[a for i in range(10000)]; d=[b for i in range(10000)]; "
+                   "xs=[c for i in range(10000)]; ys=[d for i in range(10000)]; min(xs, ys)")
+        started = time.perf_counter()
+        with self.assertRaisesRegex(ExprError, "expands to more than"):
+            SafeEvaluator().evaluate(program)
+        self.assertLess(time.perf_counter() - started, 2.0)
+        self.assertEqual(evaluate_expression("[x * 2 for x in range(5)]"), [0, 2, 4, 6, 8])
+
+    def test_aggregate_names_never_overwrite_group_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "counts.csv").write_text("count\n10\n10\n20\n", encoding="utf-8")
+            ctx = NativeSkillContext(workspace_root=root)
+            result = asyncio.run(data_skill.run("data query counts.csv group by count", ctx))
+        self.assertTrue(result["success"], result["output"])
+        rows = sorted(result["data"]["rows"], key=lambda row: row["count"])
+        self.assertEqual(rows, [{"count": 10, "count_agg": 2}, {"count": 20, "count_agg": 1}])
+
+    def test_premature_eof_is_not_a_complete_fetch(self) -> None:
+        class ShortResponse:
+            def __init__(self):
+                self.chunks = [b"partial", b""]
+
+            def getheader(self, name, default=None):
+                return "100" if name == "Content-Length" else default
+
+            def read1(self, _size):
+                return self.chunks.pop(0)
+
+        with self.assertRaisesRegex(fetch_skill.FetchError, "7 of 100"):
+            fetch_skill._read_body(ShortResponse(), fetch_skill.FetchPolicy(), time.monotonic() + 5)
+
+    def test_native_skill_names_are_rejected(self) -> None:
+        with self.assertRaises(SkillUsageError):
+            forge.scaffold("expr", "uniquetrigger", description="Counts words in a text for testing.")
+        text = ("---\nname: expr\ndescription: Counts words in the given text for testing.\n"
+                "triggers: [uniquetrigger]\n---\n```python\n_result = 1\n```\n")
+        report = forge.lint_skill_text(text, "s/SKILL.md")
+        self.assertIn("name.native", {finding.code for finding in report.findings})
+        self.assertFalse(report.executable)

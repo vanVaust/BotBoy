@@ -59,7 +59,27 @@ _ABBREVIATIONS = frozenset({
 })
 _WORD_RE = re.compile(r"[^\W\d_](?:[^\W_]|['’\-](?=[^\W\d_]))*", re.UNICODE)
 _TOKEN_RE = re.compile(r"[^\W_]+(?:['’\-][^\W_]+)*|[.,;:!?()\[\]{}\"“”„«»…–—]", re.UNICODE)
-_BOUNDARY_RE = re.compile(r"([.!?…]+)([\"'”»)\]]*)(\s+)")
+_PUNCT_RUN_RE = re.compile(r"[.!?…]+")
+_CLOSERS = frozenset("\"'”»)]")
+_LAST_WORD_WINDOW = 200
+
+
+def _boundaries(body: str):
+    """Yield (punct_start, punct_end, closers_end, whitespace_end) in O(len(body)).
+
+    Replaces ``([.!?…]+)([closers]*)(\\s+)``, which backtracks quadratically
+    on a long punctuation run that is not followed by whitespace: every run is
+    matched once here and its tail scanned once.
+    """
+    for run in _PUNCT_RUN_RE.finditer(body):
+        index = run.end()
+        while index < len(body) and body[index] in _CLOSERS:
+            index += 1
+        closers_end = index
+        while index < len(body) and body[index].isspace():
+            index += 1
+        if index > closers_end:
+            yield run.start(), run.end(), closers_end, index
 _VOWEL_GROUP_RE = re.compile(r"[aeiouyäöüàâéèêëîïôûù]+", re.IGNORECASE)
 _PHRASE_BREAKERS = frozenset(".,;:!?()[]{}\"“”„«»…–—")
 
@@ -80,19 +100,21 @@ def sentence_spans(text: str) -> List[Tuple[int, int]]:
         offset = block.start()
         body = block.group(0)
         start = 0
-        for match in _BOUNDARY_RE.finditer(body):
-            end = match.end(2)
-            candidate = body[start:end].strip()
-            last_word = candidate.rstrip(".!?…\"'”»)]").split()[-1].lower().rstrip(".") if candidate.split() else ""
-            next_char = body[match.end():match.end() + 1]
-            is_abbreviation = match.group(1) == "." and (
+        for punct_start, punct_end, end, ws_end in _boundaries(body):
+            # Only a bounded window before the boundary is inspected, so a long
+            # stretch of skipped boundaries cannot make this quadratic.
+            window = body[max(start, end - _LAST_WORD_WINDOW):end]
+            window_words = window.rstrip(".!?…\"'”»)]").split()
+            last_word = window_words[-1].lower().rstrip(".") if window_words else ""
+            next_char = body[ws_end:ws_end + 1]
+            is_abbreviation = body[punct_start:punct_end] == "." and (
                 last_word in _ABBREVIATIONS or (len(last_word) == 1 and last_word.isalpha())
             )
             if is_abbreviation or (next_char and next_char.islower()):
                 continue
-            if candidate:
+            if body[start:end].strip():
                 spans.append((offset + start, offset + end))
-            start = match.end()
+            start = ws_end
         tail = body[start:].rstrip()
         if tail.strip():
             spans.append((offset + start, offset + start + len(tail)))

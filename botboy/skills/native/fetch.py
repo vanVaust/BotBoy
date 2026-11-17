@@ -222,6 +222,13 @@ def _read_body(response: http.client.HTTPResponse, policy: FetchPolicy, deadline
         # waits to fill its buffer (the socket timeout only bounds silence).
         chunk = response.read1(64 * 1024)
         if not chunk:
+            # read1 reports a premature close as plain EOF; a short body must
+            # not pass as a complete document.
+            declared = response.getheader("Content-Length")
+            if declared and declared.strip().isdigit() and raw_read < int(declared):
+                raise FetchError(f"Connection closed after {raw_read} of {int(declared)} declared bytes")
+            if decompressor is not None and not decompressor.eof:
+                raise FetchError("Compressed body ended before the end of the stream")
             break
         raw_read += len(chunk)
         if decompressor is not None:

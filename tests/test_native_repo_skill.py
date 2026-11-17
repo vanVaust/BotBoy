@@ -208,3 +208,28 @@ class RepoSkillTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(GIT, "git is not installed")
+class RepoOutputCapTests(unittest.TestCase):
+    def test_large_output_is_capped_while_reading(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name).resolve()
+        project = root / "big"
+        project.mkdir()
+        git(project, "init", "-q")
+        git(project, "config", "user.email", "t@example.invalid")
+        git(project, "config", "user.name", "T")
+        (project / "big.txt").write_text("line\n" * 200_000, encoding="utf-8")
+        git(project, "add", "big.txt")
+        git(project, "commit", "-q", "-m", "big")
+        ctx = NativeSkillContext(workspace_root=root)
+        repo = locate_repository(ctx, "big")
+        original = repo_skill.MAX_GIT_OUTPUT
+        repo_skill.MAX_GIT_OUTPUT = 4096
+        self.addCleanup(setattr, repo_skill, "MAX_GIT_OUTPUT", original)
+        text = asyncio.run(repo_skill._run_git(repo, ["show", "HEAD"]))
+        self.assertLessEqual(len(text.encode()), 4096)
+        with self.assertRaisesRegex(GitError, "refusing a partial result"):
+            asyncio.run(repo_skill._run_git(repo, ["show", "HEAD"], allow_truncation=False))

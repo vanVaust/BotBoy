@@ -45,6 +45,7 @@ from botboy.skills.native.base import (
 
 GIT_TIMEOUT_SECONDS = 10.0
 MAX_GIT_OUTPUT = 2 * 1024 * 1024
+MAX_GIT_STDERR = 64 * 1024
 MAX_PATCH_CHARS = 20000
 _REV_RE = re.compile(r"(?!-)[A-Za-z0-9._/~^@{}+\-]{1,200}")
 _DANGEROUS_CONFIG = [
@@ -161,18 +162,47 @@ async def _run_git(repo: Repository, args: Sequence[str], *, forced: bool = True
             cwd=str(repo.worktree),
             env=_clean_env(home),
         )
+        cap = MAX_GIT_OUTPUT
+
+        async def drain(stream, limit: int, *, kill_on_overflow: bool) -> tuple:
+            # communicate() would buffer everything before the cap applies; a
+            # huge patch could exhaust memory. Keep at most limit+1 bytes.
+            kept = bytearray()
+            overflow = False
+            while True:
+                chunk = await stream.read(64 * 1024)
+                if not chunk:
+                    break
+                if len(kept) <= limit:
+                    kept += chunk[: limit + 1 - len(kept)]
+                if len(kept) > limit:
+                    overflow = True
+                    if kill_on_overflow:
+                        process.kill()
+                        break
+            return bytes(kept), overflow
+
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=GIT_TIMEOUT_SECONDS)
+            (stdout, overflow), (stderr, _) = await asyncio.wait_for(
+                asyncio.gather(
+                    drain(process.stdout, cap, kill_on_overflow=True),
+                    drain(process.stderr, MAX_GIT_STDERR, kill_on_overflow=False),
+                ),
+                timeout=GIT_TIMEOUT_SECONDS,
+            )
+            await asyncio.wait_for(process.wait(), timeout=GIT_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
             process.kill()
             await process.wait()
             raise GitError(f"git {args[0]} exceeded {GIT_TIMEOUT_SECONDS:g}s") from None
+    if overflow:
+        if not allow_truncation:
+            raise GitError(f"git {args[0]} output exceeds {cap} bytes; refusing a partial result")
+        return stdout[:cap].decode("utf-8", "replace")
     if process.returncode != 0:
         message = stderr.decode("utf-8", "replace").strip().splitlines()
         raise GitError(f"git {args[0]} failed: {message[-1] if message else f'exit {process.returncode}'}")
-    if len(stdout) > MAX_GIT_OUTPUT and not allow_truncation:
-        raise GitError(f"git {args[0]} output exceeds {MAX_GIT_OUTPUT} bytes; refusing a partial result")
-    return stdout[:MAX_GIT_OUTPUT].decode("utf-8", "replace")
+    return stdout.decode("utf-8", "replace")
 
 
 async def audit_config(repo: Repository) -> List[str]:

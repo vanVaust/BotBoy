@@ -466,7 +466,9 @@ class SafeEvaluator:
                     run(rest, inner)
 
         run(list(node.generators), dict(variables))
-        return output
+        # Comprehensions build sequences too; without this check they slipped
+        # nested shared-reference structures past max_total_elements.
+        return self._check_value(output)
 
     def _call(self, node: ast.Call, variables: Dict[str, Any], budget: _Budget) -> Any:
         if not isinstance(node.func, ast.Name):
@@ -481,6 +483,11 @@ class SafeEvaluator:
             if keyword.arg is None:
                 raise ExprError("**kwargs is not supported")
             kwargs[keyword.arg] = self._eval(keyword.value, variables, budget)
+        # Builtins such as min()/sorted() compare their arguments in C without
+        # ticking the budget: bound the work before calling them.
+        for value in [*args, *kwargs.values()]:
+            if isinstance(value, (list, tuple)):
+                self._check_expanded(value)
         try:
             value = function(*args, **kwargs)
         except ExprError:
