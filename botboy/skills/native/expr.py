@@ -40,12 +40,42 @@ class ExprLimits:
     max_seconds: float = 1.0
     max_int_bits: int = 4096
     max_sequence: int = 10_000
+    # Elements reachable through nesting, counting shared references each
+    # time they occur: ``[[a]*10000]*10000`` is short at every level but a
+    # comparison, str() or sort walks 10**8+ elements in one C call.
+    max_total_elements: int = 100_000
     max_variables: int = 64
     max_factorial_arg: int = 1000
     max_comb_arg: int = 10_000
 
 
 DEFAULT_LIMITS = ExprLimits()
+
+
+def expanded_size(value: Any, cap: int) -> int:
+    """Elements reachable from ``value`` with shared references counted per use.
+
+    Memoised by object id, so the cost is O(distinct objects) even when the
+    expanded size is astronomically large; stops counting once ``cap`` is passed.
+    """
+    memo: Dict[int, int] = {}
+
+    def size(item: Any) -> int:
+        if not isinstance(item, (list, tuple)):
+            return 0
+        key = id(item)
+        if key in memo:
+            return memo[key]
+        memo[key] = cap + 1  # cycle guard; lists cannot be cyclic here, but be safe
+        total = len(item)
+        for child in item:
+            total += size(child)
+            if total > cap:
+                break
+        memo[key] = min(total, cap + 1)
+        return memo[key]
+
+    return size(value)
 
 _MATH_NAMES = (
     "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh", "cbrt", "ceil", "copysign",
@@ -204,8 +234,15 @@ class SafeEvaluator:
         if isinstance(value, (list, tuple)):
             if len(value) > self.limits.max_sequence:
                 raise ExprError(f"Sequence longer than {self.limits.max_sequence} elements")
+            self._check_expanded(value)
             return value
         raise ExprError(f"Unsupported value type: {type(value).__name__}")
+
+    def _check_expanded(self, value: Any) -> None:
+        if expanded_size(value, self.limits.max_total_elements) > self.limits.max_total_elements:
+            raise ExprError(
+                f"Nested sequence expands to more than {self.limits.max_total_elements} elements"
+            )
 
     def _mul(self, left: Any, right: Any) -> Any:
         if isinstance(left, (list, tuple)) or isinstance(right, (list, tuple)):
@@ -364,6 +401,11 @@ class SafeEvaluator:
             left = self._eval(node.left, variables, budget)
             for op, comparator in zip(node.ops, node.comparators):
                 right = self._eval(comparator, variables, budget)
+                # A comparison recurses inside one C call without ticking the
+                # budget; bound the work it can do before starting it.
+                for operand in (left, right):
+                    if isinstance(operand, (list, tuple)):
+                        self._check_expanded(operand)
                 try:
                     outcome = _COMPARE_OPS[type(op)](left, right)
                 except TypeError as exc:

@@ -18,7 +18,7 @@ import math
 import re
 import statistics
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 from botboy.skills.native import workspace
 from botboy.skills.native.base import (
@@ -131,7 +131,7 @@ def load_dataset(ctx: NativeSkillContext, user_path: str, json_path: Optional[st
     suffix = path.suffix.lower()
     if suffix not in SUPPORTED_SUFFIXES:
         raise SkillUsageError(f"Unsupported file type {suffix or '(none)'}; use {', '.join(sorted(SUPPORTED_SUFFIXES))}")
-    text, _ = workspace.read_text(path, MAX_FILE_BYTES, allow_truncation=False)
+    text, _ = workspace.read_text(path, MAX_FILE_BYTES, allow_truncation=False, root=ctx.workspace_root)
     rel = workspace.relative(ctx.workspace_root, path)
     rows: List[Dict[str, Any]] = []
     truncated = False
@@ -217,14 +217,33 @@ class Condition:
             return False
 
 
-def _as_number(value: Any) -> Optional[float]:
+_EXACT_INT_RE = re.compile(r"[+-]?\d{1,300}")
+
+
+def _as_number(value: Any) -> Optional[Union[int, float]]:
+    """Numeric view of a value; integers stay exact.
+
+    Coercing everything to float made distinct IDs above 2**53 compare equal.
+    Python compares int with float exactly, so mixed columns still order.
+    """
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str) and _FLOAT_RE.fullmatch(value.strip()):
-        return float(value)
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if _EXACT_INT_RE.fullmatch(text):
+            return int(text)
+        if _FLOAT_RE.fullmatch(text):
+            return float(text)
     return None
+
+
+def _exact_sum(numbers: List[Union[int, float]]) -> Union[int, float]:
+    if all(isinstance(number, int) for number in numbers):
+        return sum(numbers)
+    total = math.fsum(numbers)
+    return int(total) if total.is_integer() and abs(total) < 2 ** 53 else round(total, 10)
 
 
 def _comparable(left: Any, right: Any) -> Tuple[Any, Any]:
@@ -373,14 +392,13 @@ def _aggregate(func: str, column: Optional[str], rows: List[Dict[str, Any]]) -> 
         numbers = [_as_number(value) for value in values]
         if values and all(number is not None for number in numbers):
             chosen = (min if func == "min" else max)(numbers)  # type: ignore[type-var]
-            return int(chosen) if float(chosen).is_integer() else chosen  # type: ignore[arg-type]
+            return chosen
         return (min if func == "min" else max)((str(value) for value in values), default=None)
     numbers = [number for number in (_as_number(value) for value in values) if number is not None]
     if not numbers:
         return None
     if func == "sum":
-        total = math.fsum(numbers)
-        return int(total) if total.is_integer() else round(total, 10)
+        return _exact_sum(numbers)
     if func == "avg":
         return round(statistics.fmean(numbers), 10)
     if func == "median":
@@ -490,7 +508,7 @@ def _schema(dataset: Dataset) -> dict:
     for column in dataset.columns:
         values = [row.get(column) for row in dataset.rows]
         present = [value for value in values if value is not None and value != ""]
-        distinct = len({json.dumps(value, sort_keys=True, default=str) for value in present[:50000]})
+        distinct = len({json.dumps(value, sort_keys=True, default=str) for value in present})
         columns_info.append({
             "column": column,
             "type": _infer_type(present),
@@ -512,6 +530,9 @@ def _stats(dataset: Dataset, column: str) -> dict:
     present = [value for value in values if value is not None and value != ""]
     numbers = [n for n in (_as_number(value) for value in present) if n is not None]
     info: Dict[str, Any] = {
+        # A row-capped load yields statistics over a prefix only; say so in
+        # both the text and the data so callers cannot mistake it for totals.
+        "partial": dataset.truncated,
         "column": column, "count": len(present), "nulls": len(values) - len(present),
         "distinct": len({json.dumps(v, sort_keys=True, default=str) for v in present}),
         "type": _infer_type(present),
@@ -520,7 +541,7 @@ def _stats(dataset: Dataset, column: str) -> dict:
         ordered = sorted(numbers)
         quartiles = statistics.quantiles(ordered, n=4, method="inclusive") if len(ordered) > 1 else [ordered[0]] * 3
         info.update({
-            "min": ordered[0], "max": ordered[-1], "sum": round(math.fsum(ordered), 10),
+            "min": ordered[0], "max": ordered[-1], "sum": _exact_sum(ordered),
             "mean": round(statistics.fmean(ordered), 10), "median": statistics.median(ordered),
             "stdev": round(statistics.stdev(ordered), 10) if len(ordered) > 1 else 0.0,
             "p25": quartiles[0], "p75": quartiles[2],
@@ -531,8 +552,10 @@ def _stats(dataset: Dataset, column: str) -> dict:
         counts[label] = counts.get(label, 0) + 1
     info["top_values"] = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:5]
     lines = [f"{dataset.path} :: {column}"]
+    if dataset.truncated:
+        lines.append(f"  WARNING: partial statistics, only the first {len(dataset.rows)} rows were loaded")
     for key, value in info.items():
-        if key in {"column", "top_values"}:
+        if key in {"column", "top_values", "partial"}:
             continue
         lines.append(f"  {key}: {value:.6g}" if isinstance(value, float) else f"  {key}: {value}")
     lines.append("  top: " + ", ".join(f"{label} ({count})" for label, count in info["top_values"]))

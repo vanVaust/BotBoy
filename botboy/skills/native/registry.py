@@ -30,7 +30,7 @@ ROUTER_RESERVED_COMMANDS = frozenset({
     "help", "?", "status", "version", "skills", "skilllib", "skilllibrary", "skillroute",
     "performance", "contracts", "contract", "eval", "evals", "worker", "workers", "reflect",
     "reflection", "a2a", "remember", "store", "save", "search", "forget", "delete", "memories",
-    "memstats", "schedule", "history", "task", "tasks", "handoff", "plan", "think",
+    "memstats", "schedule", "history", "task", "tasks", "handoff", "plan", "think", "agent",
 })
 
 _FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)

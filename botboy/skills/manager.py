@@ -368,9 +368,14 @@ def safe_calculate(expression: str) -> Any:
     from botboy.skills.native.expr import ExprError, evaluate_expression
 
     try:
-        return evaluate_expression(expression)
+        value = evaluate_expression(expression)
     except ExprError as exc:
         raise ValueError(str(exc)) from exc
+    # The calculator renders with str(); only scalars have bounded output.
+    # Lists and statistics over them belong to the `expr` skill.
+    if not isinstance(value, (int, float, complex)) or value is None:
+        raise ValueError("calculate returns numbers only; use `expr` for lists and statistics")
+    return value
 
 
 # ── Unit Conversion ────────────────────────────────────────────────────────────

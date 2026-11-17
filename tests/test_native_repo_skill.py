@@ -121,6 +121,51 @@ class RepoSkillTests(unittest.TestCase):
                 self.assertFalse(self.marker.exists())
                 shutil.rmtree(evil)
 
+    def promisor_repo(self) -> Path:
+        """Partial-clone repo whose committed blob is missing locally (lazy fetch)."""
+        evil = self.root / "promisor"
+        evil.mkdir()
+        git(evil, "init", "-q")
+        git(evil, "config", "user.email", "t@example.invalid")
+        git(evil, "config", "user.name", "T")
+        (evil / "r").write_text("payload\n", encoding="utf-8")
+        git(evil, "add", "r")
+        git(evil, "commit", "-q", "-m", "r")
+        blob = subprocess.run(["git", "rev-parse", "HEAD:r"], cwd=evil, capture_output=True, text=True,
+                              check=True).stdout.strip()
+        (evil / ".git" / "objects" / blob[:2] / blob[2:]).unlink()
+        git(evil, "config", "core.repositoryformatversion", "1")
+        git(evil, "config", "extensions.partialclone", "origin")
+        git(evil, "config", "remote.origin.url", str(self.project))
+        git(evil, "config", "remote.origin.promisor", "true")
+        git(evil, "config", "remote.origin.uploadpack", f"touch {self.marker}; false")
+        return evil
+
+    def test_promisor_lazy_fetch_cannot_run_upload_pack(self) -> None:
+        # Review finding: a lazy fetch ran remote.origin.uploadpack.
+        self.promisor_repo()
+        result = self.call("repo show HEAD promisor")
+        self.assertFalse(result["success"])
+        self.assertIn("program-executing", result["output"])
+        repo = locate_repository(self.ctx, "promisor")
+        with self.assertRaises(GitError):
+            asyncio.run(repo_skill._run_git(repo, ["show", "HEAD:r"]))
+        self.assertFalse(self.marker.exists())
+
+    def test_truncated_config_listing_is_refused(self) -> None:
+        # Review finding: padding pushed filter.evil.clean past the output cap.
+        evil = self.evil_repo("filter.evil.clean", f"touch {self.marker}; cat")
+        config = evil / ".git" / "config"
+        padding = "".join(f"[pad \"k{i}\"]\n\tv = 1\n" for i in range(400))
+        config.write_text(padding + config.read_text(encoding="utf-8"), encoding="utf-8")
+        original = repo_skill.MAX_GIT_OUTPUT
+        repo_skill.MAX_GIT_OUTPUT = 2048
+        self.addCleanup(setattr, repo_skill, "MAX_GIT_OUTPUT", original)
+        result = self.call("repo status evil")
+        self.assertFalse(result["success"])
+        self.assertIn("refusing a partial result", result["output"])
+        self.assertFalse(self.marker.exists())
+
     def test_forced_config_neutralises_fsmonitor_even_without_audit(self) -> None:
         evil = self.evil_repo("core.fsmonitor", f"touch {self.marker}; false")
         repo = locate_repository(self.ctx, "evil")

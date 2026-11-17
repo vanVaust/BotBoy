@@ -67,6 +67,21 @@ class ExprEvaluationTests(unittest.TestCase):
                     evaluate(source)
                 self.assertLess(time.perf_counter() - started, 1.5)
 
+    def test_shared_reference_nesting_cannot_explode(self) -> None:
+        # Review finding: each level is short, but comparison/str walk 10**12.
+        programs = (
+            "a=[0]*10000; b=[0]*10000; c=[a]*10000; d=[b]*10000; [c]*10000 == [d]*10000",
+            "a=[0]*1000; b=[a]*1000; [b]*1000",
+            "[[[0]*10000]*10000]*10000",
+        )
+        for source in programs:
+            with self.subTest(source=source[:40]):
+                started = time.perf_counter()
+                with self.assertRaisesRegex(ExprError, "expands to more than|longer than"):
+                    evaluate(source)
+                self.assertLess(time.perf_counter() - started, 1.0)
+        self.assertTrue(evaluate("[[1, 2]] * 3 == [[1, 2], [1, 2], [1, 2]]"))
+
     def test_step_and_time_budgets(self) -> None:
         with self.assertRaisesRegex(ExprError, "Step budget"):
             evaluate("[x for x in range(5000) for y in range(50)]", ExprLimits(max_steps=10_000))
@@ -86,7 +101,11 @@ class ExprEvaluationTests(unittest.TestCase):
                 evaluate(source)
 
     def test_rendering_is_bounded_for_shared_references(self) -> None:
-        value = evaluate("[[0] * 10000] * 10000")
+        # The evaluator now refuses to build this (expanded-size cap); the
+        # renderer must still stay bounded for any value handed to it.
+        with self.assertRaisesRegex(ExprError, "expands to more than"):
+            evaluate("[[0] * 10000] * 10000")
+        value = [[0] * 10000] * 10000
         started = time.perf_counter()
         rendered = format_value(value, limit=500)
         self.assertLess(time.perf_counter() - started, 0.5)
@@ -134,3 +153,16 @@ class CalculatorHardeningTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CalculatorScalarResultTests(unittest.TestCase):
+    def test_calculator_refuses_sequence_results(self) -> None:
+        # Review finding: str() of a shared-reference list blocked the loop.
+        for source in ("[[[0]*10000]*10000]*10000", "[1, 2, 3]", "(1, 2)"):
+            with self.subTest(source=source):
+                started = time.perf_counter()
+                with self.assertRaises(ValueError):
+                    safe_calculate(source)
+                self.assertLess(time.perf_counter() - started, 1.0)
+        self.assertEqual(safe_calculate("2**10"), 1024)
+        self.assertTrue(safe_calculate("1 < 2"))

@@ -57,6 +57,11 @@ _DANGEROUS_CONFIG = [
         r"^pager\.",
         r"^gpg\.(.+\.)?program$",
         r"^status\.submodulesummary$",
+        # Partial-clone lazy fetches spawn upload-pack, whose path the
+        # repository can set (remote.<name>.uploadpack).
+        r"^remote\..+\.(uploadpack|receivepack|promisor|proxy|vcs)$",
+        r"^extensions\.partialclone$",
+        r"^(uploadpack|protocol|credential)\.",
     )
 ]
 _FORCED_CONFIG = (
@@ -69,6 +74,9 @@ _FORCED_CONFIG = (
     "log.showSignature=false",
     "submodule.recurse=false",
     "status.submoduleSummary=false",
+    # No transport of any kind: blocks lazy fetches and thus upload-pack.
+    "protocol.allow=never",
+    "fetch.negotiationAlgorithm=noop",
 )
 
 _USAGE = (
@@ -112,6 +120,8 @@ def _clean_env(home: str) -> Dict[str, str]:
         "PAGER": "cat",
         "GIT_ATTR_NOSYSTEM": "1",
         "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_PROTOCOL_FROM_USER": "0",
         "LC_ALL": "C",
         "LANG": "C",
     }
@@ -134,7 +144,8 @@ def locate_repository(ctx: NativeSkillContext, user_path: str) -> Repository:
     return Repository(worktree=worktree, git_dir=git_dir, relative=workspace.relative(ctx.workspace_root, worktree))
 
 
-async def _run_git(repo: Repository, args: Sequence[str], *, forced: bool = True) -> str:
+async def _run_git(repo: Repository, args: Sequence[str], *, forced: bool = True,
+                   allow_truncation: bool = True) -> str:
     argv: List[str] = [_git_executable(), "--no-pager", "--no-optional-locks",
                        f"--git-dir={repo.git_dir}", f"--work-tree={repo.worktree}"]
     if forced:
@@ -159,12 +170,17 @@ async def _run_git(repo: Repository, args: Sequence[str], *, forced: bool = True
     if process.returncode != 0:
         message = stderr.decode("utf-8", "replace").strip().splitlines()
         raise GitError(f"git {args[0]} failed: {message[-1] if message else f'exit {process.returncode}'}")
+    if len(stdout) > MAX_GIT_OUTPUT and not allow_truncation:
+        raise GitError(f"git {args[0]} output exceeds {MAX_GIT_OUTPUT} bytes; refusing a partial result")
     return stdout[:MAX_GIT_OUTPUT].decode("utf-8", "replace")
 
 
 async def audit_config(repo: Repository) -> List[str]:
     """Return config keys that would make git execute repository-chosen programs."""
-    listing = await _run_git(repo, ["config", "--list", "--includes", "--name-only"], forced=False)
+    # A truncated listing could hide a dangerous key after harmless padding:
+    # the audit must see every key or refuse the repository.
+    listing = await _run_git(repo, ["config", "--list", "--includes", "--name-only"], forced=False,
+                             allow_truncation=False)
     flagged = []
     for key in listing.splitlines():
         lowered = key.strip().lower()

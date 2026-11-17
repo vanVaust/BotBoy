@@ -255,3 +255,34 @@ class DataSkillTests(WorkspaceFixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AncestorSwapTests(unittest.TestCase):
+    """Review finding: replacing a parent directory with a symlink after
+    resolve() let read_text() return a file outside the workspace."""
+
+    def setUp(self) -> None:
+        from botboy.skills.native import workspace
+
+        self.workspace = workspace
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = Path(tmp.name).resolve()
+        self.root = base / "ws"
+        (self.root / "docs").mkdir(parents=True)
+        (self.root / "docs" / "note.txt").write_text("inside", encoding="utf-8")
+        self.outside = base / "outside"
+        self.outside.mkdir()
+        (self.outside / "note.txt").write_text("SECRET", encoding="utf-8")
+
+    @unittest.skipIf(os.name == "nt", "symlink creation needs privileges on Windows")
+    def test_parent_swapped_for_symlink_after_resolve_is_refused(self) -> None:
+        path = self.workspace.resolve(self.root, "docs/note.txt", expect="file")
+        os.rename(self.root / "docs", self.root / "docs-old")
+        os.symlink(self.outside, self.root / "docs", target_is_directory=True)
+        with self.assertRaises(self.workspace.WorkspaceError):
+            self.workspace.read_text(path, root=self.root)
+
+    def test_normal_reads_still_work_with_root(self) -> None:
+        path = self.workspace.resolve(self.root, "docs/note.txt", expect="file")
+        self.assertEqual(self.workspace.read_text(path, root=self.root)[0], "inside")

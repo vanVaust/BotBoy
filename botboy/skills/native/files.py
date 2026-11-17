@@ -69,7 +69,7 @@ def _parse_line_range(spec: str) -> Tuple[int, Optional[int]]:
 
 def _load_document(ctx: NativeSkillContext, user_path: str) -> Tuple[Path, str, bool]:
     path = workspace.resolve(ctx.workspace_root, user_path, expect="file")
-    text, truncated = workspace.read_text(path, MAX_READ_BYTES)
+    text, truncated = workspace.read_text(path, MAX_READ_BYTES, root=ctx.workspace_root)
     return path, text, truncated
 
 
@@ -142,7 +142,7 @@ def _collect_grep_documents(ctx: NativeSkillContext, user_path: str, glob: Optio
     skipped = 0
     for path in files:
         try:
-            data, truncated = workspace.read_bytes(path, MAX_GREP_FILE_BYTES)
+            data, truncated = workspace.read_bytes(path, MAX_GREP_FILE_BYTES, root=ctx.workspace_root)
         except workspace.WorkspaceError:
             skipped += 1
             continue
@@ -213,7 +213,7 @@ async def _stat(ctx: NativeSkillContext, args: List[str]) -> dict:
         "modified": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(info.st_mtime)),
     }
     if path.is_file():
-        content, truncated = workspace.read_bytes(path, MAX_READ_BYTES)
+        content, truncated = workspace.read_bytes(path, MAX_READ_BYTES, root=ctx.workspace_root)
         data["sha256"] = hashlib.sha256(content).hexdigest() if not truncated else None
         data["binary"] = workspace.looks_binary(content)
         if not data["binary"]:

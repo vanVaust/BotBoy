@@ -323,8 +323,11 @@ def diff_texts(a: str, b: str, *, a_label: str = "a", b_label: str = "b", contex
     a_lines = a.splitlines()
     b_lines = b.splitlines()
     unified_lines = list(difflib.unified_diff(a_lines, b_lines, fromfile=a_label, tofile=b_label, n=context, lineterm=""))
-    added = sum(1 for line in unified_lines if line.startswith("+") and not line.startswith("+++"))
-    removed = sum(1 for line in unified_lines if line.startswith("-") and not line.startswith("---"))
+    # unified_diff emits exactly two file-header lines first; content lines
+    # such as "++counter;" start with "+++" too, so skip headers by position.
+    body = unified_lines[2:]
+    added = sum(1 for line in body if line.startswith("+"))
+    removed = sum(1 for line in body if line.startswith("-"))
     matcher = difflib.SequenceMatcher(None, a_lines, b_lines, autojunk=len(a_lines) > 200)
     similarity = matcher.ratio() if (a_lines or b_lines) else 1.0
     inline = ""

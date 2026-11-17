@@ -208,7 +208,12 @@ def lint_skill_text(content: str, source: str, *, skill_manager: Any = None) -> 
     contract.pop("metadata", None)
     report.contract = contract
 
-    runtime_type = str(((meta.get("layer") or {}).get("runtime") or {}).get("type", "")).lower() if isinstance(meta.get("layer"), dict) else ""
+    layer_meta = meta.get("layer")
+    runtime_meta = layer_meta.get("runtime") if isinstance(layer_meta, dict) else None
+    if runtime_meta is not None and not isinstance(runtime_meta, dict):
+        report.add("error", "layer.runtime.type", "'layer.runtime' must be a mapping.")
+        runtime_meta = None
+    runtime_type = str((runtime_meta or {}).get("type", "")).lower()
     tier = str(contract.get("runtime_tier", "")).lower()
     if runtime_type == "docker" or tier == "docker":
         report.add("error", "runtime.docker",
@@ -331,7 +336,7 @@ def _lint_path(ctx: NativeSkillContext, user_path: str) -> List[LintReport]:
         raise SkillUsageError(f"No SKILL.md found under {user_path or '.'}")
     reports = []
     for path in files:
-        content, _ = workspace.read_text(path, MAX_MANIFEST_BYTES, allow_truncation=False)
+        content, _ = workspace.read_text(path, MAX_MANIFEST_BYTES, allow_truncation=False, root=ctx.workspace_root)
         reports.append(lint_skill_text(content, workspace.relative(ctx.workspace_root, path), skill_manager=ctx.skill_manager))
     owners: Dict[str, List[str]] = {}
     for report in reports:

@@ -107,16 +107,65 @@ def relative(root: Optional[Path], path: Path) -> str:
     return rel or "."
 
 
-def read_bytes(path: Path, max_bytes: int = DEFAULT_MAX_FILE_BYTES) -> Tuple[bytes, bool]:
+_DIR_FD_WALK = (
+    os.open in os.supports_dir_fd
+    and hasattr(os, "O_NOFOLLOW")
+    and hasattr(os, "O_DIRECTORY")
+)
+
+
+def _open_beneath(root: Path, path: Path, flags: int) -> int:
+    """Open ``path`` by walking from ``root`` one component at a time.
+
+    Each directory is opened relative to its already-open parent with
+    O_NOFOLLOW|O_DIRECTORY, so swapping an ancestor for a symlink after
+    ``resolve()`` cannot redirect the open outside the workspace.
+    """
+    parts = path.relative_to(root).parts
+    if not parts:
+        raise WorkspaceError("Not a regular file: workspace root")
+    dir_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in parts[:-1]:
+            next_fd = os.open(part, dir_flags, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        return os.open(parts[-1], flags, dir_fd=fd)
+    finally:
+        os.close(fd)
+
+
+def read_bytes(path: Path, max_bytes: int = DEFAULT_MAX_FILE_BYTES, *,
+               root: Optional[Path] = None) -> Tuple[bytes, bool]:
     """Read at most ``max_bytes`` from a regular file without following links.
+
+    With ``root`` (the workspace), POSIX systems open the file relative to a
+    pinned root descriptor (no symlink in any component). Windows has no
+    ``dir_fd`` support; there the final component is checked and the opened
+    file's identity is compared with the path afterwards (best effort).
 
     Returns ``(data, truncated)``.
     """
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     try:
-        fd = os.open(path, flags)
+        if root is not None and _DIR_FD_WALK:
+            fd = _open_beneath(require_root(root), path, flags)
+        else:
+            fd = os.open(path, flags)
     except OSError as exc:
         raise WorkspaceError(f"Cannot open {path.name}: {exc.strerror or exc}") from exc
+    if root is not None and not _DIR_FD_WALK:
+        try:
+            opened, current = os.fstat(fd), os.stat(path)
+            base = require_root(root)
+            inside = Path(os.path.realpath(path)).is_relative_to(base)
+        except OSError as exc:
+            os.close(fd)
+            raise WorkspaceError(f"Cannot open {path.name}: {exc.strerror or exc}") from exc
+        if not inside or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
+            os.close(fd)
+            raise WorkspaceError(f"Path changed while opening: {path.name}")
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
@@ -141,8 +190,9 @@ def looks_binary(data: bytes) -> bool:
     return b"\x00" in data[:8192]
 
 
-def read_text(path: Path, max_bytes: int = DEFAULT_MAX_FILE_BYTES, *, allow_truncation: bool = True) -> Tuple[str, bool]:
-    data, truncated = read_bytes(path, max_bytes)
+def read_text(path: Path, max_bytes: int = DEFAULT_MAX_FILE_BYTES, *, allow_truncation: bool = True,
+              root: Optional[Path] = None) -> Tuple[str, bool]:
+    data, truncated = read_bytes(path, max_bytes, root=root)
     if truncated and not allow_truncation:
         raise WorkspaceError(f"File exceeds the {max_bytes}-byte limit: {path.name}")
     if looks_binary(data):

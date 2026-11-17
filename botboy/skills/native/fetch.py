@@ -217,7 +217,10 @@ def _read_body(response: http.client.HTTPResponse, policy: FetchPolicy, deadline
     while len(output) <= policy.max_bytes:
         if time.monotonic() > deadline:
             raise FetchError("Overall fetch deadline exceeded")
-        chunk = response.read(64 * 1024)
+        # read1 returns after a single receive, so a server dripping bytes
+        # cannot hold this loop past the overall deadline while read(n)
+        # waits to fill its buffer (the socket timeout only bounds silence).
+        chunk = response.read1(64 * 1024)
         if not chunk:
             break
         raw_read += len(chunk)
