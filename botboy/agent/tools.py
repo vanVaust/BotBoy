@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from typing import Literal, Mapping, Optional
+from typing import Any, Callable, Literal, Mapping, Optional
 
 ParamKind = Literal["control", "data"]
 Effect = Literal["read", "write", "destructive", "egress"]
@@ -46,6 +46,16 @@ class ToolSpec:
     # by the command router.
     quarantined_llm: bool = False
     tags: tuple[str, ...] = field(default_factory=tuple)
+    # Reads the complete value from a command result; the default is the
+    # human-facing ``output`` text, which some handlers abbreviate.
+    extract_output: Optional[Callable[[Mapping[str, Any]], str]] = None
+
+    def output_text(self, result: Mapping[str, Any]) -> str:
+        if self.extract_output is not None:
+            text = self.extract_output(result)
+            if text is not None:
+                return text
+        return str(result.get("output", "") or "")
 
     def catalogue_entry(self) -> dict:
         return {
@@ -86,6 +96,18 @@ def sanitize_argument(value: str, max_chars: int, name: str) -> str:
     return text
 
 
+def _memory_results_text(result: Mapping[str, Any]) -> Optional[str]:
+    # ``search`` prints 100-character previews; ``data.results`` has the full
+    # entries, which summaries and copies must see.
+    data = result.get("data")
+    results = data.get("results") if isinstance(data, dict) else None
+    if not isinstance(results, list):
+        return None
+    return "\n".join(
+        f"[{item.get('id', '?')}] {item.get('content', '')}" for item in results if isinstance(item, dict)
+    )
+
+
 def default_tools() -> dict[str, ToolSpec]:
     tools = (
         ToolSpec(
@@ -95,13 +117,16 @@ def default_tools() -> dict[str, ToolSpec]:
             effect="read",
             output_trust="untrusted",  # stored text may stem from earlier untrusted input
             command_template="search {query}",
+            extract_output=_memory_results_text,
         ),
         ToolSpec(
             name="memory.store",
             description="Persist a text as a new memory entry.",
             params={"text": ParamSpec("data", "text to remember")},
             effect="write",
-            output_trust="trusted",
+            # The confirmation echoes the stored text; an approved untrusted
+            # write must not come back as trusted (label laundering).
+            output_trust="inherit",
             command_template="remember {text}",
         ),
         ToolSpec(
