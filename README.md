@@ -24,10 +24,22 @@ Zusaetzlich liegen die fuer installierte Pakete benoetigten Runtime-Ressourcen g
 
 ## Installation
 
+Kern (Standardbibliothek plus PyYAML):
+
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install .
 ```
+
+Zum Ausfuehren der Testsuite zusaetzlich die Standard-Laufzeit, weil elf
+Testmodule `fastapi` auf Modulebene importieren:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install ".[dev]"
+```
+
+Welche optionale Abhaengigkeit wofuer da ist und wo sie importiert wird, steht
+als Kommentar bei `extras_require` in `setup.py`.
 
 ## Start
 
@@ -167,7 +179,8 @@ Der aktuelle reproduzierbare Release-Stand steht in `botboy/data/STATUS_SNAPSHOT
 
 - Browser-Zugriffe auf beide Gateways werden auch ohne lokale Authentifizierung auf erlaubte Host-/Origin-Werte und JSON-Request-Bodies geprueft. `BOTBOY_ALLOWED_HOSTS` erlaubt zusaetzliche Hostnamen; ein Wildcard-Wert schaltet die Loopback-Hostpruefung nicht aus. `BOTBOY_ENABLE_DOCS=true` aktiviert die standardmaessig deaktivierten FastAPI-Dokumentationsseiten.
 - Fuer aktivierte Authentifizierung ist ein dauerhaft konfigurierter, kryptografisch zufaellig erzeugter JWT-Schluessel erforderlich (`BOTBOY_JWT_SECRET` oder `BOTBOY_JWT_SECRET_FILE`). Ein leerer Wert wird im authentifizierten Betrieb nicht automatisch erzeugt und gespeichert. Bekannte Beispielwerte und auffaellig schwache Schluessel werden abgewiesen. Bei einem Schluesselwechsel werden vorhandene JWTs ungueltig.
-- `file search` durchsucht ausschliesslich das Home-Verzeichnis und folgt keinen Verzeichnis-Symlinks oder Windows-Junctions. Absolute Suchmuster und Elternverzeichnis-Segmente werden abgewiesen.
+- `file search` durchsucht ausschliesslich das Home-Verzeichnis und folgt keinen Verzeichnis-Symlinks oder Windows-Junctions. Absolute Suchmuster und Elternverzeichnis-Segmente werden abgewiesen. Versteckte Dateien und Verzeichnisse (`.ssh`, `.config`, …) werden nie gelistet; Muster mit Punkt-Komponenten werden abgewiesen. Eine Suche bricht nach 50.000 Eintraegen oder 5 s ab und meldet das Ergebnis dann als unvollstaendig.
+- Loeschende Builtins (`forget`/`delete`, `history clear`, `schedule cancel|remove|delete`) sind ausserhalb der lokalen CLI an eine serverseitige Freigabe gebunden. Schritte aus LLM-Plaenen erhalten nie die implizite Operator-Freigabe.
 - Externe Task-Ausfuehrung braucht einen geprueften SecurityContext. Globale zustandsbezogene CLI-Kommandos ueber HTTP/WebSocket/MCP sind gesperrt; dafuer sind autorisierte Ressourcen-APIs zu verwenden. CLI und lokales MCP-stdio bleiben Operator-Schnittstellen.
 - `/api/tasks/{id}/approve` stellt einen serverseitigen, befristeten Grant aus. `/resume` verwendet dessen ID in `X-BotBoy-Approval`. Ein Boolean oder die Adminrolle ersetzt den Grant nicht. Der finale Ausfuehrungsversuch beansprucht ihn atomar; nach einem Ausfuehrungsfehler braucht ein Retry eine neue Freigabe.
 - Passwort-/Rollen-/Tenant-Aenderungen, deaktivierte Principals und widerrufene API-Keys invalidieren die betroffenen Login-Credentials. Nach dem Upgrade ist eine erneute Anmeldung fuer alte Login-Tokens erforderlich.

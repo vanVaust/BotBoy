@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from botboy.command_effects import HISTORY_DESTRUCTIVE_SUBCOMMANDS
+
 
 def _render_records(records, total: int, label: str) -> dict:
     if not records:
@@ -39,7 +41,7 @@ def handle_history(bot, command: str) -> dict:
             )
         return {"success": True, "output": "\n".join(lines), "type": "history"}
 
-    if sub == "clear":
+    if sub in HISTORY_DESTRUCTIVE_SUBCOMMANDS:
         purged = bot.history.purge(older_than_days=0)
         return {
             "success": True,
