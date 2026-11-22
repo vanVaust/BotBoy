@@ -12,6 +12,32 @@ was tatsächlich geschah, zeigt `git log`. Es wird hier nicht rückwirkend erfun
 
 ### Hinzugefügt
 
+- LLM-Transport robust: HTTP-Status vor dem Parsen geprüft, Antwortgröße begrenzt
+  (16 MiB nach Dekompression), keine Redirects (API-Schlüssel bleibt beim
+  konfigurierten Host), Schlüssel in Fehlermeldungen geschwärzt. Wiederholung bei
+  408/425/429/5xx/529, Verbindungsfehlern und Timeouts mit Full-Jitter-Backoff,
+  `Retry-After`/`retry-after-ms` werden beachtet, Gesamtfrist über alle Versuche.
+  Echtes Streaming für OpenAI und Anthropic (vorher Platzhaltertext); Wiederholung
+  nur vor dem ersten Token. Fallback-Kette (`llm.fallbacks`) und Verbrauchszähler
+  (Anfragen, Fehler, Wiederholungen, Tokens, Kosten bei konfiguriertem Preis) in
+  `status`. Neue Einstellungen: `max_tokens`, `max_retries`, `retry_base_delay`,
+  `retry_max_delay`, `price_input_per_mtok`, `price_output_per_mtok`, `fallbacks`.
+- Herkunft pro Erinnerung (`trust`, `source`): Operator-Eingaben über die CLI sind
+  `trusted`, alles aus Agent/Planer, Gateway oder API `untrusted`; Metadaten können
+  das nicht setzen, jede Inhaltsänderung setzt zurück. `memory.search` liefert im
+  Agenten nur dann `trusted`, wenn jeder Treffer und die Anfrage vertrauenswürdig
+  sind; eine freigegebene Kopie fremder Inhalte bleibt `untrusted`.
+- Deutsche Volltextsuche: Normalisierung (NFKC, Casefold, CISTEM-Stemmer) über eine
+  Schattenspalte; „Häuser“ findet „Haus“, „Straße“ findet „Strassen“. Anfragen werden
+  gleich normalisiert und als quotierte Terme übergeben (FTS-Syntax kann nicht mehr
+  fehlschlagen); `OR` und `präfix*` bleiben möglich. Bestehende Datenbanken werden
+  beim Öffnen migriert und neu indiziert.
+- Eval-Welle `agent_injection` (`python -m botboy.evals --wave agent_injection`):
+  22 Fälle über echten BotBoy-Router und -Speicher, Kennzahlen nach AgentDojo
+  (Nutzen 8/8, Angriffserfolg 0/14). Bewertet wird von außen: Kanarienwort in
+  erfolgreichen wirksamen Befehlen, nicht erlaubter Abfluss nach außen,
+  Speicheränderungen.
+
 - `agent <aufgabe>`: Agent-Schleife nach Plan-then-Execute mit Herkunftslabels,
   Datenflussprüfung vor jedem Werkzeugaufruf, argumentgebundenen Freigaben und
   Quarantäne-LLM (`botboy/agent/`). 9 Werkzeuge auf Basis vorhandener Builtins;
@@ -19,6 +45,9 @@ was tatsächlich geschah, zeigt `git log`. Es wird hier nicht rückwirkend erfun
 
 ### Sicherheit
 
+- Ein unbekannter LLM-Backend-Name fiel bisher still auf das Mock-Backend zurück
+  (Antworten „[MOCK] …“). Jetzt wird das LLM sichtbar deaktiviert.
+- Rückfall-Suche per `LIKE` maskiert `%` und `_`.
 - Löschsperre umgehbar: `delete <query>` (Alias von `forget`) löschte Erinnerungen
   über das Gateway ohne Freigabe; `schedule cancel|remove|delete` war gar nicht
   erfasst. Alle löschenden Builtins stehen jetzt in `botboy/command_effects.py`,
