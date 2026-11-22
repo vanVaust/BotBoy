@@ -205,6 +205,11 @@ class BootstrapService:
                 )
         except ImportError as exc:  # pragma: no cover - mirrors current orchestrator
             print(f"[BotBoy] LLM init warning: {exc}", file=sys.stderr)
+        except ValueError as exc:
+            # Misconfiguration disables the LLM visibly ("LLM: disabled")
+            # instead of silently answering from the mock backend.
+            self.bot.llm = None
+            print(f"[BotBoy] LLM disabled, invalid configuration: {exc}", file=sys.stderr)
 
     def _register_default_a2a_adapters(self) -> None:
         a2a_pilot = getattr(self.bot, "a2a_pilot", None)

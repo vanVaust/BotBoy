@@ -16,6 +16,11 @@ OPTIONAL_ROUTE_ERRORS = (
 )
 
 
+def _llm_usage(response) -> "dict | None":
+    usage = getattr(response, "usage", None)
+    return usage() if callable(usage) else None
+
+
 async def handle_intelligence_route(
     bot,
     command: str,
@@ -204,9 +209,18 @@ async def handle_intelligence_route(
                     "success": True,
                     "output": output,
                     "type": "llm",
-                    "data": {"backend": llm_result.backend, "model": llm_result.model},
+                    "data": {"backend": llm_result.backend, "model": llm_result.model,
+                             "usage": _llm_usage(llm_result)},
                 }
-            return {"success": False, "output": f"LLM error: {llm_result.error}", "type": "llm"}
+            return {
+                "success": False,
+                "output": f"LLM error: {llm_result.error}",
+                "type": "llm",
+                "data": {"backend": llm_result.backend, "model": llm_result.model,
+                         "usage": _llm_usage(llm_result),
+                         "status": getattr(llm_result, "status_code", None),
+                         "retryable": bool(getattr(llm_result, "retryable", False))},
+            }
         except OPTIONAL_ROUTE_ERRORS as exc:
             return {"success": False, "output": f"LLM error: {exc}", "type": "llm"}
 
