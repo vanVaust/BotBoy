@@ -164,7 +164,11 @@ def load_dataset(ctx: NativeSkillContext, user_path: str, json_path: Optional[st
             header = next(reader)
         except StopIteration:
             return Dataset(rel, [], [], False)
-        header = _distinct_headers([name.strip() or f"column_{idx + 1}" for idx, name in enumerate(header)])
+        names = _NameAllocator()
+        header = _distinct_headers([name.strip() or f"column_{idx + 1}" for idx, name in enumerate(header)], names)
+        # Cells beyond the header get generated names that can never collide
+        # with a real header ("column_2" in the header stays its own column).
+        keys = list(header)
         try:
             for record in reader:
                 if not record:
@@ -172,7 +176,9 @@ def load_dataset(ctx: NativeSkillContext, user_path: str, json_path: Optional[st
                 if len(rows) >= MAX_ROWS:
                     truncated = True
                     break
-                rows.append({header[i] if i < len(header) else f"column_{i + 1}": _coerce_cell(cell) for i, cell in enumerate(record)})
+                while len(keys) < len(record):
+                    keys.append(names.claim(f"column_{len(keys) + 1}"))
+                rows.append({keys[i]: _coerce_cell(cell) for i, cell in enumerate(record)})
         except csv.Error as exc:
             raise SkillUsageError(f"CSV parse error near row {len(rows) + 2}: {exc}") from exc
         columns = header + [col for col in _columns_of(rows) if col not in header]
@@ -236,18 +242,34 @@ class Condition:
 _EXACT_INT_RE = re.compile(r"[+-]?\d{1,300}")
 
 
-def _distinct_headers(names: Sequence[str]) -> List[str]:
-    """Rename repeated headers (amount, amount_2, ...) so no column is overwritten."""
-    seen: set = set()
-    result: List[str] = []
-    for name in names:
-        candidate, counter = name, 2
-        while candidate in seen:
+class _NameAllocator:
+    """Collision-free column names in amortised O(1) per name.
+
+    Restarting the suffix counter at 2 for every repeat made a header of n
+    identical names cost O(n^2) probes; the next suffix is kept per base name.
+    """
+
+    def __init__(self) -> None:
+        self.taken: set = set()
+        self._next: Dict[str, int] = {}
+
+    def claim(self, name: str) -> str:
+        candidate = name
+        if candidate in self.taken:
+            counter = self._next.get(name, 2)
             candidate = f"{name}_{counter}"
-            counter += 1
-        seen.add(candidate)
-        result.append(candidate)
-    return result
+            while candidate in self.taken:
+                counter += 1
+                candidate = f"{name}_{counter}"
+            self._next[name] = counter + 1
+        self.taken.add(candidate)
+        return candidate
+
+
+def _distinct_headers(names: Sequence[str], allocator: Optional[_NameAllocator] = None) -> List[str]:
+    """Rename repeated headers (amount, amount_2, ...) so no column is overwritten."""
+    allocator = allocator or _NameAllocator()
+    return [allocator.claim(name) for name in names]
 
 
 def _as_number(value: Any) -> Optional[Union[int, float]]:
@@ -537,6 +559,28 @@ def execute_query(dataset: Dataset, query: Query) -> Tuple[List[Dict[str, Any]],
     return rows[: query.limit], columns, matched
 
 
+def _bounded_render(rows: List[Dict[str, Any]], columns: List[str], output_format: str, *,
+                    prune: bool) -> tuple:
+    """Render under ``MAX_RENDER_CELLS``; returns ``(body, columns_shown)``.
+
+    ``prune`` keeps only columns the rows use (sparse JSON: the dataset may
+    have one column per record). Rendering expands every row across every
+    column before output truncation, so the cell budget is applied first.
+    """
+    if prune:
+        used = {column for row in rows for column in row}
+        columns = [column for column in columns if column in used]
+    shown = rows
+    if columns and len(rows) * len(columns) > MAX_RENDER_CELLS:
+        shown = rows[: max(1, MAX_RENDER_CELLS // len(columns))]
+    if columns and len(columns) > MAX_RENDER_CELLS:
+        columns = columns[:MAX_RENDER_CELLS]
+    body = render_rows(shown, columns, output_format)
+    if len(shown) < len(rows):
+        body += f"\n(rendered {len(shown)} of {len(rows)} rows: {len(columns)} columns exceed the render budget)"
+    return body, columns
+
+
 def render_rows(rows: List[Dict[str, Any]], columns: List[str], output_format: str) -> str:
     if output_format == "json":
         return json.dumps(rows, ensure_ascii=False, indent=2, default=str)
@@ -652,27 +696,17 @@ def _execute(ctx: NativeSkillContext, tokens: List[str]) -> dict:
         count = int(args[1]) if len(args) > 1 and args[1].isdigit() else 10
         count = max(1, min(count, 100))
         rows = dataset.rows[:count]
-        return result("data", f"{dataset.path}: first {len(rows)} of {len(dataset.rows)} rows\n"
-                      + render_rows(rows, dataset.columns, "table"),
-                      action="head", path=dataset.path, rows=rows, columns=dataset.columns)
+        body, columns = _bounded_render(rows, dataset.columns, "table", prune=True)
+        return result("data", f"{dataset.path}: first {len(rows)} of {len(dataset.rows)} rows\n" + body,
+                      action="head", path=dataset.path, rows=rows, columns=columns)
     if action == "stats":
         if len(args) != 2:
             raise SkillUsageError("data stats <file> <column>")
         return _stats(dataset, args[1])
     query = parse_query(args[1:])
     rows, columns, matched = execute_query(dataset, query)
-    if not query.select and not query.group_by and not query.aggregates:
-        # Sparse JSON: show only columns the returned rows actually use.
-        used = {column for row in rows for column in row}
-        columns = [column for column in columns if column in used]
-    shown = rows
-    if columns and len(rows) * len(columns) > MAX_RENDER_CELLS:
-        # Rendering expands every row across every column before output
-        # truncation; bound that work first.
-        shown = rows[: max(1, MAX_RENDER_CELLS // len(columns))]
-    body = render_rows(shown, columns, query.output_format)
-    if len(shown) < len(rows):
-        body += f"\n(rendered {len(shown)} of {len(rows)} rows: {len(columns)} columns exceed the render budget)"
+    body, columns = _bounded_render(rows, columns, query.output_format,
+                                    prune=not query.select and not query.group_by and not query.aggregates)
     body, _ = truncate(body, 12000)
     header = f"{dataset.path}: {matched} matching row(s)" + (f", showing {len(rows)}" if matched > len(rows) else "")
     return result(

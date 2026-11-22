@@ -389,6 +389,23 @@ def diff_texts(a: str, b: str, *, a_label: str = "a", b_label: str = "b", contex
     inline = ""
     if len(a_lines) <= 1 and len(b_lines) <= 1:
         a_words, b_words = a.split(), b.split()
+        if len(a_words) * len(b_words) > MAX_DIFF_LINE_PAIRS:
+            # One long line each bypasses the line-pair budget; the word-level
+            # matcher is just as quadratic, so the same budget applies here.
+            from collections import Counter
+
+            only_a = Counter(a_words) - Counter(b_words)
+            only_b = Counter(b_words) - Counter(a_words)
+            changed = sum(only_a.values()) + sum(only_b.values())
+            similarity = 1.0 - changed / max(len(a_words) + len(b_words), 1)
+            if a_words != b_words:
+                similarity = min(similarity, 0.9999)
+            inline = (f"(word-level diff skipped: {len(a_words)} x {len(b_words)} words exceed the work budget; "
+                      f"words only in {a_label}: {sum(only_a.values())}, only in {b_label}: {sum(only_b.values())})")
+            if eof_differs:
+                similarity = min(similarity, 0.9999)
+            return DiffResult(unified="\n".join(unified_lines), added_lines=added, removed_lines=removed,
+                              similarity=round(similarity, 4), inline=inline)
         word_matcher = difflib.SequenceMatcher(None, a_words, b_words)
         pieces: List[str] = []
         for tag, i1, i2, j1, j2 in word_matcher.get_opcodes():
