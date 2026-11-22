@@ -161,8 +161,14 @@ class SafeEvaluator:
             return wrapper
 
         def prod(values: Any, start: Any = 1) -> Any:
+            # Numbers only, like sum(): multiplying a list start value copies
+            # a growing list per item inside one unbudgeted call.
+            items = self._as_sequence(values, "prod")
+            for value in (start, *items):
+                if isinstance(value, bool) or not isinstance(value, (int, float, complex)):
+                    raise ExprError("prod() multiplies numbers only")
             total = start
-            for value in self._as_sequence(values, "prod"):
+            for value in items:
                 total = self._mul(total, value)
             return total
 

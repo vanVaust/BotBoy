@@ -462,6 +462,9 @@ async def _show(ctx: NativeSkillContext, args: List[str]) -> dict:
         raise SkillUsageError("repo show <rev> [path]")
     rev = _validate_rev(opts.positionals[0])
     repo = await _checked_repo(ctx, opts.positionals[1] if len(opts.positionals) > 1 else "")
+    # Peel annotated tags: `git show v1.0` prints the tag header and message
+    # before the commit, which corrupted the parsed hash and body.
+    rev = f"{rev}^{{commit}}"
     header = await _run_git(repo, ["show", "--no-color", "--no-patch",
                                    "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e", "--end-of-options", rev, "--"])
     commits = parse_log(header)

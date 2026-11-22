@@ -40,7 +40,10 @@ MAX_DATA_ROWS = 200
 MAX_FLATTEN_DEPTH = 4
 SUPPORTED_SUFFIXES = {".csv", ".tsv", ".json", ".jsonl", ".ndjson"}
 
-_INT_RE = re.compile(r"[+-]?\d{1,18}")
+_INT_RE = re.compile(r"[+-]?\d+")
+# Longer digit strings stay text: int() above ~4300 digits is refused by
+# Python and float() would round them silently.
+_MAX_INT_DIGITS = 300
 _FLOAT_RE = re.compile(r"[+-]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?")
 _CLAUSES = {"where", "select", "group", "agg", "sort", "order", "limit", "format"}
 _OPERATORS = {"==", "=", "!=", ">", ">=", "<", "<=", "contains", "startswith", "endswith", "in"}
@@ -71,7 +74,9 @@ def _coerce_cell(value: str) -> Any:
     if text == "":
         return None
     if _INT_RE.fullmatch(text):
-        return int(text)
+        # IDs longer than 18 digits used to fall through to float() and lose
+        # precision (1234567890123456789 == ...790 after rounding).
+        return int(text) if len(text.lstrip("+-")) <= _MAX_INT_DIGITS else text
     if _FLOAT_RE.fullmatch(text):
         return float(text)
     lowered = text.lower()

@@ -336,3 +336,24 @@ class FifthReviewRoundTests(unittest.TestCase):
                                             content_type="application/json", charset="utf-8",
                                             body=b'{"a": [1, 2]}', truncated=False)
         self.assertIn('\n  "a"', fetch_skill.readable(shallow)[1])
+
+
+class SixthReviewRoundTests(unittest.TestCase):
+    def test_prod_rejects_sequences(self) -> None:
+        from botboy.skills.native.expr import ExprError, evaluate_expression
+
+        started = time.perf_counter()
+        with self.assertRaisesRegex(ExprError, "numbers only"):
+            evaluate_expression("prod([1]*10000, start=[0]*10000)")
+        self.assertLess(time.perf_counter() - started, 1.0)
+        self.assertEqual(evaluate_expression("prod([2, 3, 4])"), 24)
+
+    def test_long_integer_cells_stay_exact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "ids.csv").write_text("id\n1234567890123456789\n1234567890123456790\n", encoding="utf-8")
+            ctx = NativeSkillContext(workspace_root=root)
+            hit = asyncio.run(data_skill.run("data query ids.csv where id == 1234567890123456789", ctx))
+            stats = asyncio.run(data_skill.run("data stats ids.csv id", ctx))
+        self.assertEqual([row["id"] for row in hit["data"]["rows"]], [1234567890123456789])
+        self.assertEqual(stats["data"]["distinct"], 2)

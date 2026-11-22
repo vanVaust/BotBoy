@@ -282,3 +282,25 @@ class RepoRedirectionTests(unittest.TestCase):
         if os.name != "nt":
             (project / ".git" / "refs" / "heads" / "leak").symlink_to(self.outside / ".git" / "refs" / "heads" / "master")
             self.assertIn("symbolic link", self.call("repo log fake")["output"])
+
+
+@unittest.skipUnless(GIT, "git is not installed")
+class AnnotatedTagTests(unittest.TestCase):
+    def test_show_peels_annotated_tags(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name).resolve()
+        project = root / "r"
+        project.mkdir()
+        git(project, "init", "-q")
+        git(project, "config", "user.email", "t@example.invalid")
+        git(project, "config", "user.name", "T")
+        (project / "a.txt").write_text("a\n", encoding="utf-8")
+        git(project, "add", "a.txt")
+        git(project, "commit", "-q", "-m", "first commit", "-m", "commit body")
+        git(project, "tag", "-a", "v1.0", "-m", "TAG MESSAGE")
+        result = asyncio.run(repo_skill.run("repo show v1.0 r", NativeSkillContext(workspace_root=root)))
+        self.assertTrue(result["success"], result["output"])
+        self.assertRegex(result["data"]["commit"]["hash"], r"^[0-9a-f]{40}$")
+        self.assertNotIn("TAG MESSAGE", result["output"])
+        self.assertIn("commit body", result["output"])
