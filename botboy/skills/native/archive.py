@@ -87,7 +87,8 @@ _WINDOWS_RESERVED = frozenset(
 )
 # Unsafe: extracting with a naive tool can write outside the target directory,
 # overwrite unrelated files, or explode in size. Caution: worth a look.
-UNSAFE_FLAGS = frozenset({"absolute", "traversal", "link-escapes", "device", "overlap", "name-mismatch",
+UNSAFE_FLAGS = frozenset({"absolute", "traversal", "link-escapes", "link-traversal", "link-unresolved",
+                          "device", "overlap", "name-mismatch",
                           "size-mismatch", "crc-mismatch", "corrupt"})
 _USAGE = (
     "Usage (archive paths are relative to the workspace root; zip, tar, tar.gz/.tgz, tar.bz2, tar.xz,\n"
@@ -444,13 +445,114 @@ def _link_escapes(name: str, target: str, hard: bool) -> bool:
     return joined == ".." or joined.startswith("../") or joined.startswith("/")
 
 
-def analyse(entries: List[Entry]) -> None:
+MAX_LINK_HOPS = 40
+LINK_RESOLUTION_STEPS = 2_000_000
+
+
+class _Unresolvable(Exception):
+    pass
+
+
+def _parts(path: str) -> List[str]:
+    # Extractors on Windows treat "\\" as a separator too.
+    return [part for part in re.split(r"[\\/]", path) if part not in {"", "."}]
+
+
+def _is_absolute(path: str) -> bool:
+    return path.startswith(("/", "\\")) or bool(_DRIVE.match(path))
+
+
+class LinkResolver:
+    """Simulates how extraction follows symlinks created by earlier members.
+
+    Each entry is checked lexically on its own, but links interact:
+    ``a -> .`` then ``a/b -> ..`` then ``b/payload`` writes outside the
+    destination although no single name or target looks unsafe. Paths are
+    resolved component by component through the links recorded so far (in
+    archive order, at their resolved locations), so such chains are caught.
+    Hops per path and total work are bounded; exceeding them is reported.
+    """
+
+    def __init__(self) -> None:
+        self.links: Dict[str, str] = {}
+        self.steps = LINK_RESOLUTION_STEPS
+
+    def resolve(self, parts: List[str], *, follow_last: bool) -> Optional[List[str]]:
+        """Resolved components below the root, or ``None`` if the path escapes."""
+        stack = list(reversed(parts))
+        current: List[str] = []
+        hops = 0
+        while stack:
+            self.steps -= 1
+            if self.steps < 0:
+                raise _Unresolvable("link resolution budget exhausted")
+            part = stack.pop()
+            if part in {"", "."}:
+                continue
+            if part == "..":
+                if not current:
+                    return None
+                current.pop()
+                continue
+            key = "/".join(current + [part])
+            target = self.links.get(key)
+            if target is not None and (follow_last or stack):
+                hops += 1
+                if hops > MAX_LINK_HOPS:
+                    raise _Unresolvable(f"more than {MAX_LINK_HOPS} link hops (loop?)")
+                if _is_absolute(target):
+                    return None
+                # Relative to the directory holding the link (``current``).
+                stack.extend(reversed(_parts(target) or ["."]))
+                continue
+            current.append(part)
+        return current
+
+    def check(self, entry: "Entry") -> List[str]:
+        """Flags for ``entry``; records it when it is a symlink."""
+        parts = _parts(entry.name)
+        flags: List[str] = []
+        if not parts or _is_absolute(entry.name):
+            return flags  # lexical flags already cover these
+        location = self.resolve(parts, follow_last=False)
+        if location is None:
+            return ["link-traversal"]
+        if self.links and entry.kind in {"file", "hardlink"}:
+            # Writing a file through a final component that is a symlink
+            # writes to the link's target.
+            if self.resolve(parts, follow_last=True) is None:
+                flags.append("link-traversal")
+        if entry.kind == "symlink":
+            if self.resolve(location[:-1] + (_parts(entry.link) or ["."]), follow_last=True) is None \
+                    or _is_absolute(entry.link):
+                flags.append("link-escapes")
+            self.links["/".join(location)] = entry.link
+        elif entry.kind == "hardlink" and entry.link:
+            if _is_absolute(entry.link) or self.resolve(_parts(entry.link), follow_last=True) is None:
+                flags.append("link-escapes")
+        return flags
+
+
+def analyse(entries: List[Entry]) -> List[str]:
+    """Flag entries in place; returns archive-level reasons."""
     seen: Dict[str, int] = {}
     folded: Dict[str, str] = {}
+    resolver: Optional[LinkResolver] = LinkResolver()
+    extra: List[str] = []
     for entry in entries:
         entry.flags[:0] = [flag for flag in _path_flags(entry.name) if flag not in entry.flags]
         if entry.kind in {"symlink", "hardlink"} and _link_escapes(entry.name, entry.link, entry.kind == "hardlink"):
             entry.flags.append("link-escapes")
+        if resolver is not None:
+            try:
+                for flag in resolver.check(entry):
+                    lexical = flag == "link-traversal" and "traversal" in entry.flags
+                    if flag not in entry.flags and not lexical:
+                        entry.flags.append(flag)
+            except _Unresolvable as exc:
+                extra.append(f"UNSAFE links could not be resolved: {exc}")
+                entry.flags.append("link-unresolved")
+                resolver = None
         if entry.kind in {"device", "fifo"}:
             entry.flags.append("device")
         if entry.mode is not None and entry.mode & (stat.S_ISUID | stat.S_ISGID):
@@ -468,6 +570,7 @@ def analyse(entries: List[Entry]) -> None:
         if fold in folded and folded[fold] != key:
             entry.flags.append("case-collision")
         folded.setdefault(fold, key)
+    return extra
 
 
 def verdict(entries: List[Entry], extra: List[str]) -> Tuple[str, List[str]]:
@@ -561,7 +664,7 @@ def _zip_kind(info: zipfile.ZipInfo) -> Tuple[str, Optional[int]]:
             return "device", mode
         if stat.S_ISDIR(mode):
             return "dir", mode
-    if info.filename.endswith("/"):
+    if info.orig_filename.endswith(("/", "\\")):
         return "dir", mode
     return "file", mode
 
@@ -570,7 +673,7 @@ def _zip_data_start(archive: OpenArchive, info: zipfile.ZipInfo) -> Tuple[int, b
     archive.raw.seek(info.header_offset)
     header = archive.raw.read(30)
     if len(header) < 30 or header[:4] != b"PK\x03\x04":
-        raise ArchiveError(f"bad local header for {safe_name(info.filename)}")
+        raise ArchiveError(f"bad local header for {safe_name(info.orig_filename)}")
     name_len, extra_len = struct.unpack("<HH", header[26:30])
     local_name = archive.raw.read(name_len)
     return info.header_offset + 30 + name_len + extra_len, local_name
@@ -680,7 +783,9 @@ def _zip_entries(archive: OpenArchive, zf: zipfile.ZipFile, budget: Budget,
     for index, info in enumerate(infos):
         budget.tick()
         kind, mode = _zip_kind(info)
-        entry = Entry(info.filename, kind, info.file_size, info.compress_size, mode)
+        # orig_filename: zipfile rewrites "\\" to "/" in .filename on Windows,
+        # which would make the analysis platform-dependent.
+        entry = Entry(info.orig_filename, kind, info.file_size, info.compress_size, mode)
         if info.flag_bits & 0x1:
             entry.flags.append("encrypted")
         try:
@@ -692,14 +797,14 @@ def _zip_entries(archive: OpenArchive, zf: zipfile.ZipFile, budget: Budget,
             spans.append((info.header_offset, start + info.compress_size, index))
         except (ArchiveError, UnicodeEncodeError) as exc:
             entry.flags.append("corrupt")
-            extra.append(f"{safe_name(info.filename)}: {exc}")
+            extra.append(f"{safe_name(info.orig_filename)}: {exc}")
         if kind == "symlink" and read_links and not info.flag_bits & 0x1:
             try:
                 target = b"".join(zip_member_chunks(archive, info, budget, MAX_LINK_TARGET_BYTES))
                 entry.link = target.decode("utf-8", "replace")
             except ArchiveError as exc:
                 entry.flags.append("corrupt")
-                extra.append(f"{safe_name(info.filename)}: {exc}")
+                extra.append(f"{safe_name(info.orig_filename)}: {exc}")
         entries.append(entry)
     spans.sort()
     for (start_a, end_a, index_a), (start_b, _end_b, index_b) in zip(spans, spans[1:]):
@@ -770,8 +875,30 @@ class _NotTar(ArchiveError):
     """The (decompressed) stream is not a tar archive."""
 
 
+class _StreamDamaged(ArchiveError):
+    """The compressed stream around a complete tar is truncated or corrupt."""
+
+
+def _drain_stream(stream: "TarStream") -> None:
+    """Decompress the rest of a compressed tar to its end (budgeted).
+
+    tarfile stops at the end-of-archive blocks; the compressed footer (gzip
+    CRC32/ISIZE, bzip2 stream CRC, xz index and check) is only validated
+    when the decoder actually reaches its end of stream.
+    """
+    if stream.kind == "tar":
+        return
+    try:
+        while stream.read(CHUNK):
+            pass
+    except BudgetExceeded:
+        raise
+    except ArchiveError as exc:
+        raise _StreamDamaged(f"compressed stream is damaged after the last member: {exc}") from exc
+
+
 def iter_tar(archive: OpenArchive, budget: Budget) -> Iterator[Tuple[tarfile.TarFile, tarfile.TarInfo]]:
-    tar, _stream = _open_tar(archive, budget)
+    tar, stream = _open_tar(archive, budget)
     count = 0
     while True:
         try:
@@ -779,6 +906,7 @@ def iter_tar(archive: OpenArchive, budget: Budget) -> Iterator[Tuple[tarfile.Tar
         except (tarfile.TarError, EOFError, UnicodeError) as exc:
             raise ArchiveError(f"tar parse error after {count} entries: {exc}") from exc
         if info is None:
+            _drain_stream(stream)
             return
         tar.members.clear()  # constant memory: nothing needs the member list
         count += 1
@@ -837,7 +965,7 @@ def collect(archive: OpenArchive, budget: Budget) -> Listing:
                 raise
             raise ArchiveError("unsupported archive format (expected zip, tar, gzip, bzip2 or xz)") from None
         entries, extra = _zip_entries(archive, zf, budget)
-        analyse(entries)
+        extra.extend(analyse(entries))
         return Listing("zip", entries, extra)
     label = {"tar": "tar", "gzip": "tar.gz", "bzip2": "tar.bz2", "xz": "tar.xz"}[archive.format]
     entries: List[Entry] = []
@@ -864,7 +992,12 @@ def collect(archive: OpenArchive, budget: Budget) -> Listing:
     except BudgetExceeded as exc:
         stopped = str(exc)
         extra.append(f"UNSAFE {stopped}")
-    analyse(entries)
+    except _StreamDamaged as exc:
+        # Every header was read, but the compressed stream ends badly
+        # (truncated footer, checksum mismatch): nothing is verified.
+        stopped = str(exc)
+        extra.append(f"UNSAFE {stopped}")
+    extra.extend(analyse(entries))
     decompressed = budget.used if archive.format != "tar" else None
     return Listing(label, entries, extra, stopped, decompressed)
 
@@ -946,7 +1079,7 @@ def do_check(ctx: NativeSkillContext, user_path: str) -> dict:
             for entry in listing.entries:
                 by_name.setdefault(entry.name, entry)
             for info in zf.infolist()[:MAX_SCAN_ENTRIES]:
-                entry = by_name.get(info.filename)
+                entry = by_name.get(info.orig_filename)
                 if entry is None or _zip_kind(info)[0] != "file" or info.flag_bits & 0x1:
                     continue
                 try:
@@ -962,7 +1095,7 @@ def do_check(ctx: NativeSkillContext, user_path: str) -> dict:
                             else "size-mismatch" if "declared" in message else "corrupt")
                     if flag not in entry.flags:
                         entry.flags.append(flag)
-                    problems.append(f"{safe_name(info.filename)}: {message}")
+                    problems.append(f"{safe_name(info.orig_filename)}: {message}")
         elif listing.format == "tar" and not stopped:
             # A plain tar listing only read headers; read every member now.
             archive.raw.seek(0)
@@ -1063,14 +1196,16 @@ class MemberRead:
 def _read_member(archive: OpenArchive, member: str, budget: Budget) -> MemberRead:
     if archive.format in {"zip", "unknown"}:
         zf = _zip_open(archive, budget)
-        try:
-            info = zf.getinfo(member)  # the last entry of that name, as extractors use
-        except KeyError:
-            raise ArchiveError(f"no member named {safe_name(member)!r}") from None
+        # Match the stored name (as listed), keeping the last entry of that
+        # name, which is the one extractors end up writing.
+        matches = [item for item in zf.infolist() if item.orig_filename == member]
+        if not matches:
+            raise ArchiveError(f"no member named {safe_name(member)!r}")
+        info = matches[-1]
         kind = _zip_kind(info)[0]
         if kind != "file":
             raise ArchiveError(f"{safe_name(member)} is a {kind}, not a file")
-        duplicates = sum(1 for item in zf.infolist() if item.filename == member) - 1
+        duplicates = len(matches) - 1
         data = b"".join(zip_member_chunks(archive, info, budget, MAX_MEMBER_BYTES))
         return MemberRead(data, info.file_size, duplicates)
     found: Optional[MemberRead] = None
@@ -1098,6 +1233,10 @@ def _read_member(archive: OpenArchive, member: str, budget: Budget) -> MemberRea
         if found is None:
             raise
         found.note = f"search for later members of the same name stopped: {exc}"
+    except _StreamDamaged as exc:
+        if found is None:
+            raise
+        found.note = f"WARNING: {exc}; the member's bytes were not covered by a valid stream checksum"
     if found is None:
         raise ArchiveError(f"no member named {safe_name(member)!r}")
     return found

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sqlite3
 import stat
@@ -95,6 +96,58 @@ class QueryTests(SqliteSkillTestCase):
             with self.subTest(option=bad):
                 self.assertFalse(run(f"sqlite query {bad} shop.db SELECT 1", self.ctx)["success"])
 
+    def test_duplicate_column_names_keep_every_value(self) -> None:
+        # Review finding: JSON objects collapsed SELECT 1 AS x, 2 AS x to {"x": 2}.
+        out = run("sqlite query --format json shop.db SELECT 1 AS x, 2 AS x, 3 AS x_2, 4 AS x", self.ctx)
+        self.assertTrue(out["success"], out["output"])
+        body = json.JSONDecoder().raw_decode(out["output"].split("\n", 1)[1])[0]
+        self.assertEqual(body, [{"x": 1, "x_3": 2, "x_2": 3, "x_4": 4}])
+        self.assertEqual(out["data"]["rows"], [[1, 2, 3, 4]])
+        self.assertEqual(out["data"]["column_keys"], ["x", "x_3", "x_2", "x_4"])
+        joined = run("sqlite query --format json shop.db SELECT * FROM customers a JOIN customers b ON a.id = b.id "
+                     "ORDER BY a.id LIMIT 1", self.ctx)
+        self.assertEqual(json.JSONDecoder().raw_decode(joined["output"].split("\n", 1)[1])[0],
+                         [{"id": 1, "name": "ada", "id_2": 1, "name_2": "ada"}])
+
+    def test_rows_beyond_the_requested_prefix_are_not_evaluated(self) -> None:
+        # Review finding: fetchmany(64) evaluated row 60, whose error discarded
+        # the single requested row.
+        sql = ("WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 100) "
+               "SELECT CASE WHEN n = 60 THEN abs(-9223372036854775808) ELSE n END FROM r")
+        one = run(f"sqlite query --max-rows 1 shop.db {sql}", self.ctx)
+        self.assertTrue(one["success"], one["output"])
+        self.assertEqual(one["data"]["rows"], [[1]])
+        self.assertTrue(one["data"]["more"])
+        prefix = run(f"sqlite query --max-rows 50 shop.db {sql}", self.ctx)
+        self.assertEqual(len(prefix["data"]["rows"]), 50)
+        self.assertTrue(prefix["data"]["more"])
+        self.assertFalse(prefix["data"]["incomplete"])
+        failing = run(f"sqlite query --max-rows 80 shop.db {sql}", self.ctx)
+        # Rows before the error are kept (some Python versions step the
+        # statement one row ahead internally, so the last good row can go too).
+        self.assertIn(len(failing["data"]["rows"]), {58, 59})
+        self.assertEqual(failing["data"]["rows"][:3], [[1], [2], [3]])
+        self.assertTrue(failing["data"]["incomplete"])
+        self.assertIn("INCOMPLETE", failing["output"])
+
+    def test_fts5_tables_are_readable(self) -> None:
+        # Review finding: FTS5 initialisation reads PRAGMA data_version.
+        try:
+            make_db(self.ws / "fts.db", "CREATE VIRTUAL TABLE docs USING fts5(content);"
+                                        "INSERT INTO docs VALUES ('hello world'), ('other text');")
+        except sqlite3.OperationalError as exc:  # pragma: no cover - SQLite built without FTS5
+            self.skipTest(f"FTS5 unavailable: {exc}")
+        out = run("sqlite query fts.db SELECT highlight(docs, 0, '[', ']') FROM docs WHERE docs MATCH 'hello'",
+                  self.ctx)
+        self.assertTrue(out["success"], out["output"])
+        self.assertEqual(out["data"]["rows"], [["[hello] world"]])
+        self.assertTrue(run("sqlite schema fts.db docs", self.ctx)["success"])
+        self.assertEqual(run("sqlite tables fts.db", self.ctx)["data"]["tables"][0]["rows"], 2)
+        # The allowance is exactly the bare read: setting it or any other pragma stays denied.
+        for sql in ("SELECT * FROM pragma_data_version", "SELECT * FROM pragma_user_version"):
+            with self.subTest(sql=sql):
+                self.assertFalse(run(f"sqlite query fts.db {sql}", self.ctx)["success"] and "user" in sql)
+
     def test_quoted_paths_with_spaces(self) -> None:
         make_db(self.ws / "my data.db", "CREATE TABLE t(x); INSERT INTO t VALUES (42);")
         out = run("sqlite query 'my data.db' SELECT x FROM t", self.ctx)
@@ -140,7 +193,7 @@ class ReadOnlyTests(SqliteSkillTestCase):
         self.assert_refused("WITH x AS (SELECT 1) DELETE FROM orders", "not authorized")
         self.assert_refused("WITH x AS (SELECT 1) INSERT INTO orders(region) SELECT 'x' FROM x", "not authorized")
         self.assert_refused("SELECT load_extension('evil')", "load_extension")
-        self.assert_refused("SELECT * FROM pragma_table_info('orders')", "pragma")
+        self.assert_refused("SELECT * FROM pragma_table_info('orders')", "not authorized")
         self.assert_refused("SELECT zeroblob(10)", "zeroblob")
         self.assert_refused("SELECT 1; DROP TABLE orders")
         self.assertEqual(run("sqlite tables shop.db", self.ctx)["data"]["tables"][1]["rows"], 3)
@@ -181,13 +234,25 @@ class ResourceTests(SqliteSkillTestCase):
         self.assertLess(time.perf_counter() - started, sqlitedb.DEADLINE_S + sqlitedb.KILL_GRACE_S + 5)
 
     def test_string_doubling_is_stopped_by_memory_limits(self) -> None:
+        # Nested subqueries: depending on the SQLite build the parser stack
+        # refuses the nesting or the heap/length limit stops the doubling;
+        # either way nothing near 2**40 bytes is allocated.
         inner = "SELECT 'abcdefgh' AS x"
         for _ in range(40):
             inner = f"SELECT x || x AS x FROM ({inner})"
+        started = time.perf_counter()
         out = run(f"sqlite query shop.db SELECT length(x) FROM ({inner})", self.ctx)
         self.assertFalse(out["success"], out["output"])
-        self.assertTrue(any(word in out["output"].lower() for word in ("memory", "too big", "budget")),
+        self.assertTrue(any(word in out["output"].lower() for word in ("memory", "too big", "parser stack")),
                         out["output"])
+        # Shallow expression nesting reaches the memory limits on every build.
+        expression = "'aaaa'"
+        for _ in range(9):
+            expression = f"replace({expression}, 'a', 'aaaaaaaaaa')"  # 4 * 10**9 characters
+        out = run(f"sqlite query shop.db SELECT length({expression})", self.ctx)
+        self.assertFalse(out["success"], out["output"])
+        self.assertTrue(any(word in out["output"].lower() for word in ("memory", "too big")), out["output"])
+        self.assertLess(time.perf_counter() - started, 30)
 
     def test_hostile_schema_expressions_are_bounded(self) -> None:
         # A generated column is evaluated on read and bypasses the function

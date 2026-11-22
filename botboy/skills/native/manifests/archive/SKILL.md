@@ -61,8 +61,9 @@ layer:
   `zlib`/`bz2`/`lzma` calls (at most 64 KiB per call; `zipfile`'s own bzip2/LZMA path
   is unbounded on older Pythons), charged to a 512 MB budget and a 15 s deadline.
   Declared sizes are never trusted: `check` decompresses every zip member and
-  compares size and CRC with the central directory; a compressed tar is verified by
-  its stream checksums. xz decoding has a 128 MB memory limit and zip LZMA members
+  compares size and CRC with the central directory; a compressed tar is decompressed
+  to its real end of stream, so a truncated or corrupt footer (gzip CRC/ISIZE, bzip2
+  stream CRC, xz index/check) makes the archive unsafe instead of verified. xz decoding has a 128 MB memory limit and zip LZMA members
   with dictionaries over 64 MB are refused.
 - Parser resource use: zip central directories over 4 MB are refused before
   `zipfile` materialises them, tar header reads (GNU long names, pax records) are
@@ -70,7 +71,9 @@ layer:
   dropped while iterating.
 - Unsafe entries are reported, never acted on: absolute paths and drive letters,
   `..` traversal, symlinks/hardlinks and whether their targets escape the archive
-  root, device files and FIFOs, setuid/setgid, duplicate and case-colliding names,
+  root, including chains where later members are written through earlier links
+  (`a -> .`, `a/b -> ..`, `b/payload`; paths are resolved through the links seen so
+  far, loops and excessive hops are reported), device files and FIFOs, setuid/setgid, duplicate and case-colliding names,
   Windows-reserved or invalid names, encrypted members, overlapping zip entries and
   local/central name mismatches (parser-confusion tricks), high compression ratios.
 - Output hygiene: control, format, bidi and surrogate characters in names are

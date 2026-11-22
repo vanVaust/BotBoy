@@ -319,7 +319,10 @@ def escape_controls(text: str) -> str:
 
 def _render_rows(columns: List[str], rows: List[List[Any]], fmt: str) -> str:
     if fmt == "json":
-        return json.dumps([dict(zip(columns, row)) for row in rows], ensure_ascii=False, indent=1)
+        # Duplicate result names (SELECT 1 AS x, 2 AS x; joins with *) get
+        # suffixes so no value is dropped from the objects.
+        keys = _unique_names(columns, escape=False)
+        return json.dumps([dict(zip(keys, row)) for row in rows], ensure_ascii=False, indent=1)
     if fmt == "csv":
         import csv
         import io
@@ -335,16 +338,19 @@ def _render_rows(columns: List[str], rows: List[List[Any]], fmt: str) -> str:
     return format_table(table_rows, names, max_width=80)
 
 
-def _unique_names(columns: List[str]) -> List[str]:
-    seen: Dict[str, int] = {}
+def _unique_names(columns: List[str], *, escape: bool = True) -> List[str]:
+    """Collision-free names in column order: x, x_2, x_3 (skipping taken names)."""
+    base_names = [(escape_controls(column) if escape else column) or "?" for column in columns]
+    taken = set(base_names)
+    seen: set = set()
     names = []
-    for column in columns:
-        name = escape_controls(column) or "?"
+    for name in base_names:
         if name in seen:
-            seen[name] += 1
-            name = f"{name}_{seen[name]}"
-        else:
-            seen[name] = 1
+            suffix = 2
+            while f"{name}_{suffix}" in taken or f"{name}_{suffix}" in seen:
+                suffix += 1
+            name = f"{name}_{suffix}"
+        seen.add(name)
         names.append(name)
     return names
 
@@ -452,7 +458,8 @@ async def _query(ctx: NativeSkillContext, rest: str) -> dict:
     header = f"{rel}: {len(rows)} row(s)"
     lines = [header, body, *status, *(f"note: {note}" for note in notes)]
     return result(
-        "sqlite", "\n".join(lines), action="query", path=rel, sql=sql, columns=columns, rows=rows,
+        "sqlite", "\n".join(lines), action="query", path=rel, sql=sql, columns=columns,
+        column_keys=_unique_names(columns, escape=False), rows=rows,
         row_count=len(rows), more=bool(response.get("more")), incomplete=bool(response.get("stopped")),
         stopped=response.get("stopped") or "", cells_truncated=bool(response.get("cells_truncated")),
         display_truncated=display_truncated, notes=notes, vm_steps=response.get("vm_steps"),

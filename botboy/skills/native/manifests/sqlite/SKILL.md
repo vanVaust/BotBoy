@@ -62,7 +62,8 @@ layer:
   WAL-mode files are read from the main file; a non-empty `-wal` sibling is reported.
 - Writes and side effects: only statements whose first keyword is SELECT, WITH or
   VALUES pass the gate. The authorizer then allows column reads, SELECT, recursive
-  CTEs and a fixed list of pure functions; ATTACH (and with it `VACUUM INTO`, which
+  CTEs, a fixed list of pure functions and the bare read of `PRAGMA data_version`
+  (FTS5 needs it to open its tables); ATTACH (and with it `VACUUM INTO`, which
   can write a file even on a read-only connection), PRAGMA, DDL, DML, transactions
   and `load_extension` are denied, and the connection is `query_only`.
 - Resource exhaustion: the query runs in a separate `python -I -S` process. A
@@ -73,7 +74,9 @@ layer:
   parent kills the worker after 7 s, which also bounds single long C operations
   (`LIKE`, `instr`) that no in-process budget can interrupt. A crash of SQLite on a
   malformed file ends only the worker.
-- Output: at most 1000 rows (default 50), 2000 characters per cell and 200k
+- Output: rows are fetched one at a time up to the limit plus one lookahead row, so
+  rows past the requested prefix are never evaluated; duplicate column names get
+  suffixes (`x`, `x_2`) in JSON output. At most 1000 rows (default 50), 2000 characters per cell and 200k
   characters per response; integers stay exact and floats keep their full `repr`;
   control and bidi characters in names and cells are escaped in the text output.
 - Remote use requires a server-issued approval (`remote_policy: approval`); results

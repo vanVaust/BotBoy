@@ -124,11 +124,14 @@ class ZipTests(ArchiveTestCase):
         fifo = zipfile.ZipInfo("pipe")
         fifo.create_system = 3
         fifo.external_attr = 0o010644 << 16
+        backslashed = zipfile.ZipInfo("placeholder")
+        backslashed.filename = "a\\..\\..\\b.txt"  # ZipInfo() turns "\\" into "/" on Windows
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as zf:
-            for name in ("../../etc/cron.d/x", "/etc/passwd", "C:/Windows/evil.dll", "a\\..\\..\\b.txt",
+            for name in ("../../etc/cron.d/x", "/etc/passwd", "C:/Windows/evil.dll",
                          "CON.txt", "Readme.md", "README.md", "spoof\u202etxt.exe", "line\nforged: ok"):
                 zf.writestr(name, b"x")
+            zf.writestr(backslashed, b"x")
             zf.writestr(link, b"../../../home/user/.ssh/authorized_keys")
             zf.writestr(inner_link, b"../docs/README")
             zf.writestr(fifo, b"")
@@ -152,6 +155,23 @@ class ZipTests(ArchiveTestCase):
         self.assertNotIn("\nforged: ok", out["output"])
         self.assertIn("line\\x0aforged: ok", out["output"])
         self.assertIn("-> ../../../home/user/.ssh/authorized_keys", out["output"])
+
+    def test_zip_link_chains_are_resolved(self) -> None:
+        def link(name):
+            info = zipfile.ZipInfo(name)
+            info.create_system = 3
+            info.external_attr = 0o120777 << 16
+            return info
+
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zf:
+            zf.writestr(link("a"), b".")
+            zf.writestr(link("a/b"), b"..")
+            zf.writestr("b/payload", b"pwn")
+        self.put("chain.zip", buffer.getvalue())
+        flags = self.flags(self.listing("chain.zip"))
+        self.assertIn("link-escapes", flags["a/b"])
+        self.assertIn("link-traversal", flags["b/payload"])
 
     def test_declared_sizes_are_not_trusted(self) -> None:
         payload = b"A" * 100_000
@@ -265,6 +285,68 @@ class TarTests(ArchiveTestCase):
                 self.assertEqual(read["data"]["text"], "second\n")  # the member extraction keeps
                 self.assertEqual(read["data"]["duplicates"], 1)
                 self.assertIn("is a symlink", run(f"archive read {name} docs/link", self.ctx)["output"])
+
+    def test_link_chains_are_resolved_through_earlier_links(self) -> None:
+        # Review finding: each link looks harmless on its own, but extraction
+        # follows a -> . and then a/b -> .. so b/payload lands outside.
+        members = [(tinfo("a", type_=tarfile.SYMTYPE, link="."), None),
+                   (tinfo("a/b", type_=tarfile.SYMTYPE, link=".."), None),
+                   (tinfo("b/payload", 3), b"pwn")]
+        self.put("chain.tar", tar_bytes(members))
+        out = self.listing("chain.tar")
+        flags = self.flags(out)
+        self.assertEqual(out["data"]["verdict"], "unsafe")
+        self.assertIn("link-escapes", flags["a/b"])
+        self.assertIn("link-traversal", flags["b/payload"])
+        self.assertEqual(flags["a"], [])
+        # A file written through a directory link that points outside.
+        self.put("dirlink.tar", tar_bytes([(tinfo("up", type_=tarfile.SYMTYPE, link="x/../.."), None),
+                                           (tinfo("up/evil.sh", 1), b"x")]))
+        self.assertIn("link-traversal", self.flags(self.listing("dirlink.tar"))["up/evil.sh"])
+        # Writing a file onto a final-component link follows the link.
+        self.put("final.tar", tar_bytes([(tinfo("cfg", type_=tarfile.SYMTYPE, link="../../.bashrc"), None),
+                                         (tinfo("cfg", 1), b"x")]))
+        self.assertIn("link-traversal", self.flags(self.listing("final.tar"))["cfg"])
+        # Hardlink targets are resolved through earlier symlinks too.
+        self.put("hard.tar", tar_bytes([(tinfo("d", type_=tarfile.SYMTYPE, link=".."), None),
+                                        (tinfo("h", type_=tarfile.LNKTYPE, link="d/secret"), None)]))
+        self.assertIn("link-escapes", self.flags(self.listing("hard.tar"))["h"])
+
+    def test_benign_link_chains_stay_ok(self) -> None:
+        self.put("lib.tar", tar_bytes([(tinfo("usr/lib64", type_=tarfile.DIRTYPE), None),
+                                       (tinfo("usr/lib", type_=tarfile.SYMTYPE, link="lib64"), None),
+                                       (tinfo("usr/lib/libc.so", 3), b"elf"),
+                                       (tinfo("usr/bin/tool", type_=tarfile.SYMTYPE, link="../lib/libc.so"), None)]))
+        out = self.listing("lib.tar")
+        self.assertEqual(out["data"]["verdict"], "ok", out["output"])
+
+    def test_link_loops_are_reported_not_followed_forever(self) -> None:
+        self.put("loop.tar", tar_bytes([(tinfo("x", type_=tarfile.SYMTYPE, link="y"), None),
+                                        (tinfo("y", type_=tarfile.SYMTYPE, link="x"), None),
+                                        (tinfo("x/f", 1), b"x")]))
+        out = self.listing("loop.tar")
+        self.assertEqual(out["data"]["verdict"], "unsafe")
+        self.assertIn("link-unresolved", self.flags(out)["x/f"])
+        self.assertIn("could not be resolved", out["output"])
+
+    def test_damaged_compression_footer_is_not_verified(self) -> None:
+        # Review finding: tarfile stops at the end-of-archive blocks, so a
+        # truncated or zeroed gzip footer used to verify as ok.
+        for mode, cut in (("w:gz", 8), ("w:bz2", 4), ("w:xz", 12)):
+            data = tar_bytes([(tinfo("x.txt", 5), b"hello")], mode)
+            for label, damaged in (("truncated", data[:-cut]), ("zeroed", data[:-cut] + bytes(cut))):
+                with self.subTest(mode=mode, damage=label):
+                    name = self.put(f"d-{label}.{mode[2:]}", damaged)
+                    check = run(f"archive check {name}", self.ctx)
+                    self.assertTrue(check["success"], check["output"])
+                    self.assertEqual(check["data"]["verdict"], "unsafe", check["output"])
+                    self.assertEqual(check["data"]["verified"], 0)
+                    self.assertIn("damaged", check["output"])
+                    read = run(f"archive read {name} x.txt", self.ctx)
+                    if read["success"]:
+                        self.assertIn("WARNING", read["output"])
+            intact = self.put(f"intact.{mode[2:]}", data)
+            self.assertEqual(run(f"archive check {intact}", self.ctx)["data"]["verified"], 1)
 
     def test_gzip_bomb_is_stopped_by_the_budget(self) -> None:
         buffer = io.BytesIO()

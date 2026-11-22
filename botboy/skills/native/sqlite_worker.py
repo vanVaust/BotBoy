@@ -23,7 +23,9 @@ Defences, in the order they are installed (each one alone blocks a class):
    and defensive ``setconfig`` flags where available (3.12+).
 5. An authorizer that allows only SELECT, column reads, recursive CTEs and an
    allowlist of pure functions; everything else (writes, DDL, ATTACH,
-   PRAGMA, transactions, VACUUM INTO, load_extension) is denied.
+   PRAGMA, transactions, VACUUM INTO, load_extension) is denied. It covers
+   every statement of ``tables`` and ``query``; ``schema`` runs only fixed
+   metadata PRAGMAs of our own, before it (see ``_schema``).
 6. A progress handler: a VM-operation budget and an in-process deadline.
 7. Row, cell and output-size caps while fetching.
 """
@@ -60,8 +62,6 @@ SAFE_FUNCTIONS = frozenset({
     # full-text search auxiliaries (read-only)
     "match", "snippet", "highlight", "bm25", "offsets", "matchinfo",
 })
-# Only the schema command uses these, with names taken from sqlite_master.
-INTERNAL_PRAGMAS = frozenset({"table_xinfo", "index_list", "index_info", "foreign_key_list"})
 PROGRESS_STEP = 1000
 
 
@@ -80,7 +80,6 @@ class Guard:
     """Authorizer and progress handler sharing one mutable state."""
 
     def __init__(self, op_budget, deadline):
-        self.internal = False
         self.op_budget = op_budget
         self.calls = 0
         self.deadline = deadline
@@ -92,7 +91,11 @@ class Guard:
             return sqlite3.SQLITE_OK
         if action == sqlite3.SQLITE_FUNCTION and str(arg2 or "").lower() in SAFE_FUNCTIONS:
             return sqlite3.SQLITE_OK
-        if self.internal and action == sqlite3.SQLITE_PRAGMA and str(arg1 or "").lower() in INTERNAL_PRAGMAS:
+        # FTS5 reads "PRAGMA data_version" (a read-only counter) while it
+        # initialises a table. Only the bare read form is allowed: no value
+        # (arg2) and only for the main schema; every other pragma is denied.
+        if (action == sqlite3.SQLITE_PRAGMA and str(arg1 or "").lower() == "data_version"
+                and arg2 is None and _db in (None, "main")):
             return sqlite3.SQLITE_OK
         if len(self.denied) < 5:
             self.denied.append(_describe(action, arg1, arg2))
@@ -195,6 +198,12 @@ def _cell(value, max_chars):
 
 
 def _fetch(cursor, guard, request):
+    """Fetch at most ``max_rows`` rows plus one lookahead row, one at a time.
+
+    Rows past the requested prefix are never evaluated beyond the single
+    lookahead, so an error or a huge value in an unneeded row cannot discard
+    or delay the prefix (fetchmany(64) used to materialise a whole batch).
+    """
     max_rows = int(request["max_rows"])
     max_cell = int(request["max_cell_chars"])
     budget = int(request["max_output_chars"])
@@ -202,27 +211,28 @@ def _fetch(cursor, guard, request):
     rows, used, more, cells_truncated, stopped = [], 0, False, False, ""
     try:
         while True:
-            batch = cursor.fetchmany(64)
-            if not batch:
+            raw = cursor.fetchone()
+            if raw is None:
                 break
-            for raw in batch:
-                if len(rows) >= max_rows:
-                    more = True
-                    break
-                row = []
-                for value in raw:
-                    cell, cut = _cell(value, max_cell)
-                    cells_truncated = cells_truncated or cut
-                    row.append(cell)
-                    used += len(str(cell)) + 4
-                rows.append(row)
-                if used > budget:
-                    stopped = "output budget reached"
-                    break
-            if more or stopped:
+            if len(rows) >= max_rows:
+                more = True
                 break
-    except sqlite3.OperationalError as exc:
-        stopped = guard.stop_reason or f"query failed after {len(rows)} row(s): {exc}"
+            row = []
+            for value in raw:
+                cell, cut = _cell(value, max_cell)
+                cells_truncated = cells_truncated or cut
+                row.append(cell)
+                used += len(str(cell)) + 4
+            rows.append(row)
+            if used > budget:
+                stopped = "output budget reached"
+                break
+    except sqlite3.Error as exc:
+        if len(rows) >= max_rows and not guard.stop_reason:
+            # The requested prefix is complete; only the lookahead failed.
+            more = True
+        else:
+            stopped = guard.stop_reason or f"query failed after {len(rows)} row(s): {exc}"
     return {"columns": columns, "rows": rows, "more": more, "cells_truncated": cells_truncated,
             "stopped": stopped}
 
@@ -232,7 +242,6 @@ def _quote_identifier(name):
 
 
 def _tables(conn, guard, request):
-    guard.internal = False
     listing = conn.execute(
         "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table', 'view') ORDER BY name"
     ).fetchmany(int(request["max_tables"]) + 1)
@@ -251,37 +260,42 @@ def _tables(conn, guard, request):
     return {"tables": tables, "more": more}
 
 
-def _schema(conn, guard, request):
+def _schema(conn, request):
+    """Schema metadata through fixed PRAGMA statements.
+
+    Runs before the authorizer is installed (Python 3.10 cannot remove an
+    authorizer, and older SQLite versions report internal schema access of
+    pragma table-valued functions as writes). The statements are ours; the
+    table name is taken from sqlite_master and quoted. Preparing a view's
+    SELECT to list its columns resolves but never executes it. The progress
+    handler, heap limit and parent kill apply.
+    """
     table = request.get("table") or ""
-    guard.internal = True
-    try:
-        if not table:
-            rows = conn.execute(
-                "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type, name"
-            ).fetchmany(int(request["max_tables"]) * 4)
-            return {"objects": [{"type": t, "name": n, "table": tn, "sql": s} for t, n, tn, s in rows]}
-        found = conn.execute("SELECT type, sql FROM sqlite_master WHERE name = ? AND type IN ('table', 'view')",
-                             (table,)).fetchone()
-        if found is None:
-            return {"error": f"no table or view named {table!r}"}
-        columns = [
-            {"cid": cid, "name": name, "type": decl, "notnull": bool(notnull), "default": default,
-             "pk": pk, "hidden": hidden}
-            for cid, name, decl, notnull, default, pk, hidden in conn.execute(
-                'SELECT cid, name, type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?)', (table,))
-        ]
-        indexes = []
-        for name, unique, origin, partial in conn.execute(
-                'SELECT name, "unique", origin, partial FROM pragma_index_list(?)', (table,)).fetchmany(200):
-            cols = [row[0] for row in conn.execute("SELECT name FROM pragma_index_info(?)", (name,)).fetchmany(64)]
-            indexes.append({"name": name, "unique": bool(unique), "origin": origin, "partial": bool(partial),
-                            "columns": cols})
-        foreign = [{"table": ref, "from": src, "to": dst} for ref, src, dst in conn.execute(
-            'SELECT "table", "from", "to" FROM pragma_foreign_key_list(?)', (table,)).fetchmany(200)]
-        return {"table": table, "type": found[0], "sql": found[1], "columns": columns, "indexes": indexes,
-                "foreign_keys": foreign}
-    finally:
-        guard.internal = False
+    if not table:
+        rows = conn.execute(
+            "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type, name"
+        ).fetchmany(int(request["max_tables"]) * 4)
+        return {"objects": [{"type": t, "name": n, "table": tn, "sql": s} for t, n, tn, s in rows]}
+    found = conn.execute("SELECT type, name, sql FROM sqlite_master WHERE name = ? AND type IN ('table', 'view')",
+                         (table,)).fetchone()
+    if found is None:
+        return {"error": f"no table or view named {table!r}"}
+    quoted = _quote_identifier(found[1])
+    columns = [
+        {"cid": row[0], "name": row[1], "type": row[2], "notnull": bool(row[3]), "default": row[4],
+         "pk": row[5], "hidden": row[6] if len(row) > 6 else 0}
+        for row in conn.execute(f"PRAGMA table_xinfo({quoted})").fetchmany(2000)
+    ]
+    indexes = []
+    for row in conn.execute(f"PRAGMA index_list({quoted})").fetchmany(200):
+        name, unique, origin, partial = row[1], row[2], row[3] if len(row) > 3 else "", row[4] if len(row) > 4 else 0
+        cols = [info[2] for info in conn.execute(f"PRAGMA index_info({_quote_identifier(name)})").fetchmany(64)]
+        indexes.append({"name": name, "unique": bool(unique), "origin": origin, "partial": bool(partial),
+                        "columns": cols})
+    foreign = [{"table": row[2], "from": row[3], "to": row[4]}
+               for row in conn.execute(f"PRAGMA foreign_key_list({quoted})").fetchmany(200)]
+    return {"table": table, "type": found[0], "sql": found[2], "columns": columns, "indexes": indexes,
+            "foreign_keys": foreign}
 
 
 def run_request(request):
@@ -293,18 +307,18 @@ def run_request(request):
         return {"ok": False, "error": f"cannot open database: {exc}"}
     try:
         notes = _harden(conn, request)
-        # Python 3.10 cannot remove an authorizer again, so every statement
-        # this process prepares after this line is authorised.
-        conn.set_authorizer(guard.authorize)
         conn.set_progress_handler(guard.progress, PROGRESS_STEP)
         mode = request["mode"]
-        if mode == "tables":
-            payload = _tables(conn, guard, request)
-        elif mode == "schema":
-            payload = _schema(conn, guard, request)
-        elif mode == "query":
-            cursor = conn.execute(request["sql"])
-            payload = _fetch(cursor, guard, request)
+        if mode == "schema":
+            payload = _schema(conn, request)
+        elif mode in ("tables", "query"):
+            # Python 3.10 cannot remove an authorizer again, so every
+            # statement prepared after this line is authorised.
+            conn.set_authorizer(guard.authorize)
+            if mode == "tables":
+                payload = _tables(conn, guard, request)
+            else:
+                payload = _fetch(conn.execute(request["sql"]), guard, request)
         else:
             return {"ok": False, "error": f"unknown mode {mode!r}"}
     except sqlite3.DatabaseError as exc:
