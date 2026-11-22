@@ -246,24 +246,28 @@ class SecureAgent:
             if tool.output_trust == "inherit":
                 untrusted[planned.step_id] = any(arg_untrusted)
             else:
-                untrusted[planned.step_id] = tool.output_trust == "untrusted"
+                # ``provenance`` is only known after execution: assume the worst.
+                untrusted[planned.step_id] = tool.output_trust in ("untrusted", "provenance")
         return points
 
     async def _invoke(self, tool: ToolSpec, step_id: str, args: dict[str, Labeled],
                       record: StepRecord) -> Labeled:
-        if tool.output_trust == "inherit":
-            trust, sources = Labeled.join(args.values())
-            sources = sources | {step_id}
+        input_trust, input_sources = Labeled.join(args.values())
+        if tool.output_trust in ("inherit", "provenance"):
+            trust, sources = input_trust, input_sources | {step_id}
         else:
             trust = Trust(tool.output_trust)
             sources = frozenset({step_id})
         if tool.quarantined_llm:
             text, ok, reason = await self._quarantined_llm(args["instruction"].value, args["data"].value)
         else:
-            command = tool.build_command({name: value.value for name, value in args.items()})
+            command = tool.build_command({name: value.value for name, value in args.items()},
+                                         trust=input_trust.value)
             record.command = command
             result = await self._execute_command(command)
             text = tool.output_text(result)
+            if tool.output_trust == "provenance" and not tool.result_trust(result):
+                trust = Trust.UNTRUSTED
             ok = bool(result.get("success", False))
             reason = "" if ok else (text[:300] or str(result.get("type", "tool failed")))
         if not ok:

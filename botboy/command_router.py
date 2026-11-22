@@ -51,7 +51,8 @@ async def route_command(
     if first == "a2a":
         return bot._handle_a2a(command, principal=principal)
     if first in {"remember", "store", "save", "search", "memories", "memstats"} | MEMORY_DELETE_COMMANDS:
-        return build_memory_command_response(bot, command, first=first)
+        origin = str((approval_context or {}).get("source") or "operator")
+        return build_memory_command_response(bot, command, first=first, origin=origin)
     if first == "schedule":
         return await bot._handle_schedule(command)
     if first == "history":

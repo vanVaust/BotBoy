@@ -19,7 +19,8 @@ class _FakeMemory:
         self.records = [_FakeMemoryRecord("m1", "hello world")]
         self.deleted: list[str] = []
 
-    def store(self, text: str) -> str:
+    def store(self, text: str, *, trust: str = "untrusted", source: str = "") -> str:
+        self.stored_provenance = (trust, source)
         self.records.append(_FakeMemoryRecord("m2", text))
         return "m2"
 

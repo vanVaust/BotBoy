@@ -17,7 +17,11 @@ from typing import Any, Callable, Literal, Mapping, Optional
 
 ParamKind = Literal["control", "data"]
 Effect = Literal["read", "write", "destructive", "egress"]
-OutputTrust = Literal["trusted", "untrusted", "inherit"]
+# ``provenance``: the result itself reports the trust of what it returns
+# (``result_trust``); the output is trusted only if that report and every
+# input are trusted. Statically (before execution) it counts as untrusted.
+OutputTrust = Literal["trusted", "untrusted", "inherit", "provenance"]
+TRUST_PLACEHOLDER = "{__trust__}"
 
 _MAX_ARG_CHARS = 2_000
 _WHITESPACE_RUN = re.compile(r"\s+")
@@ -49,6 +53,15 @@ class ToolSpec:
     # Reads the complete value from a command result; the default is the
     # human-facing ``output`` text, which some handlers abbreviate.
     extract_output: Optional[Callable[[Mapping[str, Any]], str]] = None
+    # Required for ``output_trust="provenance"``: True only when the handler's
+    # structured result proves every returned item trusted.
+    result_trust: Optional[Callable[[Mapping[str, Any]], bool]] = None
+
+    def __post_init__(self) -> None:
+        if (self.output_trust == "provenance") != (self.result_trust is not None):
+            raise ValueError(f"{self.name}: result_trust is required exactly for provenance output")
+        if TRUST_PLACEHOLDER in self.command_template and not self.command_template.split()[0].isalpha():
+            raise ValueError(f"{self.name}: the trust flag cannot be the command head")
 
     def output_text(self, result: Mapping[str, Any]) -> str:
         if self.extract_output is not None:
@@ -68,11 +81,20 @@ class ToolSpec:
             },
         }
 
-    def build_command(self, values: Mapping[str, str]) -> str:
+    def build_command(self, values: Mapping[str, str], *, trust: Optional[str] = None) -> str:
+        """``trust`` fills ``{__trust__}``: the engine's label of the inputs.
+
+        It is computed by the engine from labels, never taken from argument
+        text, and sits in the fixed prefix ahead of every data field.
+        """
         if self.quarantined_llm or not self.command_template:
             raise ToolArgumentError(f"{self.name} is not a command tool")
         cleaned = {name: sanitize_argument(values[name], spec.max_chars, name)
                    for name, spec in self.params.items()}
+        if TRUST_PLACEHOLDER in self.command_template:
+            if trust not in ("trusted", "untrusted"):
+                raise ToolArgumentError(f"{self.name} needs the input trust label")
+            cleaned["__trust__"] = trust
         return self.command_template.format(**cleaned)
 
 
@@ -101,10 +123,21 @@ def _memory_results_text(result: Mapping[str, Any]) -> Optional[str]:
     # entries, which summaries and copies must see.
     data = result.get("data")
     results = data.get("results") if isinstance(data, dict) else None
-    if not isinstance(results, list):
-        return None
+    if not isinstance(results, list) or not results:
+        return None  # "No results for '<query>'" stays the visible output
     return "\n".join(
         f"[{item.get('id', '?')}] {item.get('content', '')}" for item in results if isinstance(item, dict)
+    )
+
+
+def _memory_results_trusted(result: Mapping[str, Any]) -> bool:
+    # Fail closed: only a well-formed result list whose entries the store
+    # labelled ``trusted`` counts. An empty list ("No results for '<query>'")
+    # adds no untrusted content; the engine still joins the query's label.
+    data = result.get("data")
+    results = data.get("results") if isinstance(data, dict) else None
+    return isinstance(results, list) and all(
+        isinstance(item, dict) and item.get("trust") == "trusted" for item in results
     )
 
 
@@ -115,9 +148,12 @@ def default_tools() -> dict[str, ToolSpec]:
             description="Full-text search over stored memories; returns matching entries.",
             params={"query": ParamSpec("data", "search words", 256)},
             effect="read",
-            output_trust="untrusted",  # stored text may stem from earlier untrusted input
+            # Per-entry provenance from the store: operator-written entries
+            # stay usable as trusted; anything else taints the output.
+            output_trust="provenance",
             command_template="search {query}",
             extract_output=_memory_results_text,
+            result_trust=_memory_results_trusted,
         ),
         ToolSpec(
             name="memory.store",
@@ -127,7 +163,9 @@ def default_tools() -> dict[str, ToolSpec]:
             # The confirmation echoes the stored text; an approved untrusted
             # write must not come back as trusted (label laundering).
             output_trust="inherit",
-            command_template="remember {text}",
+            # The store records the input label, so untrusted text written
+            # with approval is still untrusted when it is read back.
+            command_template="remember --trust={__trust__} {text}",
         ),
         ToolSpec(
             name="memory.delete",

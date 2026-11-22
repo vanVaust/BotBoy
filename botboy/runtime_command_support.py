@@ -5,20 +5,41 @@ from datetime import datetime, timezone
 from botboy.command_effects import MEMORY_DELETE_COMMANDS, MEMORY_WRITE_COMMANDS, SCHEDULE_REMOVE_SUBCOMMANDS
 
 
-def handle_memory_command(bot, command: str, *, first: str) -> dict:
+# Commands from these approval-context sources are produced by an LLM, not
+# typed by the operator; their writes are untrusted unless the agent engine,
+# which tracks labels, explicitly declares the text trusted.
+AUTOMATED_SOURCES = frozenset({"agent", "planner"})
+_TRUST_FLAGS = {"--trust=trusted": "trusted", "--trust=untrusted": "untrusted"}
+
+
+def parse_write_provenance(text: str, *, origin: str) -> tuple[str, str, str]:
+    """Return ``(trust, source, content)`` for a memory write.
+
+    Only the first token may be a trust flag; the agent places it in the
+    fixed command prefix, so flag-looking text inside the payload is content.
+    """
+    head, _, rest = text.partition(" ")
+    if head in _TRUST_FLAGS:
+        trust, text = _TRUST_FLAGS[head], rest.strip()
+    else:
+        trust = "untrusted" if origin in AUTOMATED_SOURCES else "trusted"
+    return trust, origin, text
+
+
+def handle_memory_command(bot, command: str, *, first: str, origin: str = "operator") -> dict:
     if first in MEMORY_WRITE_COMMANDS:
-        text = command[len(first):].strip()
+        trust, source, text = parse_write_provenance(command[len(first):].strip(), origin=origin)
         if not text:
             return {"success": False, "output": f"Usage: {first} <text>", "type": "memory"}
         if bot.memory:
-            memory_id = bot.memory.store(text)
+            memory_id = bot.memory.store(text, trust=trust, source=source)
             if bot.metrics:
                 bot.metrics.record_memory_op()
             return {
                 "success": True,
                 "output": f"Remembered (id={memory_id}): {text[:60]}",
                 "type": "memory",
-                "data": {"id": memory_id},
+                "data": {"id": memory_id, "trust": trust, "source": source},
             }
         return {"success": False, "output": "Memory not available.", "type": "memory"}
 
@@ -38,7 +59,8 @@ def handle_memory_command(bot, command: str, *, first: str) -> dict:
                     "type": "memory",
                     "data": {"results": [result.to_dict() for result in results]},
                 }
-            return {"success": True, "output": f"No results for '{query}'.", "type": "memory"}
+            return {"success": True, "output": f"No results for '{query}'.", "type": "memory",
+                    "data": {"results": []}}
         return {"success": False, "output": "Memory not available.", "type": "memory"}
 
     if first in MEMORY_DELETE_COMMANDS:
