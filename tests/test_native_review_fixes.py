@@ -357,3 +357,51 @@ class SixthReviewRoundTests(unittest.TestCase):
             stats = asyncio.run(data_skill.run("data stats ids.csv id", ctx))
         self.assertEqual([row["id"] for row in hit["data"]["rows"]], [1234567890123456789])
         self.assertEqual(stats["data"]["distinct"], 2)
+
+
+class SeventhReviewRoundTests(unittest.TestCase):
+    def _run(self, command: str, files: dict) -> dict:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            for name, content in files.items():
+                (root / name).write_text(content, encoding="utf-8")
+            return asyncio.run(data_skill.run(command, NativeSkillContext(workspace_root=root)))
+
+    def test_single_line_word_diff_is_budgeted(self) -> None:
+        words = [str(i) for i in range(20_000)]
+        swapped = list(words)
+        for i in range(0, len(swapped) - 1, 2):
+            swapped[i], swapped[i + 1] = swapped[i + 1], swapped[i]
+        started = time.perf_counter()
+        result = diff_texts(" ".join(words), " ".join(swapped))
+        self.assertLess(time.perf_counter() - started, 1.0)
+        self.assertIn("word-level diff skipped", result.inline)
+        self.assertLess(result.similarity, 1.0)
+        small = diff_texts("a b c", "a x c")
+        self.assertEqual(small.inline, "a [-b-] {+x+} c")
+
+    def test_head_prunes_sparse_columns(self) -> None:
+        records = "\n".join(f'{{"f{i}": {i}}}' for i in range(200_000))
+        started = time.perf_counter()
+        result = self._run("data head s.jsonl 100", {"s.jsonl": records})
+        self.assertLess(time.perf_counter() - started, 10.0)
+        self.assertTrue(result["success"], result["output"])
+        self.assertEqual(result["data"]["columns"], [f"f{i}" for i in range(100)])
+
+    def test_extra_csv_fields_never_overwrite_named_columns(self) -> None:
+        result = self._run("data query t.csv", {"t.csv": "column_2\n10,20\n30,40\n"})
+        rows = result["data"]["rows"]
+        self.assertEqual([row["column_2"] for row in rows], [10, 30])
+        self.assertEqual([row["column_2_2"] for row in rows], [20, 40])
+        agg = self._run("data query t.csv agg sum:column_2 format json", {"t.csv": "column_2\n10,20\n30,40\n"})
+        self.assertEqual(agg["data"]["rows"], [{"sum_column_2": 40}])  # was 60 with the overwrite
+
+    def test_repeated_header_names_are_linear(self) -> None:
+        from botboy.skills.native.data import _distinct_headers
+
+        started = time.perf_counter()
+        names = _distinct_headers(["a"] * 200_000)
+        self.assertLess(time.perf_counter() - started, 1.0)
+        self.assertEqual(names[:3], ["a", "a_2", "a_3"])
+        self.assertEqual(len(set(names)), 200_000)
+        self.assertEqual(_distinct_headers(["a", "a_2", "a"]), ["a", "a_2", "a_3"])
