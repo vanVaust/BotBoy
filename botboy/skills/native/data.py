@@ -181,7 +181,8 @@ def load_dataset(ctx: NativeSkillContext, user_path: str, json_path: Optional[st
                 rows.append({keys[i]: _coerce_cell(cell) for i, cell in enumerate(record)})
         except csv.Error as exc:
             raise SkillUsageError(f"CSV parse error near row {len(rows) + 2}: {exc}") from exc
-        columns = header + [col for col in _columns_of(rows) if col not in header]
+        known = set(header)  # set membership: a list scan made wide files O(columns^2)
+        columns = header + [col for col in _columns_of(rows) if col not in known]
         return Dataset(rel, rows, columns, truncated)
     if suffix == ".json":
         try:
