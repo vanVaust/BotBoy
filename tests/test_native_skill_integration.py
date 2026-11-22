@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,9 +24,9 @@ from botboy.skills.native.registry import (
     split_frontmatter,
 )
 
-NATIVE = {"expr", "text", "ws", "data", "fetch", "repo", "forge"}
-FILESYSTEM = {"ws", "data", "repo", "forge"}
-LOCAL_ONLY_WITHOUT_APPROVAL = {"ws", "data", "fetch", "repo", "forge"}
+NATIVE = {"expr", "text", "ws", "data", "fetch", "repo", "forge", "sqlite", "archive"}
+FILESYSTEM = {"ws", "data", "repo", "forge", "sqlite", "archive"}
+LOCAL_ONLY_WITHOUT_APPROVAL = {"ws", "data", "fetch", "repo", "forge", "sqlite", "archive"}
 
 
 def _config(root: Path, *, enable_auth: bool = False) -> BotBoyConfig:
@@ -73,6 +75,18 @@ class NativeRegistryTests(unittest.TestCase):
                 expected_policy = "approval" if name in LOCAL_ONLY_WITHOUT_APPROVAL else "allow"
                 self.assertEqual(CommandExecutionService.contract_remote_policy(contract), expected_policy)
                 self.assertEqual(contract["security_level"], "BEGINNER" if name in {"expr", "text"} else "INTERMEDIATE")
+
+    def test_packaged_manifests_lint_clean(self) -> None:
+        # forge reports exactly the two findings every packaged manifest has
+        # when read as a *custom* skill (its name is reserved for the native
+        # skill, and it carries no python block); nothing else.
+        from botboy.skills.native import forge
+
+        for path in sorted(registry.MANIFEST_ROOT.glob("*/SKILL.md")):
+            with self.subTest(manifest=path.parent.name):
+                report = forge.lint_skill_text(path.read_text(encoding="utf-8"), str(path))
+                findings = sorted((f.level, f.code) for f in report.findings if f.level != "info")
+                self.assertEqual(findings, [("error", "name.native"), ("warning", "code.missing")])
 
     def test_entry_resolution_is_confined_to_native_package(self) -> None:
         for entry in ("os:system", "botboy.skills.manager:SkillManager", "botboy.skills.native.expr",
@@ -134,6 +148,13 @@ class NativeSkillBotTests(unittest.TestCase):
             "# Notes\n\nBotBoy keeps skills auditable. Every skill has a contract.\n", encoding="utf-8"
         )
         (self.workspace / "sales.csv").write_text("region,amount\nEU,10\nUS,5\nEU,7\n", encoding="utf-8")
+        connection = sqlite3.connect(self.workspace / "shop.db")
+        connection.executescript("CREATE TABLE orders(region TEXT, amount REAL);"
+                                 "INSERT INTO orders VALUES ('EU', 10), ('US', 5), ('EU', 7);")
+        connection.commit()
+        connection.close()
+        with zipfile.ZipFile(self.workspace / "bundle.zip", "w") as bundle:
+            bundle.writestr("notes/readme.txt", "bundled notes\n")
 
     def run_command(self, command: str, **kwargs) -> dict:
         return asyncio.run(self.bot.process_command(command, principal="local-cli", **kwargs))
@@ -152,6 +173,8 @@ class NativeSkillBotTests(unittest.TestCase):
             "forge scaffold demo-skill --trigger demo --description \"Demo skill for the integration test\"": "PASS",
             "fetch http://127.0.0.1:8080/": "Blocked 127.0.0.1",
             "repo status": "No git repository",
+            "sqlite query shop.db SELECT region, sum(amount) FROM orders GROUP BY region ORDER BY 1": "EU",
+            "archive list bundle.zip": "verdict: ok",
         }
         for command, needle in cases.items():
             with self.subTest(command=command):
@@ -162,7 +185,7 @@ class NativeSkillBotTests(unittest.TestCase):
 
     def test_help_lists_native_skills(self) -> None:
         output = self.run_command("help")["output"]
-        for name in ("expr <program>", "fetch <url>", "repo status", "forge lint"):
+        for name in ("expr <program>", "fetch <url>", "repo status", "forge lint", "sqlite tables", "archive list"):
             self.assertIn(name, output)
         skills = self.run_command("skills")["output"]
         for name in NATIVE:
@@ -224,7 +247,7 @@ class NativeSkillGatewayTests(unittest.TestCase):
 
     def test_workspace_and_network_skills_require_server_approval_remotely(self) -> None:
         for command in ("ws read notes.md", "data schema sales.csv", "fetch https://example.org",
-                        "repo status", "forge audit"):
+                        "repo status", "forge audit", "sqlite tables shop.db", "archive list bundle.zip"):
             with self.subTest(command=command):
                 result = self.post(command)
                 self.assertEqual(result["type"], "authorization_error", result)
