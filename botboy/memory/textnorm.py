@@ -3,11 +3,13 @@
 FTS5's ``porter ascii`` tokenizer neither case-folds non-ASCII letters
 ("Äpfel" ≠ "äpfel") nor knows German morphology ("Häuser" ≠ "Haus").
 Memory text is therefore indexed through a normalised shadow column: each
-token is case-folded and reduced with CISTEM (Weissweiler & Fraser, 2017,
-"Developing a Stemmer for German Based on a Comparative Analysis of
-Publicly Available Stemmers", GSCL), then FTS5 applies ``porter`` on top for
-English inflection. Index and query run through the same function, so the
-mapping only has to be consistent, not linguistically perfect.
+token is case-folded and indexed in two forms — its CISTEM stem (Weissweiler
+& Fraser, 2017, "Developing a Stemmer for German Based on a Comparative
+Analysis of Publicly Available Stemmers", GSCL) and the folded token
+itself, which FTS5's ``porter`` stems for English. A query term matches
+either form. Two forms are needed because the stemmers disagree on English
+("test" → CISTEM "tes", but "testing" → "testing", which only Porter maps to
+"test"); chaining them would break English recall.
 
 Every step is linear in the input; tokens are capped so the suffix loop
 stays bounded.
@@ -19,7 +21,7 @@ import unicodedata
 from typing import List, Optional
 
 # Bump when the normalisation changes: stored shadow text is then rebuilt.
-NORMALIZATION_VERSION = "1"
+NORMALIZATION_VERSION = "2"
 
 _MAX_TOKEN_CHARS = 64
 _MAX_QUERY_TOKENS = 32
@@ -60,18 +62,25 @@ def _umlaut_fold(token: str) -> str:
     return _fold(token).replace("ü", "u").replace("ö", "o").replace("ä", "a")
 
 
+def _forms(token: str) -> List[str]:
+    folded = _fold(token)
+    stem = cistem(folded)
+    return [form for form in dict.fromkeys((stem, folded)) if form]
+
+
 def tokens(text: str) -> List[str]:
     return [cistem(_fold(t)) for t in _TOKEN.findall(unicodedata.normalize("NFKC", text))]
 
 
 def normalize_for_index(text: str) -> str:
-    return " ".join(t for t in tokens(text) if t)
+    return " ".join(form for t in _TOKEN.findall(unicodedata.normalize("NFKC", text)) for form in _forms(t))
 
 
 def build_match_query(query: str) -> Optional[str]:
     """FTS5 MATCH expression for a free-text query, or ``None`` if empty.
 
-    Terms are quoted (no FTS syntax injection) and AND-ed; a bare ``OR``
+    Terms are quoted (no FTS syntax injection) and AND-ed, each term matching
+    either of its indexed forms; a bare ``OR``
     between terms becomes the FTS operator; ``term*`` is a prefix query on
     the folded, unstemmed term (stemming a prefix would cut it further).
     """
@@ -86,17 +95,23 @@ def build_match_query(query: str) -> Optional[str]:
         found = _TOKEN.findall(unicodedata.normalize("NFKC", raw))
         if not found:
             continue
-        stems = [cistem(_fold(t)) for t in (found[:-1] if prefix else found)]
-        terms = [f'"{stem}"' for stem in stems if stem]
+        terms = []
+        for token in (found[:-1] if prefix else found):
+            forms = _forms(token)
+            if forms:
+                quoted = [f'"{form}"' for form in forms]
+                terms.append(quoted[0] if len(quoted) == 1 else "(" + " OR ".join(quoted) + ")")
         if prefix:
             # Prefixes match index stems, so only the character mapping is
             # applied ("Häus*" → "haus*"); suffix stripping would cut it.
             terms.append(f'"{_umlaut_fold(found[-1])}"*')
         if not terms:
             continue
-        group = terms[0] if len(terms) == 1 else "(" + " ".join(terms) + ")"
+        # FTS5 allows implicit AND only between bare phrases, not next to a
+        # parenthesised group, so every conjunction is spelled out.
+        group = terms[0] if len(terms) == 1 else "(" + " AND ".join(terms) + ")"
         if pending_or and parts:
-            parts[-1] = f"{parts[-1]} OR {group}"
+            parts[-1] = f"({parts[-1]} OR {group})"
         else:
             parts.append(group)
         pending_or = False
@@ -104,4 +119,4 @@ def build_match_query(query: str) -> Optional[str]:
             break
     if not parts:
         return None
-    return " ".join(p if " OR " not in p else f"({p})" for p in parts)
+    return " AND ".join(parts)

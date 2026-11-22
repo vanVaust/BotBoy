@@ -5,30 +5,38 @@ from datetime import datetime, timezone
 from botboy.command_effects import MEMORY_DELETE_COMMANDS, MEMORY_WRITE_COMMANDS, SCHEDULE_REMOVE_SUBCOMMANDS
 
 
-# Commands from these approval-context sources are produced by an LLM, not
-# typed by the operator; their writes are untrusted unless the agent engine,
-# which tracks labels, explicitly declares the text trusted.
-AUTOMATED_SOURCES = frozenset({"agent", "planner"})
+# Only these approval-context sources are a human operator at this machine:
+# "local" is the CLI default context, "operator" a direct call without one.
+# Everything else (gateways, scheduler, planner, agent, unknown) is untrusted
+# by default; allowlisting keeps a new entry point from inheriting trust.
+TRUSTED_ORIGINS = frozenset({"local", "operator"})
 _TRUST_FLAGS = {"--trust=trusted": "trusted", "--trust=untrusted": "untrusted"}
 
 
-def parse_write_provenance(text: str, *, origin: str) -> tuple[str, str, str]:
+def parse_write_provenance(text: str, *, origin: str, root_origin: str = "") -> tuple[str, str, str]:
     """Return ``(trust, source, content)`` for a memory write.
 
-    Only the first token may be a trust flag; the agent places it in the
-    fixed command prefix, so flag-looking text inside the payload is content.
+    Only the first token may be a trust flag. ``--trust=untrusted`` is always
+    honoured; ``--trust=trusted`` only from the operator, or from the secure
+    agent (which computes it from labels) when the agent run itself was
+    started by the operator (``root_origin``). Model-written commands — the
+    planner, an agent started over a gateway — can never assert trust.
     """
     head, _, rest = text.partition(" ")
+    may_assert = origin in TRUSTED_ORIGINS or (origin == "agent" and root_origin in TRUSTED_ORIGINS)
     if head in _TRUST_FLAGS:
-        trust, text = _TRUST_FLAGS[head], rest.strip()
+        text = rest.strip()
+        trust = "trusted" if _TRUST_FLAGS[head] == "trusted" and may_assert else "untrusted"
     else:
-        trust = "untrusted" if origin in AUTOMATED_SOURCES else "trusted"
+        trust = "trusted" if origin in TRUSTED_ORIGINS else "untrusted"
     return trust, origin, text
 
 
-def handle_memory_command(bot, command: str, *, first: str, origin: str = "operator") -> dict:
+def handle_memory_command(bot, command: str, *, first: str, origin: str = "operator",
+                          root_origin: str = "") -> dict:
     if first in MEMORY_WRITE_COMMANDS:
-        trust, source, text = parse_write_provenance(command[len(first):].strip(), origin=origin)
+        trust, source, text = parse_write_provenance(command[len(first):].strip(), origin=origin,
+                                                     root_origin=root_origin)
         if not text:
             return {"success": False, "output": f"Usage: {first} <text>", "type": "memory"}
         if bot.memory:

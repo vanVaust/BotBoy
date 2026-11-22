@@ -12,7 +12,7 @@ from unittest import mock
 from botboy.memory import simple as simple_mod
 from botboy.memory import textnorm
 from botboy.memory.simple import SimpleMemoryEngine
-from botboy.memory.textnorm import build_match_query, cistem, normalize_for_index
+from botboy.memory.textnorm import build_match_query, cistem, normalize_for_index, tokens
 
 _LEGACY = """
 CREATE TABLE memories (id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT NOT NULL,
@@ -55,11 +55,11 @@ class CistemTest(unittest.TestCase):
                   ("Feiertage", "Feiertag"), ("Äpfel", "äpfel", "APFEL")]
         for group in groups:
             with self.subTest(group=group):
-                self.assertEqual(len({normalize_for_index(w) for w in group}), 1)
+                self.assertEqual(len({tuple(tokens(w)) for w in group}), 1)
 
     def test_distinct_words_stay_distinct(self) -> None:
         for a, b in (("Haus", "Hund"), ("Schule", "Schuh"), ("Wasser", "Messer")):
-            self.assertNotEqual(normalize_for_index(a), normalize_for_index(b))
+            self.assertNotEqual(tokens(a), tokens(b))
 
     def test_long_and_odd_tokens_are_bounded(self) -> None:
         text = ("x" * 100_000) + " " + "ﬁnden" + " " + "ＡＢＣ"
@@ -72,15 +72,25 @@ class CistemTest(unittest.TestCase):
 class MatchQueryTest(unittest.TestCase):
     def test_syntax_is_neutralised(self) -> None:
         self.assertEqual(build_match_query('"zebra" NEAR(a b) col:x -y ^z'),
-                         '"zebra" ("near" "a") "b" ("col" "x") "y" "z"')
+                         '"zebra" AND ("near" AND "a") AND "b" AND ("col" AND "x") AND "y" AND "z"')
         self.assertIsNone(build_match_query('*** "" ( ) :'))
-        self.assertEqual(build_match_query("Häuser OR Wohnung Berl*"), '("hau" OR "wohnung") "berl"*')
+        self.assertEqual(build_match_query("Häuser OR Wohnung Berl*"),
+                         '(("hau" OR "häuser") OR "wohnung") AND "berl"*')
         self.assertEqual(build_match_query("OR zebra OR"), '"zebra"')
         self.assertEqual(build_match_query("Häus*"), '"haus"*')
+        self.assertEqual(build_match_query("test"), '("tes" OR "test")')
+
+    def test_every_generated_query_is_valid_fts5(self) -> None:
+        engine = SimpleMemoryEngine()
+        engine.store("probe")
+        for query in ('a b OR c OR d', 'x* y', '"q" NEAR(a b)', 'Häuser OR Wohnung Berl*', 'col:x -y', 'test save'):
+            with self.subTest(query=query):
+                engine._shared_conn.execute("SELECT count(*) FROM memories_fts2 WHERE memories_fts2 MATCH ?",
+                                            (build_match_query(query),)).fetchone()
 
     def test_query_term_cap(self) -> None:
         query = build_match_query(" ".join(f"w{i}" for i in range(500)))
-        self.assertEqual(query.count('"') // 2, 32)
+        self.assertEqual(query.count(" AND ") + 1, 32)
 
 
 class SearchTest(unittest.TestCase):
@@ -101,6 +111,10 @@ class SearchTest(unittest.TestCase):
 
     def test_english_still_stems(self) -> None:
         self.assertEqual(self.hits("run zebras"), ["running the zebra tests"])
+        # CISTEM alone maps "test"→"tes" but leaves "testing"; the raw form
+        # indexed alongside keeps Porter's English conflation.
+        self.engine.store("testing saved settings")
+        self.assertEqual(self.hits("test save setting"), ["testing saved settings"])
 
     def test_or_and_prefix(self) -> None:
         self.assertEqual(len(self.hits("Garten OR Rechnung")), 2)
@@ -174,13 +188,13 @@ class MigrationTest(unittest.TestCase):
     def test_normalisation_version_bump_rebuilds(self) -> None:
         path = self._legacy_db()
         self.open(path)
-        with mock.patch.object(simple_mod, "NORMALIZATION_VERSION", "2"), \
+        with mock.patch.object(simple_mod, "NORMALIZATION_VERSION", "99"), \
                 mock.patch.object(simple_mod, "normalize_for_index", lambda text: "rebuilt"):
             self.open(path)
         conn = sqlite3.connect(path)
         try:
             self.assertEqual({t for (t,) in conn.execute("SELECT search_text FROM memories")}, {"rebuilt"})
-            self.assertEqual(conn.execute("SELECT value FROM memory_meta").fetchone()[0], "2")
+            self.assertEqual(conn.execute("SELECT value FROM memory_meta").fetchone()[0], "99")
             self.assertEqual(conn.execute("SELECT count(*) FROM memories_fts2 WHERE memories_fts2 MATCH 'rebuilt'")
                              .fetchone()[0], 2)
         finally:

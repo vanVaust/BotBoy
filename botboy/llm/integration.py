@@ -92,7 +92,8 @@ class LLMResponse:
     input_tokens: int = 0
     output_tokens: int = 0
     stop_reason: str = ""
-    attempts: int = 1
+    attempts: int = 1        # attempts on the backend that produced this response
+    retries: int = 0         # retries across every backend tried (fallback chain included)
     status_code: Optional[int] = None
     retryable: bool = False
     cost_usd: Optional[float] = None
@@ -104,6 +105,7 @@ class LLMResponse:
             "output_tokens": self.output_tokens,
             "total_tokens": self.tokens_used,
             "attempts": self.attempts,
+            "retries": self.retries,
             "cost_usd": self.cost_usd,
             "stop_reason": self.stop_reason,
             "fallback_trail": list(self.fallback_trail),
@@ -305,6 +307,13 @@ async def iter_sse(lines: AsyncIterator[bytes]) -> AsyncIterator[Tuple[str, str]
         yield event or "message", "\n".join(data)
 
 
+def _premature_end(provider: str, marker: str) -> LLMTransportError:
+    # A clean EOF before the completion marker is a truncated answer, not a
+    # short one. Retryable: the stream loop retries/falls back only while no
+    # text has been emitted, and raises otherwise.
+    return LLMTransportError(f"{provider} stream ended before its completion marker ({marker})", retryable=True)
+
+
 def _json_event(payload: str) -> dict:
     try:
         data = json.loads(payload)
@@ -402,10 +411,22 @@ class _HTTPBackend(BaseLLMBackend):
         return text
 
     def _failure(self, message: str, start: float, **extra) -> LLMResponse:
-        return LLMResponse(
+        response = LLMResponse(
             content="", model=self.model, backend=self.name, success=False,
             error=self._redact(message), duration_ms=(time.perf_counter() - start) * 1000, **extra,
         )
+        response.retries = max(0, response.attempts - 1)
+        return response
+
+    def _redacted(self, error: LLMTransportError) -> LLMTransportError:
+        """Same classification, message with the API key removed."""
+        message = self._redact(str(error))
+        if message == str(error):
+            return error
+        clean = LLMTransportError(message, status=error.status, retryable=error.retryable,
+                                  retry_after=error.retry_after)
+        clean.attempts = error.attempts
+        return clean
 
     def _classify(self, exc: BaseException, timeout: float) -> LLMTransportError:
         if isinstance(exc, LLMTransportError):
@@ -491,6 +512,7 @@ class _HTTPBackend(BaseLLMBackend):
             except LLMTransportError as exc:
                 return self._failure(str(exc), start, attempts=attempts, status_code=status)
             response.attempts = attempts
+            response.retries = attempts - 1
             response.status_code = status
             response.duration_ms = (time.perf_counter() - start) * 1000
             return response
@@ -519,7 +541,9 @@ class _HTTPBackend(BaseLLMBackend):
                             yield token
                         return
             except Exception as exc:  # noqa: BLE001 - classified or re-raised below
-                error = self._classify(exc, self.timeout)
+                # Provider error events can echo request headers; never let
+                # the key leave in an exception (fallback aggregates these).
+                error = self._redacted(self._classify(exc, self.timeout))
                 error.attempts = attempts
                 delay = None if emitted else await self._next_delay(error, attempts, deadline)
                 if delay is None:
@@ -568,6 +592,7 @@ class OllamaBackend(_HTTPBackend):
                 yield token
             if data.get("done") is True:
                 return
+        raise _premature_end("Ollama", '"done": true')
 
 
 # ── OpenAI Backend ────────────────────────────────────────────────────────────
@@ -637,6 +662,7 @@ class OpenAIBackend(_HTTPBackend):
             token = delta.get("content") if isinstance(delta, dict) else None
             if isinstance(token, str) and token:
                 yield token
+        raise _premature_end("OpenAI", "data: [DONE]")
 
 
 # ── Anthropic Backend ─────────────────────────────────────────────────────────
@@ -704,6 +730,7 @@ class AnthropicBackend(_HTTPBackend):
                     yield delta["text"]
             elif kind == "message_stop":
                 return
+        raise _premature_end("Anthropic", "message_stop")
 
 
 # ── Composition: fallback chain and metering ─────────────────────────────────
@@ -725,15 +752,19 @@ class FallbackBackend(BaseLLMBackend):
 
     async def chat(self, messages: List[dict], **kwargs) -> LLMResponse:
         trail: List[str] = []
+        retries = 0
         response: Optional[LLMResponse] = None
         for backend in self.backends:
             response = await backend.chat(messages, **kwargs)
+            retries += response.retries
             if response.success:
                 response.fallback_trail = trail + response.fallback_trail
+                response.retries = retries
                 return response
             trail.append(f"{response.backend}/{response.model}: {response.error}")
         assert response is not None
         response.fallback_trail = trail[:-1]
+        response.retries = retries
         response.error = "all backends failed: " + " | ".join(trail)
         return response
 
@@ -806,7 +837,7 @@ class MeteredBackend(BaseLLMBackend):
             totals = self._totals
             totals.requests += 1
             totals.failures += 0 if response.success else 1
-            totals.retries += max(0, response.attempts - 1)
+            totals.retries += response.retries
             totals.fallbacks += len(response.fallback_trail)
             totals.input_tokens += response.input_tokens
             totals.output_tokens += response.output_tokens

@@ -23,13 +23,15 @@ was tatsächlich geschah, zeigt `git log`. Es wird hier nicht rückwirkend erfun
   `status`. Neue Einstellungen: `max_tokens`, `max_retries`, `retry_base_delay`,
   `retry_max_delay`, `price_input_per_mtok`, `price_output_per_mtok`, `fallbacks`.
 - Herkunft pro Erinnerung (`trust`, `source`): Operator-Eingaben über die CLI sind
-  `trusted`, alles aus Agent/Planer, Gateway oder API `untrusted`; Metadaten können
+  `trusted`, alles andere (Gateways, Planer, Scheduler, über ein Gateway gestartete
+  Agentenläufe, neue Zugänge) `untrusted` (Allowlist); Metadaten können
   das nicht setzen, jede Inhaltsänderung setzt zurück. `memory.search` liefert im
   Agenten nur dann `trusted`, wenn jeder Treffer und die Anfrage vertrauenswürdig
   sind; eine freigegebene Kopie fremder Inhalte bleibt `untrusted`.
 - Deutsche Volltextsuche: Normalisierung (NFKC, Casefold, CISTEM-Stemmer) über eine
   Schattenspalte; „Häuser“ findet „Haus“, „Straße“ findet „Strassen“. Anfragen werden
-  gleich normalisiert und als quotierte Terme übergeben (FTS-Syntax kann nicht mehr
+  gleich normalisiert; jedes Wort wird als CISTEM-Stamm und als Rohform (Porter für
+  Englisch: „testing“ findet „test“) indiziert und als quotierte Terme übergeben (FTS-Syntax kann nicht mehr
   fehlschlagen); `OR` und `präfix*` bleiben möglich. Bestehende Datenbanken werden
   beim Öffnen migriert und neu indiziert.
 - Eval-Welle `agent_injection` (`python -m botboy.evals --wave agent_injection`):

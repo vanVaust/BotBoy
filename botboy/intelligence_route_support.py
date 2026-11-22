@@ -33,7 +33,8 @@ async def handle_intelligence_route(
     roles = roles or []
 
     if first == "agent":
-        return await _handle_agent(bot, command, principal=principal, roles=roles)
+        return await _handle_agent(bot, command, principal=principal, roles=roles,
+                                   origin=str((approval_context or {}).get("source") or "operator"))
 
     if first == "plan" and bot.planner:
         task = command[4:].strip()
@@ -261,7 +262,7 @@ def _pending_runs(bot) -> dict:
     return store
 
 
-def _remember_pending(bot, run, principal: str) -> str:
+def _remember_pending(bot, run, principal: str, *, root_source: str = "") -> str:
     """Store ``run`` under a fresh run-specific id; returns the id.
 
     Keying by the call digest let two runs with an identical pending call
@@ -273,7 +274,7 @@ def _remember_pending(bot, run, principal: str) -> str:
         store.pop(next(iter(store)))
     approval_id = secrets.token_hex(16)
     store[approval_id] = {"run": run, "principal": principal, "digest": run.pending.digest,
-                          "expires": time.monotonic() + _PENDING_TTL_S}
+                          "root_source": root_source, "expires": time.monotonic() + _PENDING_TTL_S}
     return approval_id
 
 
@@ -315,7 +316,7 @@ def _format_agent_run(run, approval_id: str = "") -> str:
     return "\n".join(lines)
 
 
-async def _handle_agent(bot, command: str, *, principal: str, roles: list[str]) -> dict:
+async def _handle_agent(bot, command: str, *, principal: str, roles: list[str], origin: str = "operator") -> dict:
     from botboy.agent import PlanError, SecureAgent, default_tools
 
     try:
@@ -328,12 +329,17 @@ async def _handle_agent(bot, command: str, *, principal: str, roles: list[str]) 
     if backend is None:
         return {"success": False, "output": "Agent requires an enabled LLM backend.", "type": "agent"}
 
+    # The run's root origin travels with every step so the memory handler can
+    # tell an operator-started run from one started over a gateway: only the
+    # former may store engine-labelled trusted text as trusted.
+    root = {"source": origin}
+
     async def execute(step_command: str) -> dict:
         return await bot.process_command(
             step_command,
             principal=principal,
             roles=list(roles),
-            approval_context=dict(AGENT_APPROVAL_CONTEXT),
+            approval_context=dict(AGENT_APPROVAL_CONTEXT, root_source=root["source"]),
         )
 
     agent = SecureAgent(backend, execute)
@@ -345,6 +351,9 @@ async def _handle_agent(bot, command: str, *, principal: str, roles: list[str]) 
             return {"success": False, "type": "agent",
                     "output": "No pending agent run for this approval (expired, already used, "
                               "or started by another principal). Run the task again."}
+        # Trusted only if both the starting and the approving call were the operator.
+        if entry.get("root_source", "") != origin:
+            root["source"] = "mixed"
         pending_run = entry["run"]
         run = await agent.execute_plan(pending_run.task, pending_run.plan, approved=[entry["digest"]],
                                        resume_from=pending_run)
@@ -367,7 +376,7 @@ async def _handle_agent(bot, command: str, *, principal: str, roles: list[str]) 
     if run.status == "approval_required" and run.pending is not None:
         tool = default_tools().get(run.pending.tool)
         if tool is not None and tool.effect != "destructive":
-            new_approval_id = _remember_pending(bot, run, principal)
+            new_approval_id = _remember_pending(bot, run, principal, root_source=root["source"])
     data = run.to_dict()
     if new_approval_id:
         data["approval_id"] = new_approval_id

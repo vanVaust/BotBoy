@@ -365,6 +365,35 @@ class StreamTest(_ServerCase):
         with self.assertRaises(LLMTransportError):
             await self._collect(OpenAIBackend(api_url=self.url, **self.kw(attempts=1)))
 
+    async def test_stream_error_event_is_redacted(self) -> None:
+        err = ('event: error\ndata: {"type":"error","error":{"type":"authentication_error",'
+               f'"message":"bad key {SECRET}"}}}}\n\n').encode()
+        self.script.push(stream_reply([err]))
+        chain = FallbackBackend([AnthropicBackend(api_key=SECRET, api_url=self.url, **self.kw())])
+        with self.assertRaises(LLMTransportError) as caught:
+            await self._collect(chain)
+        self.assertNotIn(SECRET, str(caught.exception))
+        self.assertIn("[redacted]", str(caught.exception))
+
+    async def test_truncated_stream_after_text_raises_and_is_not_recorded(self) -> None:
+        self.script.push(stream_reply([b'data: {"choices":[{"delta":{"content":"half an ans"}}]}\n\n']))
+        integration = LLMIntegration(OpenAIBackend(api_url=self.url, **self.kw()))
+        got = []
+        with self.assertRaisesRegex(LLMTransportError, "before its completion marker"):
+            async for token in integration.stream("q"):
+                got.append(token)
+        self.assertEqual(got, ["half an ans"])
+        self.assertEqual(integration._history, [])
+        self.assertEqual(len(self.script.requests), 1)  # no retry once text was emitted
+
+    async def test_empty_200_stream_is_retried_then_falls_back(self) -> None:
+        self.script.push(stream_reply([]), stream_reply([]),
+                         stream_reply([b'{"message":{"content":"ok"},"done":true}\n'], content_type="application/x-ndjson"))
+        chain = FallbackBackend([AnthropicBackend(api_key=SECRET, api_url=self.url, **self.kw(attempts=2)),
+                                 OllamaBackend(api_url=self.url, **self.kw())])
+        self.assertEqual(await self._collect(chain), ["ok"])
+        self.assertEqual(len(self.script.requests), 3)
+
     async def test_failed_stream_does_not_enter_history(self) -> None:
         self.script.push(json_reply({"error": "nope"}, status=400))
         integration = LLMIntegration(OllamaBackend(api_url=self.url, **self.kw()))
@@ -375,6 +404,9 @@ class StreamTest(_ServerCase):
 
 
 class CompositionTest(_ServerCase):
+    async def _collect(self, backend):
+        return [token async for token in backend.stream(MSGS)]
+
     async def test_fallback_skips_failed_primary_and_records_trail(self) -> None:
         self.script.push(json_reply({"error": {"message": "invalid key"}}, status=401), ollama_ok("local"))
         chain = FallbackBackend([
@@ -388,6 +420,17 @@ class CompositionTest(_ServerCase):
         self.assertIn("anthropic/", resp.fallback_trail[0])
         self.assertIn("HTTP 401", resp.fallback_trail[0])
         self.assertEqual(chain.name, "fallback(anthropic,ollama)")
+
+    async def test_retries_are_aggregated_across_the_chain(self) -> None:
+        self.script.push(json_reply({}, status=503), json_reply({}, status=503), json_reply({}, status=503),
+                         ollama_ok("second"))
+        metered = MeteredBackend(FallbackBackend([OpenAIBackend(api_url=self.url, **self.kw(attempts=3)),
+                                                  OllamaBackend(api_url=self.url, **self.kw())]))
+        resp = await metered.chat(MSGS)
+        self.assertTrue(resp.success, resp.error)
+        self.assertEqual((resp.attempts, resp.retries, len(resp.fallback_trail)), (1, 2, 1))
+        usage = metered.usage()
+        self.assertEqual((usage["retries"], usage["fallbacks"]), (2, 1))
 
     async def test_fallback_all_failed_reports_every_backend(self) -> None:
         self.script.push(json_reply({}, status=400))

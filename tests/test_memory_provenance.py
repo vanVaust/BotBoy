@@ -100,7 +100,12 @@ class WriteOriginTest(unittest.TestCase):
             ("zebra", "agent"): ("untrusted", "agent", "zebra"),
             ("zebra", "planner"): ("untrusted", "planner", "zebra"),
             ("--trust=untrusted zebra", "operator"): ("untrusted", "operator", "zebra"),
-            ("--trust=trusted zebra", "agent"): ("trusted", "agent", "zebra"),
+            ("zebra", "local"): ("trusted", "local", "zebra"),
+            # Allowlist: every other entry point is untrusted by default.
+            ("zebra", "stdlib"): ("untrusted", "stdlib", "zebra"),
+            ("zebra", "fastapi"): ("untrusted", "fastapi", "zebra"),
+            ("zebra", "scheduler"): ("untrusted", "scheduler", "zebra"),
+            ("zebra", "something-new"): ("untrusted", "something-new", "zebra"),
             # Only the first token is a flag: payload text stays content.
             ("--trust=untrusted --trust=trusted evil", "agent"): ("untrusted", "agent", "--trust=trusted evil"),
             ("--trust=bogus x", "agent"): ("untrusted", "agent", "--trust=bogus x"),
@@ -108,6 +113,16 @@ class WriteOriginTest(unittest.TestCase):
         for (text, origin), expected in cases.items():
             with self.subTest(text=text, origin=origin):
                 self.assertEqual(parse_write_provenance(text, origin=origin), expected)
+        # Asserting trust: operator, or the agent inside an operator-started run.
+        for origin, root, expected in (
+            ("agent", "local", "trusted"), ("agent", "operator", "trusted"),
+            ("agent", "", "untrusted"), ("agent", "stdlib", "untrusted"), ("agent", "mixed", "untrusted"),
+            ("planner", "local", "untrusted"), ("stdlib", "", "untrusted"), ("fastapi", "local", "untrusted"),
+            ("local", "", "trusted"),
+        ):
+            with self.subTest(origin=origin, root=root):
+                trust, _, text = parse_write_provenance("--trust=trusted zebra", origin=origin, root_origin=root)
+                self.assertEqual((trust, text), (expected, "zebra"))
 
     def test_trust_flag_cannot_be_command_head(self) -> None:
         with self.assertRaises(ValueError):
@@ -159,6 +174,38 @@ class OriginThroughRouterTest(_BotCase):
         self.cmd("remember zebra via agent", approval_context=dict(AGENT_APPROVAL_CONTEXT))
         self.cmd("remember zebra via planner", approval_context=dict(PLANNER_APPROVAL_CONTEXT))
         self.assertEqual(self.rows("zebra"), {"zebra via agent": "untrusted", "zebra via planner": "untrusted"})
+
+    def test_model_written_commands_cannot_assert_trust(self) -> None:
+        # A planner (or an agent run started outside the operator CLI) emitting
+        # the flag itself must not create trusted rows.
+        self.cmd("remember --trust=trusted zebra planner forged", approval_context=dict(PLANNER_APPROVAL_CONTEXT))
+        self.cmd("remember --trust=trusted zebra gateway agent",
+                 approval_context=dict(AGENT_APPROVAL_CONTEXT, root_source="stdlib"))
+        self.assertEqual(set(self.rows("zebra").values()), {"untrusted"})
+
+    def test_gateway_writes_are_untrusted(self) -> None:
+        from botboy.gateway.simple_server import SimpleHTTPServer
+        import json
+        import urllib.request
+
+        server = SimpleHTTPServer(self.bot, host="127.0.0.1", port=0)
+        server.start(blocking=False)
+        self.addCleanup(server.stop)
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.port}/api/command", method="POST",
+            data=json.dumps({"command": "remember zebra via http"}).encode(),
+            headers={"Content-Type": "application/json", "Host": f"127.0.0.1:{server.port}"})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            body = json.loads(response.read())
+        self.assertTrue(body.get("success"), body)
+        self.assertEqual(self.rows("zebra"), {"zebra via http": "untrusted"})
+
+    def test_gateway_started_agent_cannot_store_trusted(self) -> None:
+        self.use_backend(ScriptedBackend(plan(step("s1", "memory.store", text=lit("zebra from remote task")))))
+        result = self.cmd("agent store it", approval_context={"granted": False, "explicit": False,
+                                                              "reason": "none", "source": "fastapi"})
+        self.assertTrue(result["success"], result["output"])
+        self.assertEqual(self.rows("zebra"), {"zebra from remote task": "untrusted"})
 
 
 class AgentProvenanceTest(_BotCase):
