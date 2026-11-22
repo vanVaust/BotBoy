@@ -48,8 +48,6 @@ DEFAULT_MODELS = {
     "openai": "gpt-4o-mini",
     "anthropic": "claude-haiku-4-5-20251001",
 }
-# Generic config default; for hosted backends it means "nothing configured".
-_CONFIG_DEFAULT_MODEL = "llama3.2"
 
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 MAX_ERROR_BODY_BYTES = 64 * 1024
@@ -110,6 +108,24 @@ class LLMResponse:
             "stop_reason": self.stop_reason,
             "fallback_trail": list(self.fallback_trail),
         }
+
+
+@dataclass
+class StreamUsage:
+    """Usage of one streamed call, filled in by the backends as it runs.
+
+    Passed down as ``stream(..., usage=StreamUsage())``; the meter records
+    it when the stream ends, failed or not (aborted attempts can be billed).
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    retries: int = 0
+    fallbacks: int = 0
+
+    def add(self, input_tokens: int, output_tokens: int) -> None:
+        self.input_tokens += input_tokens
+        self.output_tokens += output_tokens
 
 
 @dataclass(frozen=True)
@@ -402,7 +418,7 @@ class _HTTPBackend(BaseLLMBackend):
     def _parse(self, data: dict) -> LLMResponse:
         raise NotImplementedError
 
-    def _tokens(self, lines: AsyncIterator[bytes]) -> AsyncIterator[str]:
+    def _tokens(self, lines: AsyncIterator[bytes], usage: "StreamUsage") -> AsyncIterator[str]:
         raise NotImplementedError
 
     def _redact(self, text: str) -> str:
@@ -521,22 +537,32 @@ class _HTTPBackend(BaseLLMBackend):
         if not AIOHTTP_AVAILABLE:
             raise LLMTransportError("aiohttp not installed")
         payload = self._payload(messages, stream=True)
-        deadline = self._clock() + self.retry.budget(self.timeout)
+        usage = kwargs.get("usage")
+        if not isinstance(usage, StreamUsage):
+            usage = StreamUsage()
+        # One budget for the whole stream, retries included: keep-alive
+        # comments reset sock_read, so only a shrinking total bounds an
+        # attempt, and a retry can never extend the advertised budget.
+        deadline = self._clock() + self.stream_timeout
         attempts = 0
         while True:
             attempts += 1
             emitted = False
             try:
+                remaining = deadline - self._clock()
+                if remaining <= 0:
+                    raise LLMTransportError(f"stream deadline of {self.stream_timeout:.0f}s exceeded", retryable=True)
                 async with aiohttp.ClientSession(
                     headers=self._headers(),
                     timeout=aiohttp.ClientTimeout(
-                        total=self.stream_timeout, sock_connect=self.timeout, sock_read=self.timeout
+                        total=remaining, sock_connect=min(self.timeout, remaining),
+                        sock_read=min(self.timeout, remaining),
                     ),
                 ) as session:
                     async with session.post(self._endpoint(), json=payload, allow_redirects=False) as resp:
                         if not 200 <= resp.status < 300:
                             raise await self._status_error(resp)
-                        async for token in self._tokens(iter_lines(resp.content.iter_any())):
+                        async for token in self._tokens(iter_lines(resp.content.iter_any()), usage):
                             emitted = True
                             yield token
                         return
@@ -548,6 +574,7 @@ class _HTTPBackend(BaseLLMBackend):
                 delay = None if emitted else await self._next_delay(error, attempts, deadline)
                 if delay is None:
                     raise error from None
+                usage.retries += 1
                 await self._sleep(delay)
 
 
@@ -579,7 +606,7 @@ class OllamaBackend(_HTTPBackend):
                            tokens_used=prompt + completion, input_tokens=prompt, output_tokens=completion,
                            stop_reason=str(data.get("done_reason") or ""))
 
-    async def _tokens(self, lines: AsyncIterator[bytes]) -> AsyncIterator[str]:
+    async def _tokens(self, lines: AsyncIterator[bytes], usage: StreamUsage) -> AsyncIterator[str]:
         async for line in lines:
             if not line.strip():
                 continue
@@ -591,6 +618,7 @@ class OllamaBackend(_HTTPBackend):
             if isinstance(token, str) and token:
                 yield token
             if data.get("done") is True:
+                usage.add(_nonneg_int(data.get("prompt_eval_count")), _nonneg_int(data.get("eval_count")))
                 return
         raise _premature_end("Ollama", '"done": true')
 
@@ -648,13 +676,26 @@ class OpenAIBackend(_HTTPBackend):
                            input_tokens=prompt, output_tokens=completion,
                            stop_reason=str(choices[0].get("finish_reason") or ""))
 
-    async def _tokens(self, lines: AsyncIterator[bytes]) -> AsyncIterator[str]:
+    async def _tokens(self, lines: AsyncIterator[bytes], usage: StreamUsage) -> AsyncIterator[str]:
+        seen_usage: list = [(0, 0)]
+        try:
+            async for token in self._openai_events(lines, seen_usage):
+                yield token
+        finally:
+            usage.add(*seen_usage[-1])
+
+    async def _openai_events(self, lines: AsyncIterator[bytes], seen_usage: list) -> AsyncIterator[str]:
         async for _event, payload in iter_sse(lines):
             if payload.strip() == "[DONE]":
                 return
             data = _json_event(payload)
             if "error" in data:
                 raise LLMTransportError(_error_detail(json.dumps(data).encode()))
+            if isinstance(data.get("usage"), dict):
+                # Cumulative per stream (include_usage chunk, or per-chunk stats
+                # on some servers): keep the latest, never sum chunks.
+                seen_usage.append((_nonneg_int(data["usage"].get("prompt_tokens")),
+                                   _nonneg_int(data["usage"].get("completion_tokens"))))
             choices = data.get("choices")
             if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
                 continue  # the final include_usage chunk carries no choices
@@ -712,12 +753,29 @@ class AnthropicBackend(_HTTPBackend):
                            input_tokens=prompt, output_tokens=completion,
                            stop_reason=str(data.get("stop_reason") or ""))
 
-    async def _tokens(self, lines: AsyncIterator[bytes]) -> AsyncIterator[str]:
+    async def _tokens(self, lines: AsyncIterator[bytes], usage: StreamUsage) -> AsyncIterator[str]:
+        counts = {"input": 0, "output": 0}
+        try:
+            async for token in self._anthropic_events(lines, counts):
+                yield token
+        finally:
+            usage.add(counts["input"], counts["output"])
+
+    async def _anthropic_events(self, lines: AsyncIterator[bytes], counts: dict) -> AsyncIterator[str]:
         async for event, payload in iter_sse(lines):
             if event == "ping":
                 continue
             data = _json_event(payload)
             kind = data.get("type") or event
+            if kind == "message_start":
+                message = data.get("message") if isinstance(data.get("message"), dict) else {}
+                start = message.get("usage") if isinstance(message.get("usage"), dict) else {}
+                counts["input"] = (_nonneg_int(start.get("input_tokens"))
+                                   + _nonneg_int(start.get("cache_creation_input_tokens"))
+                                   + _nonneg_int(start.get("cache_read_input_tokens")))
+                counts["output"] = _nonneg_int(start.get("output_tokens"))
+            elif kind == "message_delta" and isinstance(data.get("usage"), dict):
+                counts["output"] = _nonneg_int(data["usage"].get("output_tokens")) or counts["output"]
             if kind == "error":
                 err = data.get("error") if isinstance(data.get("error"), dict) else {}
                 raise LLMTransportError(
@@ -770,8 +828,11 @@ class FallbackBackend(BaseLLMBackend):
 
     async def stream(self, messages: List[dict], **kwargs) -> AsyncIterator[str]:
         errors: List[str] = []
-        for backend in self.backends:
+        usage = kwargs.get("usage")
+        for index, backend in enumerate(self.backends):
             emitted = False
+            if index and isinstance(usage, StreamUsage):
+                usage.fallbacks += 1
             try:
                 async for token in backend.stream(messages, **kwargs):
                     emitted = True
@@ -845,15 +906,27 @@ class MeteredBackend(BaseLLMBackend):
         return response
 
     async def stream(self, messages: List[dict], **kwargs) -> AsyncIterator[str]:
-        with self._lock:
-            self._totals.requests += 1
+        usage = kwargs.get("usage")
+        if not isinstance(usage, StreamUsage):
+            usage = StreamUsage()
+        kwargs["usage"] = usage
+        failed = True
         try:
             async for token in self.inner.stream(messages, **kwargs):
                 yield token
-        except LLMTransportError:
+            failed = False
+        finally:
+            # Recorded on success, failure and abandonment alike.
+            cost = self.cost(usage.input_tokens, usage.output_tokens)
             with self._lock:
-                self._totals.failures += 1
-            raise
+                totals = self._totals
+                totals.requests += 1
+                totals.failures += 1 if failed else 0
+                totals.retries += usage.retries
+                totals.fallbacks += usage.fallbacks
+                totals.input_tokens += usage.input_tokens
+                totals.output_tokens += usage.output_tokens
+                totals.cost_usd += cost or 0.0
 
     def usage(self) -> dict:
         with self._lock:
@@ -902,7 +975,9 @@ def build_backend(
         return MockLLMBackend()
     if name not in DEFAULT_MODELS:
         raise ValueError(f"unknown LLM backend {backend!r}; expected mock, ollama, openai or anthropic")
-    if not model or (name != "ollama" and model == _CONFIG_DEFAULT_MODEL):
+    # Only an omitted model is filled in; an explicit one (even "llama3.2" on
+    # an OpenAI-compatible server) is sent as configured.
+    if not model:
         model = DEFAULT_MODELS[name]
     # The config's api_url default is Ollama's; it never names a hosted API.
     if name != "ollama" and api_url == DEFAULT_OLLAMA_URL:

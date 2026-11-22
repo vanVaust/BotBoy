@@ -394,6 +394,53 @@ class StreamTest(_ServerCase):
         self.assertEqual(await self._collect(chain), ["ok"])
         self.assertEqual(len(self.script.requests), 3)
 
+    async def test_stream_budget_bounds_keepalive_attempts(self) -> None:
+        async def keepalive(request):
+            resp = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
+            await resp.prepare(request)
+            for _ in range(200):
+                await resp.write(b": keep-alive\n\n")
+                await asyncio.sleep(0.02)
+            return resp
+        self.script.push(keepalive)
+        backend = OpenAIBackend(api_url=self.url, timeout=1, stream_timeout=0.5, **self.kw(attempts=3))
+        start = time.perf_counter()
+        with self.assertRaises(LLMTransportError):
+            await self._collect(backend)
+        self.assertLess(time.perf_counter() - start, 2.0)  # not 3 x 4 s of keep-alives
+
+    async def test_stream_usage_reaches_the_meter(self) -> None:
+        openai = (b'data: {"choices":[{"delta":{"content":"a"}}]}\n\n'
+                  b'data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":3}}\n\ndata: [DONE]\n\n')
+        anthropic = (b'event: message_start\ndata: {"type":"message_start","message":{"usage":'
+                     b'{"input_tokens":5,"cache_read_input_tokens":20,"output_tokens":1}}}\n\n'
+                     b'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"b"}}\n\n'
+                     b'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":9}}\n\n'
+                     b'event: message_stop\ndata: {"type":"message_stop"}\n\n')
+        ollama = b'{"message":{"content":"c"},"done":true,"prompt_eval_count":7,"eval_count":2}\n'
+        cases = [(OpenAIBackend(api_url=self.url, **self.kw()), openai, (11, 3)),
+                 (AnthropicBackend(api_key=SECRET, api_url=self.url, **self.kw()), anthropic, (25, 9)),
+                 (OllamaBackend(api_url=self.url, **self.kw()), ollama, (7, 2))]
+        for backend, body, (tokens_in, tokens_out) in cases:
+            with self.subTest(backend=backend.name):
+                self.script.handlers.clear()
+                self.script.push(stream_reply([body]))
+                metered = MeteredBackend(backend, price_input_per_mtok=2.0, price_output_per_mtok=4.0)
+                await self._collect(metered)
+                usage = metered.usage()
+                self.assertEqual((usage["input_tokens"], usage["output_tokens"]), (tokens_in, tokens_out))
+                self.assertAlmostEqual(usage["cost_usd"], (tokens_in * 2 + tokens_out * 4) / 1e6)
+                self.assertEqual((usage["requests"], usage["failures"]), (1, 0))
+
+    async def test_stream_retries_and_fallbacks_are_metered(self) -> None:
+        self.script.push(json_reply({}, status=503), json_reply({}, status=400),
+                         stream_reply([b'{"message":{"content":"z"},"done":true,"eval_count":1}\n']))
+        metered = MeteredBackend(FallbackBackend([OpenAIBackend(api_url=self.url, **self.kw(attempts=2)),
+                                                  OllamaBackend(api_url=self.url, **self.kw())]))
+        self.assertEqual(await self._collect(metered), ["z"])
+        usage = metered.usage()
+        self.assertEqual((usage["retries"], usage["fallbacks"], usage["output_tokens"]), (1, 1, 1))
+
     async def test_failed_stream_does_not_enter_history(self) -> None:
         self.script.push(json_reply({"error": "nope"}, status=400))
         integration = LLMIntegration(OllamaBackend(api_url=self.url, **self.kw()))
@@ -468,9 +515,19 @@ class CompositionTest(_ServerCase):
 
 class ConfigTest(unittest.TestCase):
     def test_hosted_backend_ignores_ollama_defaults(self) -> None:
-        backend = build_backend("anthropic", model="llama3.2", api_url="http://localhost:11434", api_key="k")
+        backend = build_backend("anthropic", model="", api_url="http://localhost:11434", api_key="k")
         self.assertEqual(backend.model, llm.DEFAULT_MODELS["anthropic"])
         self.assertEqual(backend.api_url, "https://api.anthropic.com")
+        self.assertEqual(backend_from_config(LLMConfig(backend="anthropic"), environ={}).model,
+                         llm.DEFAULT_MODELS["anthropic"])
+        self.assertEqual(backend_from_config(LLMConfig(backend="ollama"), environ={}).model, "llama3.2")
+
+    def test_explicit_models_are_never_replaced(self) -> None:
+        compat = build_backend("openai", model="llama3.2", api_url="http://127.0.0.1:8000")
+        self.assertEqual(compat._payload(MSGS, stream=False)["model"], "llama3.2")
+        chain = backend_from_config(LLMConfig(backend="ollama", fallbacks=[
+            {"backend": "openai", "api_url": "http://127.0.0.1:8000", "model": "llama3.2"}]), environ={}).inner
+        self.assertEqual(chain.backends[1].model, "llama3.2")
         openai = build_backend("openai", model="", api_url="http://10.0.0.5:8000")
         self.assertEqual((openai.model, openai.api_url), ("gpt-4o-mini", "http://10.0.0.5:8000"))
 

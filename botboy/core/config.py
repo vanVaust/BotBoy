@@ -77,7 +77,7 @@ class SkillsConfig:
 class LLMConfig:
     enabled: bool = False
     backend: str = "mock"            # mock | ollama | openai | anthropic
-    model: str = "llama3.2"
+    model: str = ""                 # empty: the backend's default model
     api_url: str = "http://localhost:11434"
     api_key: str = ""
     timeout: int = 30

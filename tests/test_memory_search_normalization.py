@@ -211,7 +211,7 @@ class MigrationTest(unittest.TestCase):
             except Exception as exc:  # noqa: BLE001 - reported below
                 errors.append(exc)
 
-        threads = [threading.Thread(target=worker) for _ in range(4)]
+        threads = [threading.Thread(target=worker) for _ in range(8)]
         for t in threads:
             t.start()
         for t in threads:
@@ -231,3 +231,36 @@ class MigrationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LockRetryTest(unittest.TestCase):
+    def test_lock_conflicts_are_retried_other_errors_are_not(self) -> None:
+        from botboy.db_mixin import retry_when_locked
+
+        calls = []
+
+        def flaky():
+            calls.append(1)
+            if len(calls) < 3:
+                raise sqlite3.OperationalError("database is locked")
+            return "ok"
+
+        self.assertEqual(retry_when_locked(flaky), "ok")
+        self.assertEqual(len(calls), 3)
+        with self.assertRaisesRegex(sqlite3.OperationalError, "no such table"):
+            retry_when_locked(lambda: (_ for _ in ()).throw(sqlite3.OperationalError("no such table: x")))
+        with self.assertRaisesRegex(sqlite3.OperationalError, "locked"):
+            retry_when_locked(lambda: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked")),
+                              budget=0.05)
+
+    def test_deadlocked_journal_switch_recovers(self) -> None:
+        path = _tmp(self) / "busy.db"
+        sqlite3.connect(path).executescript(_LEGACY)
+        blocker = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+        blocker.execute("BEGIN EXCLUSIVE")
+        threading.Timer(0.3, lambda: blocker.execute("COMMIT")).start()
+        engine = SimpleMemoryEngine(str(path))  # waits/retries instead of failing
+        self.addCleanup(engine.close)
+        blocker.close()
+        engine.store("Häuser")
+        self.assertEqual(len(engine.search("haus")), 1)

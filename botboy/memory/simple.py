@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from botboy.db_mixin import _SQLiteMixin
+from botboy.db_mixin import _SQLiteMixin, retry_when_locked
 from botboy.memory.textnorm import NORMALIZATION_VERSION, build_match_query, normalize_for_index
 
 TRUST_LEVELS = ("trusted", "untrusted")
@@ -167,11 +167,15 @@ class SimpleMemoryEngine(_SQLiteMixin):
             with self._shared_lock:
                 migrate(self._shared_conn)
         else:
-            conn = sqlite3.connect(self.db_path, timeout=30)
-            try:
-                migrate(conn)
-            finally:
-                conn.close()
+            def attempt() -> None:
+                conn = sqlite3.connect(self.db_path, timeout=30)
+                try:
+                    migrate(conn)
+                finally:
+                    conn.close()
+
+            # migrate() rolls back on failure, so a retry starts clean.
+            retry_when_locked(attempt)
 
     def _row_to_memory(self, row) -> Memory:
         meta = None
