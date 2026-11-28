@@ -21,7 +21,7 @@ import unicodedata
 from typing import List, Optional
 
 # Bump when the normalisation changes: stored shadow text is then rebuilt.
-NORMALIZATION_VERSION = "2"
+NORMALIZATION_VERSION = "3"
 
 _MAX_TOKEN_CHARS = 64
 _MAX_QUERY_TERMS = 64
@@ -63,8 +63,10 @@ def cistem(word: str) -> str:
 
 def _fold(token: str) -> str:
     # casefold: ß→ss, final sigma, etc.; NFKC first so compatibility forms
-    # (ligatures, full-width letters) fold to the same token.
-    return unicodedata.normalize("NFKC", token).casefold()[:_MAX_TOKEN_CHARS]
+    # (ligatures, full-width letters) fold to the same token. Never
+    # truncated: two identifiers sharing a prefix must stay distinct, or a
+    # `forget <id>` selector would match (and delete) both.
+    return unicodedata.normalize("NFKC", token).casefold()
 
 
 def _umlaut_fold(token: str) -> str:
@@ -73,12 +75,14 @@ def _umlaut_fold(token: str) -> str:
 
 def _forms(token: str) -> List[str]:
     folded = _fold(token)
-    stem = cistem(folded)
+    # The stemmer's suffix loop is quadratic in token length; long tokens
+    # (hashes, IDs, URLs) are not words anyway and are indexed verbatim.
+    stem = cistem(folded) if len(folded) <= _MAX_TOKEN_CHARS else folded
     return [form for form in dict.fromkeys((stem, folded)) if form]
 
 
 def tokens(text: str) -> List[str]:
-    return [cistem(_fold(t)) for t in _TOKEN.findall(unicodedata.normalize("NFKC", text))]
+    return [_forms(t)[0] for t in _TOKEN.findall(unicodedata.normalize("NFKC", text)) if _forms(t)]
 
 
 def normalize_for_index(text: str) -> str:

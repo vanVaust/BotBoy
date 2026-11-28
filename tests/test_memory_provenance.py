@@ -170,6 +170,13 @@ class OriginThroughRouterTest(_BotCase):
         self.cmd("remember --trust=untrusted zebra pasted from a web page")
         self.assertEqual(self.rows("pasted")["zebra pasted from a web page"], "untrusted")
 
+    def test_forget_by_long_identifier_deletes_only_that_note(self) -> None:
+        first, second = "a" * 64 + "1" * 64, "a" * 64 + "2" * 64
+        self.cmd(f"remember token {first}")
+        self.cmd(f"remember token {second}")
+        self.cmd(f"forget {first}")
+        self.assertEqual(list(self.rows("token")), [f"token {second}"])
+
     def test_forget_with_oversized_selector_deletes_nothing(self) -> None:
         note = " ".join(f"term{i}" for i in range(64)) + " keep"
         self.cmd(f"remember {note}")

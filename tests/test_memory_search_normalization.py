@@ -61,10 +61,14 @@ class CistemTest(unittest.TestCase):
         for a, b in (("Haus", "Hund"), ("Schule", "Schuh"), ("Wasser", "Messer")):
             self.assertNotEqual(tokens(a), tokens(b))
 
-    def test_long_and_odd_tokens_are_bounded(self) -> None:
+    def test_long_and_odd_tokens_are_kept_whole_and_fast(self) -> None:
+        import time
+
         text = ("x" * 100_000) + " " + "ﬁnden" + " " + "ＡＢＣ"
+        started = time.perf_counter()
         out = normalize_for_index(text)
-        self.assertLessEqual(len(out.split()[0]), 64)
+        self.assertLess(time.perf_counter() - started, 0.5)
+        self.assertEqual(out.split()[0], "x" * 100_000)
         self.assertIn("find", out)  # NFKC: ligature ﬁ → fi
         self.assertIn("abc", out)
 
@@ -94,6 +98,14 @@ class MatchQueryTest(unittest.TestCase):
         self.assertEqual(build_match_query(" ".join(f"w{i}" for i in range(64))).count(" AND ") + 1, 64)
         with self.assertRaises(QueryTooLong):
             build_match_query(" ".join(f"w{i}" for i in range(65)))
+
+    def test_long_identifiers_sharing_a_prefix_stay_distinct(self) -> None:
+        engine = SimpleMemoryEngine()
+        first = "a" * 64 + "1" * 64
+        second = "a" * 64 + "2" * 64
+        engine.store(f"key {first}")
+        engine.store(f"key {second}")
+        self.assertEqual([m.content for m in engine.search(first)], [f"key {first}"])
 
     def test_oversized_selector_matches_nothing(self) -> None:
         engine = SimpleMemoryEngine()
