@@ -571,7 +571,11 @@ def _json_compatible(value: Any, *, budget: int = 1000) -> bool:
         remaining[0] -= 1
         if remaining[0] < 0:
             return False
-        if item is None or isinstance(item, (bool, int, float)):
+        if isinstance(item, float):
+            # inf/nan are not JSON (Starlette's JSONResponse raises); the
+            # rendered-string fallback carries them instead.
+            return math.isfinite(item)
+        if item is None or isinstance(item, (bool, int)):
             return not isinstance(item, int) or item.bit_length() <= 63
         if isinstance(item, (list, tuple)):
             return all(check(element) for element in item)
