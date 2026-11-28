@@ -619,3 +619,55 @@ class TenthReviewRoundTests(unittest.TestCase):
         self.assertTrue(result["success"], result["output"])
         self.assertEqual(result["data"]["columns"], ["f"])
         self.assertLess(len(result["output"]), 70_000)
+
+
+class EleventhReviewRoundTests(unittest.TestCase):
+    def test_repeated_group_columns_are_bounded(self) -> None:
+        rows = "id\n" + "\n".join(str(i) for i in range(20_000)) + "\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "ids.csv").write_text(rows, encoding="utf-8")
+            command = "data query ids.csv group by " + ",".join(["id"] * 800) + " agg count limit 1"
+            result = asyncio.run(data_skill.run(command, NativeSkillContext(workspace_root=root)))
+        self.assertTrue(result["success"], result["output"])
+        self.assertEqual(len(result["data"]["rows"]), 1)
+        self.assertEqual(set(result["data"]["rows"][0]), {"id", "count"})
+
+    def test_group_key_budget_is_enforced(self) -> None:
+        from unittest import mock
+
+        from botboy.skills.native import data as data_mod
+
+        rows = "k\n" + "\n".join("v" * 50 + str(i) for i in range(1000)) + "\n"
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(data_mod, "MAX_GROUP_KEY_CHARS", 10_000):
+            root = Path(tmp).resolve()
+            (root / "k.csv").write_text(rows, encoding="utf-8")
+            result = asyncio.run(data_skill.run("data query k.csv group by k agg count",
+                                                NativeSkillContext(workspace_root=root)))
+        self.assertFalse(result["success"])
+        self.assertIn("group by keys exceed", result["output"])
+
+    def test_scaffold_descriptions_round_trip_through_yaml(self) -> None:
+        import yaml
+
+        from botboy.skills.native.forge import scaffold
+
+        for description in (r"Count matches for the regex \d+ in text", r"tab \t and \n stay literal",
+                            'quote " and colon: ok', "Umlaute äöü ß"):
+            with self.subTest(description=description):
+                manifest = scaffold("regex-helper", "rxhelp", description=description)
+                meta = yaml.safe_load(manifest.split("---")[1])
+                self.assertEqual(meta["description"], description)
+
+    def test_non_finite_results_are_not_embedded_as_json(self) -> None:
+        import json as _json
+
+        from botboy.skills.native.expr import _json_compatible
+
+        for value in (float("inf"), float("nan"), [1, float("-inf")]):
+            self.assertFalse(_json_compatible(value))
+        self.assertTrue(_json_compatible([1, 2.5, None]))
+        from botboy.skills.native import expr as expr_skill
+
+        result = asyncio.run(expr_skill.run("expr [1, inf]", NativeSkillContext(workspace_root=Path("."))))
+        _json.dumps(result.get("data"), allow_nan=False)  # must not raise

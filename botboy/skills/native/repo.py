@@ -196,7 +196,14 @@ async def _terminate(process) -> None:
 
 
 async def _run_git(repo: Repository, args: Sequence[str], *, forced: bool = True,
-                   allow_truncation: bool = True) -> str:
+                   allow_truncation: bool = False) -> str:
+    """Run git confined to ``repo``.
+
+    Output over the cap is refused by default: status/log/numstat are parsed
+    into records and counts, and a silently cut prefix (9,040 of 10,000
+    untracked files, reported as complete) is worse than an error. Only
+    free-text output whose caller reports truncation opts in.
+    """
     argv: List[str] = [_git_executable(), "--no-pager", "--no-optional-locks",
                        f"--git-dir={repo.git_dir}", f"--work-tree={repo.worktree}"]
     if forced:
@@ -424,7 +431,8 @@ async def _diff(ctx: NativeSkillContext, args: List[str]) -> dict:
     patch = ""
     patch_truncated = False
     if opts.flag("patch") and files:
-        patch, patch_truncated = truncate(await _run_git(repo, base + ["--patch"] + tail), MAX_PATCH_CHARS)
+        patch, patch_truncated = truncate(await _run_git(repo, base + ["--patch"] + tail, allow_truncation=True),
+                                          MAX_PATCH_CHARS)
         lines.append("")
         lines.append(patch)
     return result("repo", "\n".join(lines), action="diff", repo=repo.relative, scope=scope, files=files,
