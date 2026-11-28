@@ -271,7 +271,7 @@ class CommandExecutionService:
             "delete", "memories", "memstats", "worker", "workers", "schedule", "handoff",
             "a2a", "reflect", "reflection", "performance", "eval", "evals", "skilllib",
             "skilllibrary", "skillroute", "contract", "contracts", "system",
-            "plan", "think", "archetypes", "intent", "hsearch", "hybrid-search",
+            "plan", "think", "agent", "archetypes", "intent", "hsearch", "hybrid-search",
         }
         if first in stateful:
             raise AuthorizationError("Use the authorized resource API for this command family")
@@ -428,7 +428,9 @@ class CommandExecutionService:
             pass
 
     async def _apply_reflection(self, command: str, result: dict, trace_ctx, root_span_id: str) -> dict:
-        if not (self.bot.reflection and self.bot.llm and result.get("success") and result.get("type") not in ("error", "llm")):
+        # Agent results are excluded: an LLM rewrite would drop the execution
+        # report and the untrusted-content marker while data.answer_trust stays.
+        if not (self.bot.reflection and self.bot.llm and result.get("success") and result.get("type") not in ("error", "llm", "agent")):
             return result
         reflection_span = None
         try:
