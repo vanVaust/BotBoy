@@ -979,9 +979,9 @@ def build_backend(
     # an OpenAI-compatible server) is sent as configured.
     if not model:
         model = DEFAULT_MODELS[name]
-    # The config's api_url default is Ollama's; it never names a hosted API.
-    if name != "ollama" and api_url == DEFAULT_OLLAMA_URL:
-        api_url = ""
+    # Like the model, an omitted URL gets the backend default; an explicit one
+    # (e.g. Ollama's OpenAI-compatible endpoint on localhost) is kept, so a
+    # local configuration can never be silently redirected to a hosted API.
     common = dict(model=model, timeout=timeout, max_tokens=max_tokens, retry=retry, **kwargs)
     if name == "ollama":
         return OllamaBackend(api_url=api_url or DEFAULT_OLLAMA_URL, **common)

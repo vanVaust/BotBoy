@@ -515,12 +515,33 @@ class CompositionTest(_ServerCase):
 
 class ConfigTest(unittest.TestCase):
     def test_hosted_backend_ignores_ollama_defaults(self) -> None:
-        backend = build_backend("anthropic", model="", api_url="http://localhost:11434", api_key="k")
+        backend = build_backend("anthropic", model="", api_url="", api_key="k")
         self.assertEqual(backend.model, llm.DEFAULT_MODELS["anthropic"])
         self.assertEqual(backend.api_url, "https://api.anthropic.com")
+        self.assertEqual(backend_from_config(LLMConfig(backend="openai"), environ={}).inner.api_url,
+                         "https://api.openai.com")
         self.assertEqual(backend_from_config(LLMConfig(backend="anthropic"), environ={}).model,
                          llm.DEFAULT_MODELS["anthropic"])
         self.assertEqual(backend_from_config(LLMConfig(backend="ollama"), environ={}).model, "llama3.2")
+
+    def test_explicit_local_urls_are_never_replaced(self) -> None:
+        chain = backend_from_config(LLMConfig(backend="anthropic", api_key="k", fallbacks=[
+            {"backend": "openai", "api_url": "http://localhost:11434", "model": "llama3.2"}]), environ={}).inner
+        local = chain.backends[1]
+        self.assertEqual(local.api_url, "http://localhost:11434")
+        self.assertEqual(local._endpoint(), "http://localhost:11434/v1/chat/completions")
+        primary = backend_from_config(LLMConfig(backend="openai", api_url="http://localhost:11434"), environ={})
+        self.assertEqual(primary.inner.api_url, "http://localhost:11434")
+
+    def test_ollama_url_env_only_targets_ollama(self) -> None:
+        from unittest import mock as _mock
+
+        with _mock.patch.dict("os.environ", {"OLLAMA_URL": "http://10.0.0.9:11434"}, clear=False):
+            for backend, expected in (("ollama", "http://10.0.0.9:11434"), ("openai", "")):
+                cfg = BotBoyConfig()
+                cfg.llm.backend = backend
+                cfg._apply_env()
+                self.assertEqual(cfg.llm.api_url, expected)
 
     def test_explicit_models_are_never_replaced(self) -> None:
         compat = build_backend("openai", model="llama3.2", api_url="http://127.0.0.1:8000")

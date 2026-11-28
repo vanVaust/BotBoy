@@ -78,7 +78,7 @@ class LLMConfig:
     enabled: bool = False
     backend: str = "mock"            # mock | ollama | openai | anthropic
     model: str = ""                 # empty: the backend's default model
-    api_url: str = "http://localhost:11434"
+    api_url: str = ""               # empty: the backend's default endpoint
     api_key: str = ""
     timeout: int = 30
     reflection_enabled: bool = False
@@ -284,7 +284,11 @@ class BotBoyConfig:
             self.llm.model = v
         self.llm.max_tokens = self._env_int("BOTBOY_LLM_MAX_TOKENS", self.llm.max_tokens)
         self.llm.max_retries = self._env_int("BOTBOY_LLM_MAX_RETRIES", self.llm.max_retries)
-        if v := os.getenv("OLLAMA_URL"):
+        # OLLAMA_URL names the Ollama server only; it must not redirect an
+        # OpenAI/Anthropic backend (BOTBOY_LLM_API_URL is backend-agnostic).
+        if (v := os.getenv("OLLAMA_URL")) and self.llm.backend == "ollama":
+            self.llm.api_url = v
+        if v := os.getenv("BOTBOY_LLM_API_URL"):
             self.llm.api_url = v
         if v := os.getenv("OPENAI_API_KEY"):
             if self.llm.backend == "openai" or not self.llm.api_key:
