@@ -431,6 +431,50 @@ class EighthReviewRoundTests(unittest.TestCase):
         self.assertEqual(len(kept), 200)
         self.assertEqual(sum(len(c.text) for c in kept), sum(end - start for start, end in spans[:200]))
 
+    def test_watchdog_abort_is_a_deadline_even_with_a_coarse_clock(self) -> None:
+        # Windows CI: time.monotonic() ticks every ~16 ms, so right after the
+        # watchdog aborted the read the clock could still read below the
+        # deadline and the abort surfaced as "ConnectionAbortedError".
+        # Simulate the worst case: a clock that has not advanced at all.
+        import socket
+        import threading
+        import types
+        from unittest import mock
+
+        from botboy.skills.native import fetch
+        from botboy.skills.native.fetch import FetchError, FetchPolicy, fetch_url
+
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+        stop = threading.Event()
+
+        def drip() -> None:
+            conn, _ = server.accept()
+            try:
+                conn.recv(4096)
+                conn.sendall(b"HTTP/1.1 200 OK\r\n")
+                while not stop.is_set():
+                    conn.sendall(b"X-Drip: 1\r\n")
+                    time.sleep(0.02)
+            except OSError:
+                pass
+            finally:
+                conn.close()
+
+        threading.Thread(target=drip, daemon=True).start()
+        self.addCleanup(server.close)
+        self.addCleanup(stop.set)
+        frozen = time.monotonic()
+        clock = types.SimpleNamespace(monotonic=lambda: frozen)
+        policy = FetchPolicy(allow_private_networks=True, allowed_ports=frozenset({port}), deadline_seconds=0.3)
+        started = time.perf_counter()
+        with mock.patch.object(fetch, "time", clock):
+            with self.assertRaisesRegex(FetchError, "Deadline"):
+                fetch_url(f"http://127.0.0.1:{port}/", policy)
+        self.assertLess(time.perf_counter() - started, 2.5)
+
     def test_header_drip_cannot_outlive_the_deadline(self) -> None:
         import socket
         import threading

@@ -261,13 +261,14 @@ def _read_body(response: http.client.HTTPResponse, policy: FetchPolicy, deadline
     return bytes(output[: policy.max_bytes]), truncated
 
 
-def _abort_connection(connection: http.client.HTTPConnection) -> None:
+def _abort_connection(connection: http.client.HTTPConnection, fired: threading.Event) -> None:
     """Deadline watchdog: unblock a read that keeps receiving a byte at a time.
 
     Socket timeouts are per receive, so a peer dripping header bytes faster
     than the timeout keeps ``getresponse()`` alive indefinitely; shutting
     the socket down from another thread makes the blocked read return.
     """
+    fired.set()
     sock = connection.sock
     if sock is None:
         return
@@ -292,7 +293,13 @@ def fetch_url(url: str, policy: FetchPolicy, resolver: Resolver = _default_resol
         timeout = min(CONNECT_TIMEOUT, remaining)
         connection_cls = _PinnedHTTPSConnection if target.scheme == "https" else _PinnedHTTPConnection
         connection = connection_cls(target, timeout)
-        watchdog = threading.Timer(max(0.0, deadline - time.monotonic()), _abort_connection, args=(connection,))
+        # The watchdog records that it fired: on Windows time.monotonic() has
+        # ~16 ms resolution, so after the timer aborts the read the clock may
+        # still read just below the deadline and the abort would be reported
+        # as a plain connection error.
+        fired = threading.Event()
+        watchdog = threading.Timer(max(0.0, deadline - time.monotonic()), _abort_connection,
+                                   args=(connection, fired))
         watchdog.daemon = True
         watchdog.start()
         try:
@@ -303,6 +310,9 @@ def fetch_url(url: str, policy: FetchPolicy, resolver: Resolver = _default_resol
                 "Connection": "close",
             })
             response = connection.getresponse()
+            if fired.is_set():
+                # The abort can look like a clean end of headers.
+                raise FetchError("aborted by the deadline watchdog")
             if response.status in {301, 302, 303, 307, 308}:
                 location = response.getheader("Location")
                 if not location:
@@ -317,6 +327,9 @@ def fetch_url(url: str, policy: FetchPolicy, resolver: Resolver = _default_resol
             if content_type and not content_type.startswith(_TEXTUAL_TYPES):
                 raise FetchError(f"Refusing non-text content type {content_type!r}")
             body, truncated = _read_body(response, policy, deadline)
+            if fired.is_set():
+                # Likewise for a body cut short by the abort.
+                raise FetchError("aborted by the deadline watchdog")
             return FetchResponse(
                 url=target.url, status=response.status, reason=response.reason or "",
                 content_type=content_type or "text/plain",
@@ -325,7 +338,7 @@ def fetch_url(url: str, policy: FetchPolicy, resolver: Resolver = _default_resol
                 elapsed_ms=round((time.monotonic() - started) * 1000, 1),
             )
         except (OSError, http.client.HTTPException, ssl.SSLError, FetchError) as exc:
-            if time.monotonic() >= deadline:
+            if fired.is_set() or time.monotonic() >= deadline:
                 raise FetchError(f"Deadline of {policy.deadline_seconds:g}s exceeded") from exc
             if isinstance(exc, FetchError):
                 raise
