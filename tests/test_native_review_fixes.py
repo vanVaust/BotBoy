@@ -509,3 +509,113 @@ class EighthReviewRoundTests(unittest.TestCase):
         with self.assertRaisesRegex(FetchError, "Deadline"):
             fetch_url(f"http://127.0.0.1:{port}/", policy)
         self.assertLess(time.perf_counter() - started, 1.5)
+
+
+class NinthReviewRoundTests(unittest.TestCase):
+    def _data(self, command: str, files: dict) -> dict:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            for name, content in files.items():
+                (root / name).write_text(content, encoding="utf-8")
+            return asyncio.run(data_skill.run(command, NativeSkillContext(workspace_root=root)))
+
+    def test_small_float_aggregates_are_not_rounded_away(self) -> None:
+        result = self._data("data query m.csv agg sum:v avg:v format json", {"m.csv": "v\n1e-12\n2e-12\n"})
+        row = result["data"]["rows"][0]
+        self.assertAlmostEqual(row["sum_v"], 3e-12, delta=1e-24)
+        self.assertAlmostEqual(row["avg_v"], 1.5e-12, delta=1e-24)
+        stats = self._data("data stats m.csv v", {"m.csv": "v\n1e-12\n2e-12\n"})
+        self.assertGreater(stats["data"]["stats"]["mean"] if "stats" in stats["data"] else stats["data"]["mean"], 0)
+
+    def test_long_header_names_do_not_inflate_rows(self) -> None:
+        from botboy.skills.native.base import format_table
+
+        long_key = "k" * 2_000_000
+        table = format_table([{long_key: 1}] + [{"short": 2}] * 99, [long_key, "short"])
+        self.assertLess(len(table), 20_000)
+        self.assertIn("k" * 39 + "…", table)
+
+    def test_unclosed_link_targets_are_linear(self) -> None:
+        from botboy.skills.native.textkit import strip_markup
+
+        started = time.perf_counter()
+        out = strip_markup("[](" * 650_000, ".md")
+        self.assertLess(time.perf_counter() - started, 2.0)
+        self.assertEqual(len(out), 3 * 650_000)
+        self.assertEqual(strip_markup("[a](x) [b](y", ".md"), "a [b](y")
+
+    def test_chunked_framing_drip_cannot_outlive_the_deadline(self) -> None:
+        import socket
+        import threading
+
+        from botboy.skills.native.fetch import FetchError, FetchPolicy, fetch_url
+
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+        stop = threading.Event()
+
+        def drip() -> None:
+            conn, _ = server.accept()
+            try:
+                conn.recv(4096)
+                conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n"
+                             b"Connection: close\r\n\r\n5")
+                while not stop.is_set():
+                    conn.sendall(b";x")  # endless chunk extension
+                    time.sleep(0.02)
+            except OSError:
+                pass
+            finally:
+                conn.close()
+
+        threading.Thread(target=drip, daemon=True).start()
+        self.addCleanup(server.close)
+        self.addCleanup(stop.set)
+        policy = FetchPolicy(allow_private_networks=True, allowed_ports=frozenset({port}), deadline_seconds=0.3)
+        started = time.perf_counter()
+        with self.assertRaises(FetchError):
+            fetch_url(f"http://127.0.0.1:{port}/", policy)
+        self.assertLess(time.perf_counter() - started, 1.5)
+
+
+class DeadlineClassificationTests(unittest.TestCase):
+    def test_watchdog_abort_is_reported_as_deadline_with_a_coarse_clock(self) -> None:
+        # Windows' monotonic clock ticks every ~15.6 ms, so right after the
+        # watchdog fires it can still read "before the deadline".
+        import itertools
+        from unittest import mock
+
+        from botboy.skills.native import fetch as fetch_mod
+
+        ticks = itertools.chain([100.0], itertools.repeat(100.0))
+        with mock.patch.object(fetch_mod.time, "monotonic", lambda: next(ticks)):
+            test = EighthReviewRoundTests("test_header_drip_cannot_outlive_the_deadline")
+            outcome = unittest.TestResult()
+            test.run(outcome)
+        self.assertEqual(outcome.failures + outcome.errors, [])
+
+
+class TenthReviewRoundTests(unittest.TestCase):
+    def test_comprehension_budget_is_enforced_while_building(self) -> None:
+        from botboy.skills.native.expr import ExprError, SafeEvaluator
+
+        started = time.perf_counter()
+        with self.assertRaisesRegex(ExprError, "expands to more than"):
+            SafeEvaluator().evaluate("[range(2**4000, 2**4000 + 10000) for i in range(10000)]")
+        self.assertLess(time.perf_counter() - started, 1.0)
+        value, _ = SafeEvaluator().evaluate("[[j for j in range(3)] for i in range(4)]")
+        self.assertEqual(value, [[0, 1, 2]] * 4)
+
+    def test_repeated_csv_columns_and_huge_cells_are_bounded(self) -> None:
+        import json as _json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "big.json").write_text(_json.dumps([{"f": "x" * 1_000_000}]), encoding="utf-8")
+            command = "data query big.json select " + ",".join(["f"] * 800) + " limit 1 format csv"
+            result = asyncio.run(data_skill.run(command, NativeSkillContext(workspace_root=root)))
+        self.assertTrue(result["success"], result["output"])
+        self.assertEqual(result["data"]["columns"], ["f"])
+        self.assertLess(len(result["output"]), 70_000)

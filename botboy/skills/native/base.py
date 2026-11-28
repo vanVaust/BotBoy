@@ -194,11 +194,14 @@ def format_table(rows: Sequence[Dict[str, Any]], columns: Sequence[str], *, max_
         return text if len(text) <= max_width else text[: max_width - 1] + "…"
 
     rendered = [[cell(row.get(col)) for col in columns] for row in rows]
-    widths = [len(col) for col in columns]
+    # Headers are capped like cells: one 2M-character key would otherwise
+    # pad every row to 2M characters.
+    headers = [cell(col) for col in columns]
+    widths = [len(col) for col in headers]
     for line in rendered:
         for idx, value in enumerate(line):
             widths[idx] = max(widths[idx], len(value))
-    header = " | ".join(col.ljust(widths[idx]) for idx, col in enumerate(columns))
+    header = " | ".join(col.ljust(widths[idx]) for idx, col in enumerate(headers))
     rule = "-+-".join("-" * width for width in widths)
     body = [" | ".join(value.ljust(widths[idx]) for idx, value in enumerate(line)) for line in rendered]
     return "\n".join([header, rule, *body])
