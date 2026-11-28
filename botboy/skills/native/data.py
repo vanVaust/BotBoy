@@ -69,6 +69,18 @@ class Dataset:
     truncated: bool = False
 
 
+def _finite_float(text: str) -> Any:
+    # 1e999 overflows to inf; non-finite numbers are not JSON and broke the
+    # strict API response renderer, so they stay as the original text.
+    number = float(text)
+    return number if math.isfinite(number) else text
+
+
+def _json_loads_finite(text: str) -> Any:
+    # JSON's own Infinity/NaN constants and overflowing literals likewise.
+    return json.loads(text, parse_float=_finite_float, parse_constant=lambda name: name)
+
+
 def _coerce_cell(value: str) -> Any:
     text = value.strip()
     if text == "":
@@ -78,7 +90,7 @@ def _coerce_cell(value: str) -> Any:
         # precision (1234567890123456789 == ...790 after rounding).
         return int(text) if len(text.lstrip("+-")) <= _MAX_INT_DIGITS else text
     if _FLOAT_RE.fullmatch(text):
-        return float(text)
+        return _finite_float(text)
     lowered = text.lower()
     if lowered in {"true", "false"}:
         return lowered == "true"
@@ -186,7 +198,7 @@ def load_dataset(ctx: NativeSkillContext, user_path: str, json_path: Optional[st
         return Dataset(rel, rows, columns, truncated)
     if suffix == ".json":
         try:
-            document = json.loads(text)
+            document = _json_loads_finite(text)
         except json.JSONDecodeError as exc:
             raise SkillUsageError(f"JSON parse error: {exc}") from exc
         records = _select_json_records(document, json_path)
@@ -196,7 +208,7 @@ def load_dataset(ctx: NativeSkillContext, user_path: str, json_path: Optional[st
             if not line.strip():
                 continue
             try:
-                records.append(json.loads(line))
+                records.append(_json_loads_finite(line))
             except json.JSONDecodeError as exc:
                 raise SkillUsageError(f"JSONL parse error on line {line_no}: {exc.msg}") from exc
             if len(records) > MAX_ROWS:
@@ -535,6 +547,14 @@ def execute_query(dataset: Dataset, query: Query) -> Tuple[List[Dict[str, Any]],
                         f"group by keys exceed {MAX_GROUP_KEY_CHARS} characters; group by fewer or shorter columns")
             buckets.setdefault(key, []).append(row)
             exemplars.setdefault(key, row)
+        # Identical aggregates add no information (600 x count); collapse
+        # them, and bound groups x output columns before materialising.
+        query.aggregates = list(dict.fromkeys(query.aggregates))
+        width = len(query.group_by) + len(query.aggregates)
+        if len(buckets) * width > MAX_GROUPED_CELLS:
+            raise SkillUsageError(
+                f"{len(buckets)} groups x {width} columns exceed {MAX_GROUPED_CELLS} result cells; "
+                "filter with where or aggregate fewer columns")
         agg_names = _distinct_agg_names(query.aggregates, taken=query.group_by)
         grouped: List[Dict[str, Any]] = []
         for key, members in buckets.items():
@@ -545,6 +565,7 @@ def execute_query(dataset: Dataset, query: Query) -> Tuple[List[Dict[str, Any]],
         rows = grouped
         columns = query.group_by + agg_names
     elif query.aggregates:
+        query.aggregates = list(dict.fromkeys(query.aggregates))
         agg_names = _distinct_agg_names(query.aggregates, taken=[])
         rows = [{name: _aggregate(func, column, rows) for name, (func, column) in zip(agg_names, query.aggregates)}]
         columns = list(agg_names)
@@ -598,6 +619,7 @@ def _bounded_render(rows: List[Dict[str, Any]], columns: List[str], output_forma
 
 MAX_CSV_OUTPUT_CHARS = 64 * 1024
 MAX_GROUP_KEY_CHARS = 8 * 1024 * 1024
+MAX_GROUPED_CELLS = 2_000_000
 MAX_CSV_CELL_CHARS = 16 * 1024
 
 
