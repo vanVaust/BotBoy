@@ -550,6 +550,9 @@ def execute_query(dataset: Dataset, query: Query) -> Tuple[List[Dict[str, Any]],
         value_rows.sort(key=_sort_key(column), reverse=descending)
         rows = value_rows + none_rows
     if query.select:
+        # Repeating a column adds no information but multiplies output
+        # (800 copies of a 1 MB field); keep the first occurrence.
+        query.select = list(dict.fromkeys(query.select))
         for column in query.select:
             if column not in columns:
                 raise SkillUsageError(f"Cannot select unknown column {column!r}; available: {', '.join(columns[:40])}")
@@ -584,15 +587,36 @@ def _bounded_render(rows: List[Dict[str, Any]], columns: List[str], output_forma
     return body, columns
 
 
+MAX_CSV_OUTPUT_CHARS = 64 * 1024
+MAX_CSV_CELL_CHARS = 16 * 1024
+
+
+def _cap_cell(value: Any) -> Any:
+    if isinstance(value, str) and len(value) > MAX_CSV_CELL_CHARS:
+        return value[:MAX_CSV_CELL_CHARS] + "…"
+    return value
+
+
 def render_rows(rows: List[Dict[str, Any]], columns: List[str], output_format: str) -> str:
     if output_format == "json":
         return json.dumps(rows, ensure_ascii=False, indent=2, default=str)
     if output_format == "csv":
+        # Output is truncated to a few KB later; bound the bytes built here
+        # first: cells are capped and rows stop once the budget is spent.
         buffer = io.StringIO()
         writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore", lineterminator="\n")
         writer.writeheader()
-        writer.writerows(rows)
-        return buffer.getvalue().rstrip("\n")
+        written = 0
+        for written, row in enumerate(rows, start=1):
+            writer.writerow({col: _cap_cell(row.get(col)) for col in columns})
+            if buffer.tell() > MAX_CSV_OUTPUT_CHARS:
+                break
+        else:
+            written = len(rows)
+        text = buffer.getvalue().rstrip("\n")
+        if written < len(rows):
+            text += f"\n(csv output stopped after {written} of {len(rows)} rows: output budget)"
+        return text
     return format_table(rows, columns) if rows else "(no rows)"
 
 

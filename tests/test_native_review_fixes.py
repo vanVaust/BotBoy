@@ -551,3 +551,27 @@ class DeadlineClassificationTests(unittest.TestCase):
             outcome = unittest.TestResult()
             test.run(outcome)
         self.assertEqual(outcome.failures + outcome.errors, [])
+
+
+class TenthReviewRoundTests(unittest.TestCase):
+    def test_comprehension_budget_is_enforced_while_building(self) -> None:
+        from botboy.skills.native.expr import ExprError, SafeEvaluator
+
+        started = time.perf_counter()
+        with self.assertRaisesRegex(ExprError, "expands to more than"):
+            SafeEvaluator().evaluate("[range(2**4000, 2**4000 + 10000) for i in range(10000)]")
+        self.assertLess(time.perf_counter() - started, 1.0)
+        value, _ = SafeEvaluator().evaluate("[[j for j in range(3)] for i in range(4)]")
+        self.assertEqual(value, [[0, 1, 2]] * 4)
+
+    def test_repeated_csv_columns_and_huge_cells_are_bounded(self) -> None:
+        import json as _json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "big.json").write_text(_json.dumps([{"f": "x" * 1_000_000}]), encoding="utf-8")
+            command = "data query big.json select " + ",".join(["f"] * 800) + " limit 1 format csv"
+            result = asyncio.run(data_skill.run(command, NativeSkillContext(workspace_root=root)))
+        self.assertTrue(result["success"], result["output"])
+        self.assertEqual(result["data"]["columns"], ["f"])
+        self.assertLess(len(result["output"]), 70_000)
