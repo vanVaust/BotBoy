@@ -627,3 +627,42 @@ class EleventhReviewRoundTests(unittest.TestCase):
 
         result = asyncio.run(expr_skill.run("expr [1, inf]", NativeSkillContext(workspace_root=Path("."))))
         _json.dumps(result.get("data"), allow_nan=False)  # must not raise
+
+
+class TwelfthReviewRoundTests(unittest.TestCase):
+    def _run(self, command: str, files: dict) -> dict:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            for name, content in files.items():
+                (root / name).write_text(content, encoding="utf-8")
+            return asyncio.run(data_skill.run(command, NativeSkillContext(workspace_root=root)))
+
+    def test_repeated_aggregates_and_grouped_cells_are_bounded(self) -> None:
+        from unittest import mock
+
+        from botboy.skills.native import data as data_mod
+
+        ids = "id\n" + "\n".join(str(i) for i in range(20_000)) + "\n"
+        result = self._run("data query ids.csv group by id agg " + " ".join(["count"] * 600) + " limit 1",
+                           {"ids.csv": ids})
+        self.assertTrue(result["success"], result["output"])
+        self.assertEqual(set(result["data"]["rows"][0]), {"id", "count"})
+        with mock.patch.object(data_mod, "MAX_GROUPED_CELLS", 1000):
+            refused = self._run("data query ids.csv group by id agg count", {"ids.csv": ids})
+        self.assertFalse(refused["success"])
+        self.assertIn("result cells", refused["output"])
+
+    def test_non_finite_numbers_never_reach_structured_results(self) -> None:
+        import json as _json
+
+        files = {"n.csv": "v\n1e999\n-1e999\n2\n",
+                 "n.json": '[{"v": 1e999}, {"v": Infinity}, {"v": NaN}, {"v": 2.5}]',
+                 "n.jsonl": '{"v": -Infinity}\n{"v": 1}\n'}
+        for path in files:
+            for command in (f"data head {path}", f"data query {path}", f"data schema {path}"):
+                with self.subTest(command=command):
+                    result = self._run(command, files)
+                    self.assertTrue(result["success"], result["output"])
+                    _json.dumps(result.get("data"), allow_nan=False)  # must not raise
+        values = [row["v"] for row in self._run("data head n.csv", files)["data"]["rows"]]
+        self.assertEqual(values, ["1e999", "-1e999", 2])
