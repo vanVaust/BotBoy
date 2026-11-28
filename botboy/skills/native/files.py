@@ -255,16 +255,18 @@ def _analyse(ctx: NativeSkillContext, action: str, args: List[str]) -> dict:
         )
     size = opts.get_int("size", 1200, minimum=50, maximum=20000)
     overlap = opts.get_int("overlap", min(150, size // 4), minimum=0, maximum=size - 1)
-    chunks = textkit.chunk_text(raw, size, overlap)
+    spans = textkit.chunk_spans(raw, size, overlap)
+    total = len(spans)
+    chunks = [textkit.Chunk(i, start, end, raw[start:end]) for i, (start, end) in enumerate(spans[:200])]
     preview = "\n".join(
         f"#{chunk.index} [{chunk.start}:{chunk.end}] {len(chunk.text)} chars: {' '.join(chunk.text.split())[:80]}"
         for chunk in chunks[:50]
     )
     return result(
-        "ws", f"{rel}{note}: {len(chunks)} chunk(s) (size<={size}, overlap<={overlap})\n{preview}",
+        "ws", f"{rel}{note}: {total} chunk(s) (size<={size}, overlap<={overlap})\n{preview}",
         action=action, path=rel, size=size, overlap=overlap,
         chunks=[{"index": c.index, "start": c.start, "end": c.end, "text": c.text} for c in chunks[:200]],
-        total_chunks=len(chunks),
+        total_chunks=total,
     )
 
 

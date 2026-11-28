@@ -17,7 +17,7 @@ import math
 import re
 from collections import Counter
 from dataclasses import dataclass
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 STOPWORDS_EN = frozenset("""
 a about above after again against all also am an and any are aren't as at be because been before being
@@ -296,13 +296,13 @@ class Chunk:
     text: str
 
 
-def chunk_text(text: str, max_chars: int = 1200, overlap_chars: int = 150) -> List[Chunk]:
-    """Greedy sentence-aware chunking with sentence-level overlap.
+def chunk_spans(text: str, max_chars: int = 1200, overlap_chars: int = 150) -> List[Tuple[int, int]]:
+    """Offsets of the chunks ``chunk_text`` would build, without copying text.
 
-    Chunks never cut a sentence unless the sentence alone exceeds
-    ``max_chars``; then it is split at word boundaries. Consecutive chunks
-    share the trailing sentences of the previous chunk that fit into
-    ``overlap_chars``, which keeps context for retrieval without duplication.
+    With an overlap close to the chunk size almost every chunk repeats the
+    previous one, so materialising all of them costs O(chunks x size)
+    memory; callers that keep a prefix take the offsets and slice only that.
+    The sliding window over sentence units is amortised O(units).
     """
     if max_chars < 50:
         raise ValueError("max_chars must be >= 50")
@@ -319,17 +319,37 @@ def chunk_text(text: str, max_chars: int = 1200, overlap_chars: int = 150) -> Li
                 start += 1
         if end > start:
             units.append((start, end))
-    chunks: List[Chunk] = []
-    current: List[Tuple[int, int]] = []
-    for unit in units:
-        if current and unit[1] - current[0][0] > max_chars:
-            chunks.append(Chunk(len(chunks), current[0][0], current[-1][1], text[current[0][0]:current[-1][1]]))
-            carried = [span for span in current if current[-1][1] - span[0] <= overlap_chars]
-            current = carried if carried and unit[1] - carried[0][0] <= max_chars else []
-        current.append(unit)
-    if current:
-        chunks.append(Chunk(len(chunks), current[0][0], current[-1][1], text[current[0][0]:current[-1][1]]))
-    return chunks
+    spans: List[Tuple[int, int]] = []
+    lo = 0  # the current chunk is units[lo:i]
+    for i, unit in enumerate(units):
+        if i > lo and unit[1] - units[lo][0] > max_chars:
+            spans.append((units[lo][0], units[i - 1][1]))
+            # Carry the trailing units that fit in the overlap: a suffix,
+            # because units are ordered by start.
+            chunk_end = units[i - 1][1]
+            carry = lo
+            while carry < i and chunk_end - units[carry][0] > overlap_chars:
+                carry += 1
+            lo = carry if carry < i and unit[1] - units[carry][0] <= max_chars else i
+    if lo < len(units):
+        spans.append((units[lo][0], units[-1][1]))
+    return spans
+
+
+def chunk_text(text: str, max_chars: int = 1200, overlap_chars: int = 150,
+               limit: Optional[int] = None) -> List[Chunk]:
+    """Greedy sentence-aware chunking with sentence-level overlap.
+
+    Chunks never cut a sentence unless the sentence alone exceeds
+    ``max_chars``; then it is split at word boundaries. Consecutive chunks
+    share the trailing sentences of the previous chunk that fit into
+    ``overlap_chars``, which keeps context for retrieval without duplication.
+    ``limit`` materialises only the first chunks.
+    """
+    spans = chunk_spans(text, max_chars, overlap_chars)
+    if limit is not None:
+        spans = spans[:limit]
+    return [Chunk(index, start, end, text[start:end]) for index, (start, end) in enumerate(spans)]
 
 
 @dataclass(frozen=True)

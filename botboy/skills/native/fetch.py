@@ -31,6 +31,7 @@ import json
 import re
 import socket
 import ssl
+import threading
 import time
 import zlib
 from dataclasses import dataclass, field
@@ -260,6 +261,22 @@ def _read_body(response: http.client.HTTPResponse, policy: FetchPolicy, deadline
     return bytes(output[: policy.max_bytes]), truncated
 
 
+def _abort_connection(connection: http.client.HTTPConnection) -> None:
+    """Deadline watchdog: unblock a read that keeps receiving a byte at a time.
+
+    Socket timeouts are per receive, so a peer dripping header bytes faster
+    than the timeout keeps ``getresponse()`` alive indefinitely; shutting
+    the socket down from another thread makes the blocked read return.
+    """
+    sock = connection.sock
+    if sock is None:
+        return
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+
+
 def fetch_url(url: str, policy: FetchPolicy, resolver: Resolver = _default_resolver) -> FetchResponse:
     """Blocking fetch with per-hop validation; run it off the event loop."""
     started = time.monotonic()
@@ -275,6 +292,9 @@ def fetch_url(url: str, policy: FetchPolicy, resolver: Resolver = _default_resol
         timeout = min(CONNECT_TIMEOUT, remaining)
         connection_cls = _PinnedHTTPSConnection if target.scheme == "https" else _PinnedHTTPConnection
         connection = connection_cls(target, timeout)
+        watchdog = threading.Timer(max(0.0, deadline - time.monotonic()), _abort_connection, args=(connection,))
+        watchdog.daemon = True
+        watchdog.start()
         try:
             connection.request("GET", target.path, headers={
                 "User-Agent": USER_AGENT,
@@ -304,9 +324,14 @@ def fetch_url(url: str, policy: FetchPolicy, resolver: Resolver = _default_resol
                 body=body, truncated=truncated, redirects=redirects,
                 elapsed_ms=round((time.monotonic() - started) * 1000, 1),
             )
-        except (OSError, http.client.HTTPException, ssl.SSLError) as exc:
+        except (OSError, http.client.HTTPException, ssl.SSLError, FetchError) as exc:
+            if time.monotonic() >= deadline:
+                raise FetchError(f"Deadline of {policy.deadline_seconds:g}s exceeded") from exc
+            if isinstance(exc, FetchError):
+                raise
             raise FetchError(f"Request to {target.host} failed: {exc.__class__.__name__}: {exc}") from exc
         finally:
+            watchdog.cancel()
             connection.close()
     raise FetchError(f"More than {MAX_REDIRECTS} redirects")
 

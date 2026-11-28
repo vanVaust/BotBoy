@@ -405,3 +405,63 @@ class SeventhReviewRoundTests(unittest.TestCase):
         self.assertEqual(names[:3], ["a", "a_2", "a_3"])
         self.assertEqual(len(set(names)), 200_000)
         self.assertEqual(_distinct_headers(["a", "a_2", "a"]), ["a", "a_2", "a_3"])
+
+
+class EighthReviewRoundTests(unittest.TestCase):
+    def test_wide_csv_loads_linearly(self) -> None:
+        header = ",".join(f"c{i}" for i in range(50_000))
+        row = ",".join("1" for _ in range(50_000))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "wide.csv").write_text(header + "\n" + row + "\n", encoding="utf-8")
+            started = time.perf_counter()
+            dataset = data_skill.load_dataset(NativeSkillContext(workspace_root=root), "wide.csv", None)
+        self.assertLess(time.perf_counter() - started, 3.0)
+        self.assertEqual(len(dataset.columns), 50_000)
+
+    def test_high_overlap_chunking_materialises_only_the_kept_prefix(self) -> None:
+        from botboy.skills.native import textkit
+
+        text = "Hello. " * 40_000
+        started = time.perf_counter()
+        spans = textkit.chunk_spans(text, 20_000, 19_990)
+        kept = textkit.chunk_text(text, 20_000, 19_990, limit=200)
+        self.assertLess(time.perf_counter() - started, 3.0)
+        self.assertGreater(len(spans), 10_000)
+        self.assertEqual(len(kept), 200)
+        self.assertEqual(sum(len(c.text) for c in kept), sum(end - start for start, end in spans[:200]))
+
+    def test_header_drip_cannot_outlive_the_deadline(self) -> None:
+        import socket
+        import threading
+
+        from botboy.skills.native.fetch import FetchError, FetchPolicy, fetch_url
+
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+        stop = threading.Event()
+
+        def drip() -> None:
+            conn, _ = server.accept()
+            try:
+                conn.recv(4096)
+                conn.sendall(b"HTTP/1.1 200 OK\r\n")
+                while not stop.is_set():
+                    conn.sendall(b"X-Drip: 1\r\n")
+                    time.sleep(0.02)
+            except OSError:
+                pass
+            finally:
+                conn.close()
+
+        thread = threading.Thread(target=drip, daemon=True)
+        thread.start()
+        self.addCleanup(server.close)
+        self.addCleanup(stop.set)
+        policy = FetchPolicy(allow_private_networks=True, allowed_ports=frozenset({port}), deadline_seconds=0.3)
+        started = time.perf_counter()
+        with self.assertRaisesRegex(FetchError, "Deadline"):
+            fetch_url(f"http://127.0.0.1:{port}/", policy)
+        self.assertLess(time.perf_counter() - started, 1.5)
