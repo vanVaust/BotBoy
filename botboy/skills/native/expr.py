@@ -458,12 +458,21 @@ class SafeEvaluator:
 
     def _comprehension(self, node: Any, variables: Dict[str, Any], budget: _Budget) -> List[Any]:
         output: List[Any] = []
+        cap = self.limits.max_total_elements
+        expanded = [0]  # running expanded size of ``output``
 
         def run(generators: List[ast.comprehension], scope: Dict[str, Any]) -> None:
             if not generators:
-                output.append(self._eval(node.elt, scope, budget))
+                item = self._eval(node.elt, scope, budget)
+                output.append(item)
                 if len(output) > self.limits.max_sequence:
                     raise ExprError(f"Sequence longer than {self.limits.max_sequence} elements")
+                # Checked per append: each element can be an independently
+                # allocated sequence, so validating only the finished list let
+                # 10k ranges of 10k bigints exhaust memory first.
+                expanded[0] += 1 + expanded_size(item, cap - expanded[0])
+                if expanded[0] > cap:
+                    raise ExprError(f"Nested sequence expands to more than {cap} elements")
                 return
             generator, rest = generators[0], generators[1:]
             if generator.is_async:
