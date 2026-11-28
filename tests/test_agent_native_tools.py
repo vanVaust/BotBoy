@@ -154,8 +154,14 @@ class CompilationTests(unittest.TestCase):
                     values = {p: _sample(tool, p, value) for p in tool.params}
                     try:
                         command = tool.build_command(values)
-                    except ToolArgumentError:
-                        self.assertTrue(any("|||" in v for v in values.values()))
+                    except ToolArgumentError as exc:
+                        # Refused only for separators, or because a control
+                        # value would be rewritten by sanitising.
+                        rewritten = any(
+                            spec.kind == "control"
+                            and sanitize_argument(values[p], spec.max_chars, p) != values[p].strip()
+                            for p, spec in tool.params.items())
+                        self.assertTrue(any("|||" in v for v in values.values()) or rewritten, str(exc))
                         continue
                     self.assertTrue(command.startswith(tool.fixed_prefix + " "))
                     self.assertEqual(command.split()[0], tool.skill)
@@ -180,6 +186,46 @@ class CompilationTests(unittest.TestCase):
                 break
             words.append(word)
         return words
+
+    def test_control_arguments_are_never_silently_rewritten(self):
+        # Review finding: sanitising collapsed "Alice  Smith" to "Alice Smith"
+        # inside an SQL literal and the query silently answered differently.
+        tools = native_tools()
+        sql = tools["sqlite.query"]
+        for bad in ("SELECT 1 FROM t WHERE name = 'Alice  Smith'",
+                    "SELECT 1 FROM t WHERE name = 'a\tb'",
+                    'SELECT "my  col" FROM t',
+                    "SELECT [a\nb] FROM t",
+                    "SELECT 1 -- note\nFROM t",
+                    "SELECT 'ﬁ' FROM t",           # NFKC would turn the ligature into "fi"
+                    "SELECT 'a\u200bb' FROM t"):    # zero-width space would be dropped
+            with self.subTest(sql=bad), self.assertRaises(ToolArgumentError):
+                sql.build_command({"file": "crm.db", "sql": bad})
+        # Layout-only whitespace outside literals is fine and keeps the meaning.
+        command = sql.build_command({
+            "file": "crm.db",
+            "sql": "SELECT name,\n  count(*)\nFROM t WHERE note = 'it''s ok' /* x\n y */ -- end",
+        })
+        self.assertEqual(command, "sqlite query crm.db SELECT name, count(*) FROM t WHERE note = 'it''s ok' /* x y */ -- end")
+        for tool_name, values in (("ws.read", {"path": "my  notes.md"}), ("ws.read", {"path": "a\nb.md"}),
+                                  ("fetch.url", {"url": "https://example.org/a\u200b"}),
+                                  ("ws.grep", {"pattern": "a  b", "path": "."}),
+                                  ("data.query", {"file": "f.csv", "query": "where name == 'a  b'"}),
+                                  ("archive.read", {"file": "a.zip", "member": "dir/ﬁle.txt"})):
+            with self.subTest(tool=tool_name, values=values), self.assertRaises(ToolArgumentError):
+                tools[tool_name].build_command(values)
+        # Data arguments are still flattened (documented): they only feed computations.
+        self.assertEqual(tools["text.stats"].build_command({"text": "a\n\nb"}), "text stats a b")
+
+    def test_sql_transport_check_is_linear(self):
+        import time
+
+        from botboy.agent.native_tools import sql_transport_problem
+
+        started = time.perf_counter()
+        self.assertEqual(sql_transport_problem("SELECT " + "'x' || " * 20_000 + "'y'"), "")
+        self.assertEqual(sql_transport_problem("/*" * 50_000), "")
+        self.assertLess(time.perf_counter() - started, 2)
 
     def test_word_arguments_cannot_become_options(self):
         tool = native_tools()["ws.read"]

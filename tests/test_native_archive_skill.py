@@ -233,6 +233,35 @@ class ZipTests(ArchiveTestCase):
         self.assertIn("central directory larger", out["output"])
         self.assertEqual(self.listing("many.zip")["data"]["entries"], 2000)
 
+    def test_member_data_may_not_run_into_the_central_directory(self) -> None:
+        # Review finding: compress_size extended into the central directory
+        # verified as ok (inflate stops at its own end marker); zipfile's
+        # extractor rejects it as "Overlapped entries".
+        original = zip_bytes([("a.txt", b"hello " * 200)])
+        compressed = zipfile.ZipFile(io.BytesIO(original)).getinfo("a.txt").compress_size
+        self.put("intocd.zip", patch_central(original, 0, compressed=compressed + 20))
+        check = run("archive check intocd.zip", self.ctx)
+        self.assertEqual(check["data"]["verdict"], "unsafe", check["output"])
+        self.assertIn("overlap", self.flags_of(check)["a.txt"])
+        self.assertIn("runs into the central directory", run("archive list intocd.zip", self.ctx)["output"])
+        self.assertEqual(self.listing(self.put("plain.zip", original))["data"]["verdict"], "ok")
+
+    def test_malformed_lzma_properties_are_an_archive_error(self) -> None:
+        # Review finding: properties byte 8 (lc=8) passed the range check and
+        # LZMADecompressor() raised an uncaught LZMAError.
+        data = bytearray(zip_bytes([("l.txt", b"lzma " * 100, zipfile.ZIP_LZMA)]))
+        props = data.find(b"\x5d", 30)
+        data[props] = 8
+        self.put("props.zip", bytes(data))
+        for command in ("archive check props.zip", "archive read props.zip l.txt"):
+            with self.subTest(command=command):
+                out = run(command, self.ctx)
+                self.assertTrue(out["output"].startswith(("archive", "props.zip")), out["output"])
+                if out["success"]:
+                    self.assertEqual(out["data"]["verdict"], "unsafe")
+                else:
+                    self.assertIn("LZMA", out["output"])
+
     def test_lzma_dictionary_cap(self) -> None:
         data = bytearray(zip_bytes([("l.txt", b"lzma " * 100, zipfile.ZIP_LZMA)]))
         props = data.find(b"\x5d", 30)  # lc=3 lp=0 pb=2 properties byte after the 4-byte header
@@ -441,6 +470,61 @@ class TarTests(ArchiveTestCase):
         out = run("archive list sparse.tar.gz", self.ctx)
         self.assertFalse(out["success"])
         self.assertIn("headers of one member exceed", out["output"])
+
+    def test_invalid_header_after_the_first_member_is_not_end_of_archive(self) -> None:
+        # Review finding: tarfile.next() returns None on a bad checksum after
+        # member 1, which certified the intact prefix as a complete archive.
+        data = bytearray(tar_bytes([(tinfo("a.txt", 3), b"aaa"), (tinfo("b.txt", 3), b"bbb")]))
+        data[1024] ^= 0x01  # first byte of the second header's name; checksum now wrong
+        for name, blob in (("bad.tar", bytes(data)), ("bad.tar.gz", gzip.compress(bytes(data))),
+                           ("cut.tar", bytes(data[:1024 + 300]))):
+            with self.subTest(name=name):
+                self.put(name, blob)
+                check = run(f"archive check {name}", self.ctx)
+                self.assertTrue(check["success"], check["output"])
+                self.assertEqual(check["data"]["verdict"], "unsafe")
+                self.assertTrue(check["data"]["incomplete"])
+                self.assertEqual(check["data"]["verified"], 0)
+        self.assertIn("invalid tar header at offset 1024", run("archive list bad.tar", self.ctx)["output"])
+        self.assertIn("truncated inside a header", run("archive list cut.tar", self.ctx)["output"])
+        # A missing end marker (input ends at a member boundary) is a normal end.
+        intact = tar_bytes([(tinfo("a.txt", 3), b"aaa")])
+        self.put("noend.tar", intact[:1024])
+        self.assertEqual(self.listing("noend.tar")["data"]["verdict"], "ok")
+
+    def test_chained_long_name_headers_fail_cleanly(self) -> None:
+        # Review finding: 500 chained GNU long-name headers raised an uncaught
+        # RecursionError.
+        chain = b"".join(
+            tarfile.TarInfo._create_gnu_long_header("x" * 600, tarfile.GNUTYPE_LONGNAME, "utf-8", "surrogateescape")
+            for _ in range(500))
+        self.put("chain.tar", chain + tinfo("final").tobuf(tarfile.GNU_FORMAT) + bytes(1024))
+        self.put("chain.tar.gz", gzip.compress(chain + tinfo("final").tobuf(tarfile.GNU_FORMAT) + bytes(1024)))
+        for name in ("chain.tar", "chain.tar.gz"):
+            for action in ("list", "check", "read"):
+                with self.subTest(name=name, action=action):
+                    out = run(f"archive {action} {name}" + (" final" if action == "read" else ""), self.ctx)
+                    self.assertFalse(out["success"])
+                    self.assertTrue(out["output"].startswith("archive:"), out["output"])
+
+    def test_deep_names_resolve_in_linear_time_within_the_budget(self) -> None:
+        # Review finding: 'a/' * 64000 + 'f' took 21 s (prefix rebuilt per
+        # component) and ignored the 15 s deadline.
+        deep = "a/" * 64000 + "f"
+        self.put("deep.tar", tar_bytes([(tinfo(deep, 0), b""), (tinfo("a", type_=tarfile.SYMTYPE, link="."), None),
+                                        (tinfo(deep + "2", 0), b"")]))
+        started = time.perf_counter()
+        out = self.listing("deep.tar")
+        self.assertLess(time.perf_counter() - started, 5)
+        self.assertEqual(out["data"]["entries"], 3)
+        resolver = archive.LinkResolver(archive.Budget(deadline_s=0.0))
+        with self.assertRaises(archive.BudgetExceeded):
+            resolver.resolve(["a"] * 5000, follow_last=True)
+        entries = [archive.Entry(deep, "file", 0)]
+        with mock.patch.object(archive, "DEADLINE_S", 0.0):
+            reasons = archive.analyse(entries, archive.Budget())
+        self.assertTrue(any("could not be resolved" in reason for reason in reasons))
+        self.assertIn("link-unresolved", entries[0].flags)
 
     def test_entry_cap(self) -> None:
         self.put("n.tar", tar_bytes([(tinfo(f"f{i}"), b"") for i in range(50)]))

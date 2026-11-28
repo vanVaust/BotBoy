@@ -65,6 +65,7 @@ DEADLINE_S = 15.0
 MAX_CENTRAL_DIRECTORY_BYTES = 4 * 1024 * 1024
 MAX_HEADER_READ_BYTES = 256 * 1024
 MAX_MEMBER_HEADER_BYTES = 1024 * 1024
+MAX_HEADER_CHAIN = 16  # pax + GNU long name + long link need 3
 MAX_SCAN_ENTRIES = 100_000
 MAX_LISTED_ENTRIES = 1_000
 MAX_SHOWN_LINES = 200
@@ -297,6 +298,10 @@ class TarStream:
         # Bytes tarfile may still read while parsing one member's headers
         # (None outside header parsing); see _GuardedTarInfo.
         self.header_allowance: Optional[int] = None
+        self.header_depth = 0
+        # (offset, bytes) of the most recent read: after tarfile stops, this
+        # is the block it could not parse (see _check_end_of_archive).
+        self.last_read: Tuple[int, bytes] = (-1, b"")
 
     @property
     def trailing_garbage(self) -> bool:
@@ -330,6 +335,7 @@ class TarStream:
             chunks.append(data)
             remaining -= len(data)
         data = b"".join(chunks)
+        self.last_read = (self._position, data)
         self._position += len(data)
         return data
 
@@ -462,6 +468,16 @@ def _is_absolute(path: str) -> bool:
     return path.startswith(("/", "\\")) or bool(_DRIVE.match(path))
 
 
+class _Node:
+    """One path component of the simulated extraction tree."""
+
+    __slots__ = ("children", "link")
+
+    def __init__(self) -> None:
+        self.children: Dict[str, "_Node"] = {}
+        self.link: Optional[str] = None
+
+
 class LinkResolver:
     """Simulates how extraction follows symlinks created by earlier members.
 
@@ -470,22 +486,31 @@ class LinkResolver:
     destination although no single name or target looks unsafe. Paths are
     resolved component by component through the links recorded so far (in
     archive order, at their resolved locations), so such chains are caught.
-    Hops per path and total work are bounded; exceeding them is reported.
+
+    The tree is a trie of components, so each component costs one dict
+    lookup (no prefix strings are rebuilt or hashed, which made deep names
+    quadratic). Hops per path and total steps are bounded, and the shared
+    archive time budget is checked while resolving.
     """
 
-    def __init__(self) -> None:
-        self.links: Dict[str, str] = {}
+    def __init__(self, budget: Optional["Budget"] = None) -> None:
+        self.root = _Node()
         self.steps = LINK_RESOLUTION_STEPS
+        self.budget = budget
+        self.has_links = False
 
-    def resolve(self, parts: List[str], *, follow_last: bool) -> Optional[List[str]]:
-        """Resolved components below the root, or ``None`` if the path escapes."""
+    def resolve(self, parts: List[str], *, follow_last: bool,
+                start: Optional[List[_Node]] = None) -> Optional[List[_Node]]:
+        """Node path below the root, or ``None`` if the path escapes."""
         stack = list(reversed(parts))
-        current: List[str] = []
+        current: List[_Node] = list(start or [])
         hops = 0
         while stack:
             self.steps -= 1
             if self.steps < 0:
                 raise _Unresolvable("link resolution budget exhausted")
+            if self.budget is not None and not self.steps & 1023:
+                self.budget.tick()
             part = stack.pop()
             if part in {"", "."}:
                 continue
@@ -494,22 +519,24 @@ class LinkResolver:
                     return None
                 current.pop()
                 continue
-            key = "/".join(current + [part])
-            target = self.links.get(key)
-            if target is not None and (follow_last or stack):
+            parent = current[-1] if current else self.root
+            node = parent.children.get(part)
+            if node is None:
+                node = parent.children[part] = _Node()
+            if node.link is not None and (follow_last or stack):
                 hops += 1
                 if hops > MAX_LINK_HOPS:
                     raise _Unresolvable(f"more than {MAX_LINK_HOPS} link hops (loop?)")
-                if _is_absolute(target):
+                if _is_absolute(node.link):
                     return None
                 # Relative to the directory holding the link (``current``).
-                stack.extend(reversed(_parts(target) or ["."]))
+                stack.extend(reversed(_parts(node.link) or ["."]))
                 continue
-            current.append(part)
+            current.append(node)
         return current
 
     def check(self, entry: "Entry") -> List[str]:
-        """Flags for ``entry``; records it when it is a symlink."""
+        """Flags for ``entry``; records it when it is a symlink or an alias of one."""
         parts = _parts(entry.name)
         flags: List[str] = []
         if not parts or _is_absolute(entry.name):
@@ -517,16 +544,19 @@ class LinkResolver:
         location = self.resolve(parts, follow_last=False)
         if location is None:
             return ["link-traversal"]
-        if self.links and entry.kind in {"file", "hardlink"}:
+        if not location:
+            return flags  # the name resolves to the root itself
+        if self.has_links and entry.kind in {"file", "hardlink"}:
             # Writing a file through a final component that is a symlink
             # writes to the link's target.
             if self.resolve(parts, follow_last=True) is None:
                 flags.append("link-traversal")
         if entry.kind == "symlink":
-            if self.resolve(location[:-1] + (_parts(entry.link) or ["."]), follow_last=True) is None \
-                    or _is_absolute(entry.link):
+            if _is_absolute(entry.link) or self.resolve(_parts(entry.link) or ["."], follow_last=True,
+                                                        start=location[:-1]) is None:
                 flags.append("link-escapes")
-            self.links["/".join(location)] = entry.link
+            location[-1].link = entry.link
+            self.has_links = True
         elif entry.kind == "hardlink" and entry.link:
             if _is_absolute(entry.link) or self.resolve(_parts(entry.link), follow_last=True) is None:
                 flags.append("link-escapes")
@@ -535,17 +565,16 @@ class LinkResolver:
                 # symlink (extractors link the link itself): record the alias
                 # so later paths through it resolve like the original.
                 target = self.resolve(_parts(entry.link), follow_last=False)
-                aliased = self.links.get("/".join(target)) if target is not None else None
-                if aliased is not None:
-                    self.links["/".join(location)] = aliased
+                if target and target[-1].link is not None:
+                    location[-1].link = target[-1].link
         return flags
 
 
-def analyse(entries: List[Entry]) -> List[str]:
+def analyse(entries: List[Entry], budget: Optional["Budget"] = None) -> List[str]:
     """Flag entries in place; returns archive-level reasons."""
     seen: Dict[str, int] = {}
     folded: Dict[str, str] = {}
-    resolver: Optional[LinkResolver] = LinkResolver()
+    resolver: Optional[LinkResolver] = LinkResolver(budget)
     extra: List[str] = []
     for entry in entries:
         entry.flags[:0] = [flag for flag in _path_flags(entry.name) if flag not in entry.flags]
@@ -557,7 +586,7 @@ def analyse(entries: List[Entry]) -> List[str]:
                     lexical = flag == "link-traversal" and "traversal" in entry.flags
                     if flag not in entry.flags and not lexical:
                         entry.flags.append(flag)
-            except _Unresolvable as exc:
+            except (_Unresolvable, BudgetExceeded) as exc:
                 extra.append(f"UNSAFE links could not be resolved: {exc}")
                 entry.flags.append("link-unresolved")
                 resolver = None
@@ -735,7 +764,10 @@ def _zip_inflater(info: zipfile.ZipInfo, first: bytes) -> Tuple[Optional[Any], i
             raise ArchiveError(f"LZMA dictionary of {dict_size} bytes exceeds {LZMA_MAX_DICT} bytes")
         filters = [{"id": lzma.FILTER_LZMA1, "dict_size": max(dict_size, 4096),
                     "lc": lclppb % 9, "lp": (lclppb // 9) % 5, "pb": lclppb // 45}]
-        decoder = lzma.LZMADecompressor(format=lzma.FORMAT_RAW, filters=filters)
+        try:
+            decoder = lzma.LZMADecompressor(format=lzma.FORMAT_RAW, filters=filters)
+        except (lzma.LZMAError, ValueError, MemoryError) as exc:
+            raise ArchiveError(f"unsupported LZMA properties: {exc}") from exc
         return _Inflater("lzma", decoder), 4 + props_size
     raise ArchiveError(f"compression method {method} is not supported")
 
@@ -844,6 +876,16 @@ def _zip_entries(archive: OpenArchive, zf: zipfile.ZipFile, budget: Budget,
             for index in (index_a, index_b):
                 if "overlap" not in entries[index].flags:
                     entries[index].flags.append("overlap")
+    # Member data must also end before the central directory (zipfile's
+    # extractor rejects such archives as "Overlapped entries"; verification
+    # alone misses it because inflate stops at its own end marker).
+    cd_start = getattr(zf, "start_dir", None)
+    if isinstance(cd_start, int):
+        for _start, end, index in spans:
+            if end > cd_start:
+                if "overlap" not in entries[index].flags:
+                    entries[index].flags.append("overlap")
+                extra.append(f"{safe_name(entries[index].name)}: member data runs into the central directory")
     return entries, extra
 
 
@@ -879,12 +921,21 @@ class _GuardedTarInfo(tarfile.TarInfo):
     @classmethod
     def fromtarfile(cls, tarfile_obj: tarfile.TarFile) -> tarfile.TarInfo:  # type: ignore[override]
         stream = tarfile_obj.fileobj
-        outermost = isinstance(stream, TarStream) and stream.header_allowance is None
+        if not isinstance(stream, TarStream):
+            return super().fromtarfile(tarfile_obj)
+        outermost = stream.header_allowance is None
         if outermost:
             stream.header_allowance = MAX_MEMBER_HEADER_BYTES
+        # Each chained header (pax, GNU long name/link) recurses once; a
+        # chain of hundreds of tiny headers would exhaust the Python stack
+        # long before the byte allowance.
+        stream.header_depth += 1
         try:
+            if stream.header_depth > MAX_HEADER_CHAIN:
+                raise ArchiveError(f"more than {MAX_HEADER_CHAIN} chained extended headers for one member")
             return super().fromtarfile(tarfile_obj)
         finally:
+            stream.header_depth -= 1
             if outermost:
                 stream.header_allowance = None
 
@@ -929,11 +980,37 @@ def _drain_stream(stream: "TarStream") -> None:
         raise _StreamDamaged(f"compressed stream is damaged after the last member: {exc}") from exc
 
 
+def _check_end_of_archive(tar: tarfile.TarFile, stream: TarStream, count: int) -> None:
+    """Accept only a real end: a zero block or end of input at the next header.
+
+    tarfile returns None (not an error) when a header after the first one
+    has a bad checksum or is cut short, which would certify a damaged
+    archive by its intact prefix.
+    """
+    start, block = stream.last_read
+    if start != tar.offset:
+        raise _StreamDamaged(f"could not verify the end of the tar archive after {count} entries")
+    if not block or (len(block) == tarfile.BLOCKSIZE and not block.strip(b"\x00")):
+        return
+    if len(block) < tarfile.BLOCKSIZE:
+        raise _StreamDamaged(f"tar archive truncated inside a header after {count} entries")
+    raise _StreamDamaged(f"invalid tar header at offset {tar.offset} after {count} entries "
+                         "(bad checksum or garbage); later members were not read")
+
+
 def iter_tar(archive: OpenArchive, budget: Budget) -> Iterator[Tuple[tarfile.TarFile, tarfile.TarInfo]]:
+    try:
+        yield from _iter_tar(archive, budget)
+    except RecursionError:
+        raise ArchiveError("tar headers nest too deeply") from None
+
+
+def _iter_tar(archive: OpenArchive, budget: Budget) -> Iterator[Tuple[tarfile.TarFile, tarfile.TarInfo]]:
     tar, stream = _open_tar(archive, budget)
     if getattr(tar, "firstmember", True) is None:
         # Empty archive (only end-of-archive blocks). Calling next() again
         # would make Python 3.10's tarfile seek to offset -1.
+        _check_end_of_archive(tar, stream, 0)
         _drain_stream(stream)
         return
     count = 0
@@ -943,6 +1020,7 @@ def iter_tar(archive: OpenArchive, budget: Budget) -> Iterator[Tuple[tarfile.Tar
         except (tarfile.TarError, EOFError, UnicodeError) as exc:
             raise ArchiveError(f"tar parse error after {count} entries: {exc}") from exc
         if info is None:
+            _check_end_of_archive(tar, stream, count)
             _drain_stream(stream)
             return
         tar.members.clear()  # constant memory: nothing needs the member list
@@ -1002,7 +1080,7 @@ def collect(archive: OpenArchive, budget: Budget) -> Listing:
                 raise
             raise ArchiveError("unsupported archive format (expected zip, tar, gzip, bzip2 or xz)") from None
         entries, extra = _zip_entries(archive, zf, budget)
-        extra.extend(analyse(entries))
+        extra.extend(analyse(entries, budget))
         return Listing("zip", entries, extra)
     label = {"tar": "tar", "gzip": "tar.gz", "bzip2": "tar.bz2", "xz": "tar.xz"}[archive.format]
     entries: List[Entry] = []
@@ -1037,7 +1115,7 @@ def collect(archive: OpenArchive, budget: Budget) -> Listing:
         # (truncated footer, checksum mismatch): nothing is verified.
         stopped = str(exc)
         extra.append(f"UNSAFE {stopped}")
-    extra.extend(analyse(entries))
+    extra.extend(analyse(entries, budget))
     decompressed = budget.used if archive.format != "tar" else None
     return Listing(label, entries, extra, stopped, decompressed)
 

@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import re
 import shlex
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional, Tuple
 
@@ -76,6 +77,9 @@ class NativeToolSpec(ToolSpec):
     encodings: Mapping[str, Encoding] = field(default_factory=dict)
     int_ranges: Mapping[str, Tuple[int, int]] = field(default_factory=dict)
     forbidden: Mapping[str, Tuple[str, ...]] = field(default_factory=dict)
+    # Control parameters holding SQL: whitespace outside literals may be
+    # collapsed by sanitising, but nothing that changes the statement.
+    sql_params: Tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         names = _PLACEHOLDER.findall(self.command_template)
@@ -101,6 +105,20 @@ class NativeToolSpec(ToolSpec):
         encoded = {}
         for name, spec in self.params.items():
             text = sanitize_argument(values[name], spec.max_chars, name)
+            if spec.kind == "control":
+                # sanitize_argument flattens whitespace, applies NFKC and drops
+                # format characters. For a control value that can silently
+                # select something else (another file, a different SQL
+                # literal), so refuse instead of running a rewritten call.
+                raw = str(values[name])
+                if name in self.sql_params:
+                    problem = sql_transport_problem(raw)
+                elif text != raw.strip():
+                    problem = "sanitising would change it (whitespace, Unicode compatibility or control characters)"
+                else:
+                    problem = ""
+                if problem:
+                    raise ToolArgumentError(f"argument '{name}' cannot be passed unchanged: {problem}")
             for token in self.forbidden.get(name, ()):
                 if token in text:
                     raise ToolArgumentError(f"argument '{name}' may not contain {token!r}")
@@ -121,6 +139,48 @@ class NativeToolSpec(ToolSpec):
         return text
 
 
+def sql_transport_problem(sql: str) -> str:
+    """Why flattening ``sql`` would change the statement ('' if it would not).
+
+    sanitize_argument collapses whitespace runs to one space, applies NFKC
+    and drops control/format characters. Outside literals and comments that
+    only changes layout; inside a string literal or quoted identifier it
+    changes the value, and a newline ending a ``--`` comment would turn the
+    rest of the statement into comment. Linear scan.
+    """
+    if unicodedata.normalize("NFKC", sql) != sql:
+        return "it contains Unicode compatibility characters that would be normalised"
+    if any(unicodedata.category(ch) in {"Cc", "Cf"} and ch not in "\t\n\r" for ch in sql):
+        return "it contains control or format characters"
+    index, length = 0, len(sql)
+    while index < length:
+        char = sql[index]
+        if char in "'\"`[":
+            close = "]" if char == "[" else char
+            end = index + 1
+            while end < length:
+                if sql[end] == close:
+                    if close != "]" and end + 1 < length and sql[end + 1] == close:
+                        end += 2
+                        continue
+                    break
+                end += 1
+            content = sql[index + 1:end]
+            if "  " in content or any(ch in content for ch in "\t\n\r"):
+                return "whitespace inside a quoted literal or identifier would be collapsed"
+            index = end + 1
+        elif sql.startswith("--", index):
+            if any(ch in sql[index:] for ch in "\n\r"):
+                return "a '--' comment ends at a line break, which would be removed"
+            return ""
+        elif sql.startswith("/*", index):
+            end = sql.find("*/", index + 2)
+            index = length if end == -1 else end + 2
+        else:
+            index += 1
+    return ""
+
+
 def _data_text(result: Mapping[str, Any]) -> Optional[str]:
     """``data.text`` (content without line numbers); ``None`` falls back to output."""
     data = result.get("data")
@@ -132,7 +192,8 @@ def _tool(name: str, description: str, template: str, params: Mapping[str, Tuple
           *, effect: str = "read", output_trust: str = "untrusted",
           int_ranges: Optional[Mapping[str, Tuple[int, int]]] = None,
           forbidden: Optional[Mapping[str, Tuple[str, ...]]] = None,
-          extract_output: Optional[Callable[[Mapping[str, Any]], Optional[str]]] = None) -> NativeToolSpec:
+          extract_output: Optional[Callable[[Mapping[str, Any]], Optional[str]]] = None,
+          sql_params: Tuple[str, ...] = ()) -> NativeToolSpec:
     return NativeToolSpec(
         name=name,
         description=description,
@@ -142,6 +203,7 @@ def _tool(name: str, description: str, template: str, params: Mapping[str, Tuple
         command_template=template,
         tags=("native",),
         extract_output=extract_output,  # type: ignore[arg-type]
+        sql_params=sql_params,
         skill=template.split()[0],
         encodings={pname: enc for pname, (_kind, _desc, enc, _limit) in params.items()},
         int_ranges=dict(int_ranges or {}),
@@ -245,7 +307,8 @@ def native_tools() -> dict[str, NativeToolSpec]:
         _tool("sqlite.query", "Run one read-only SELECT on an SQLite database in the workspace "
               "(no writes, PRAGMA or ATTACH; row, time and memory budgets).",
               "sqlite query {file} {sql}",
-              {"file": _FILE, "sql": ("control", "a single SELECT/WITH statement", "text", 2_000)}),
+              {"file": _FILE, "sql": ("control", "a single SELECT/WITH statement", "text", 2_000)},
+              sql_params=("sql",)),
         # ── archives (never extracted to disk) ──
         _tool("archive.list", "List a zip/tar(.gz/.bz2/.xz) archive and flag unsafe entries "
               "(path traversal, links, bombs).",
