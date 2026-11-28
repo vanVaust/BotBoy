@@ -520,10 +520,19 @@ def execute_query(dataset: Dataset, query: Query) -> Tuple[List[Dict[str, Any]],
     if query.where:
         rows = [row for row in rows if any(all(cond.matches(row) for cond in group) for group in query.where)]
     if query.group_by:
+        # A repeated grouping column adds nothing to the key but multiplies
+        # its serialised size per row (800 x id over 20k rows).
+        query.group_by = list(dict.fromkeys(query.group_by))
         buckets: Dict[Tuple[str, ...], List[Dict[str, Any]]] = {}
+        key_chars = 0
         exemplars: Dict[Tuple[str, ...], Dict[str, Any]] = {}
         for row in rows:
             key = tuple(json.dumps(row.get(col), sort_keys=True, default=str) for col in query.group_by)
+            if key not in buckets:
+                key_chars += sum(len(part) for part in key)
+                if key_chars > MAX_GROUP_KEY_CHARS:
+                    raise SkillUsageError(
+                        f"group by keys exceed {MAX_GROUP_KEY_CHARS} characters; group by fewer or shorter columns")
             buckets.setdefault(key, []).append(row)
             exemplars.setdefault(key, row)
         agg_names = _distinct_agg_names(query.aggregates, taken=query.group_by)
@@ -588,6 +597,7 @@ def _bounded_render(rows: List[Dict[str, Any]], columns: List[str], output_forma
 
 
 MAX_CSV_OUTPUT_CHARS = 64 * 1024
+MAX_GROUP_KEY_CHARS = 8 * 1024 * 1024
 MAX_CSV_CELL_CHARS = 16 * 1024
 
 

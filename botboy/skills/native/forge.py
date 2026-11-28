@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -304,7 +305,10 @@ def scaffold(name: str, trigger: str, *, description: str, level: str = "BEGINNE
         raise SkillUsageError("scaffold supports BEGINNER or INTERMEDIATE (custom skills run sandboxed without network/filesystem)")
     if "---" in description or "\n" in description:
         raise SkillUsageError("description must be a single line without '---'")
-    safe_description = description.replace('"', "'")
+    # JSON string syntax is a subset of YAML double-quoted scalars: every
+    # backslash, quote and control character is escaped, so "\d+" stays
+    # literally "\d+" instead of being read as a YAML escape.
+    safe_description = json.dumps(description, ensure_ascii=False)[1:-1]
     return (
         "---\n"
         f"name: {name}\n"

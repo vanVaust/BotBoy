@@ -229,10 +229,27 @@ class RepoOutputCapTests(unittest.TestCase):
         original = repo_skill.MAX_GIT_OUTPUT
         repo_skill.MAX_GIT_OUTPUT = 4096
         self.addCleanup(setattr, repo_skill, "MAX_GIT_OUTPUT", original)
-        text = asyncio.run(repo_skill._run_git(repo, ["show", "HEAD"]))
+        text = asyncio.run(repo_skill._run_git(repo, ["show", "HEAD"], allow_truncation=True))
         self.assertLessEqual(len(text.encode()), 4096)
+        # Default: structured output is never returned as a silent prefix.
         with self.assertRaisesRegex(GitError, "refusing a partial result"):
-            asyncio.run(repo_skill._run_git(repo, ["show", "HEAD"], allow_truncation=False))
+            asyncio.run(repo_skill._run_git(repo, ["show", "HEAD"]))
+
+    def test_status_over_the_cap_is_refused_not_partial(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name).resolve()
+        project = root / "many"
+        project.mkdir()
+        git(project, "init", "-q")
+        for i in range(400):
+            (project / f"untracked_{i:04d}_{'x' * 40}.txt").write_text("x", encoding="utf-8")
+        original = repo_skill.MAX_GIT_OUTPUT
+        repo_skill.MAX_GIT_OUTPUT = 4096
+        self.addCleanup(setattr, repo_skill, "MAX_GIT_OUTPUT", original)
+        result = asyncio.run(repo_skill.run("repo status many", NativeSkillContext(workspace_root=root)))
+        self.assertFalse(result["success"])
+        self.assertIn("refusing a partial result", result["output"])
 
 
 @unittest.skipUnless(GIT, "git is not installed")
