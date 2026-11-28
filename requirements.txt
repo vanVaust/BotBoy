@@ -1,16 +1,18 @@
-# MINIMAL (stdlib + pyyaml — works immediately, no further dependencies)
+# BotBoy declares its dependencies in setup.py, not here.
+#
+# Core — standard library plus PyYAML:
+#     pip install .
+#
+# Running the test suite — needs the standard runtime as well, because eleven
+# test modules import fastapi at module scope:
+#     pip install ".[dev]"
+#
+# Other optional feature sets (see extras_require in setup.py for what each
+# entry is for and where it is imported):
+#     pip install ".[standard]"   FastAPI gateway path
+#     pip install ".[full]"       voice input
+#
+# This file exists only so that `pip install -r requirements.txt` keeps working.
+# It installs the core requirement and nothing else, so it is NOT enough to run
+# the tests.
 pyyaml>=6.0
-
-# STANDARD (API + WebSocket + LLM HTTP calls)
-fastapi>=0.109.0,<0.139.0
-uvicorn[standard]>=0.27.0
-websockets>=12.0
-aiohttp>=3.9.0
-httpx>=0.26.0
-psutil>=5.9.0
-
-# FULL (all features)
-docker>=7.0.0
-sentence-transformers>=2.2.0
-vosk>=0.3.45
-pyaudio>=0.2.13

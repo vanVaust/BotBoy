@@ -6,6 +6,17 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+# Plan steps are LLM output and therefore attacker-influenceable (prompt
+# injection via memories, documents or tool results).  They must not inherit
+# the trusted local-operator default that ``process_command`` grants callers
+# without an approval context; approval-gated commands need a real grant.
+PLANNER_APPROVAL_CONTEXT = {
+    "granted": False,
+    "explicit": False,
+    "reason": "llm_plan",
+    "source": "planner",
+}
+
 
 @dataclass
 class PlanStep:
@@ -215,7 +226,10 @@ class PlanningEngine:
                 continue
 
             try:
-                result = await bot.process_command(step.command)
+                result = await bot.process_command(
+                    step.command,
+                    approval_context=dict(PLANNER_APPROVAL_CONTEXT),
+                )
                 outputs.append({"step_id": step.step_id, "result": result, "success": result.get("success", False)})
                 if result.get("success"):
                     executed.add(step.step_id)

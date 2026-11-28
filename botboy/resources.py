@@ -31,9 +31,9 @@ def runtime_home_dir() -> Path:
 
 
 def bundled_assets_dir() -> Path:
-    for candidate in (package_root() / "bundled", package_root() / "bundled_assets"):
-        if candidate.exists():
-            return candidate
+    # Historically this probed a second "bundled_assets" directory that held a
+    # byte-identical copy of "bundled". The copy is gone; only "bundled" ships
+    # (see package_data in setup.py and MANIFEST.in).
     return package_root() / "bundled"
 
 

@@ -35,6 +35,9 @@ BEST_EFFORT_ARTIFACT_ERRORS = (
 OPTIONAL_REFLECTION_ERRORS = OPTIONAL_ROUTE_ERRORS + (sqlite3.Error,)
 
 
+from botboy.command_effects import is_destructive, mutates_state
+
+
 class CommandExecutionService:
     def __init__(self, bot) -> None:
         self.bot = bot
@@ -48,15 +51,9 @@ class CommandExecutionService:
             "source": "local",
         }
 
-    _DESTRUCTIVE_COMMANDS = ("history clear", "forget")
-
-    @classmethod
-    def is_destructive_command(cls, command: str) -> bool:
-        normalized = " ".join(str(command or "").lower().split())
-        return any(
-            normalized == name or normalized.startswith(name + " ")
-            for name in cls._DESTRUCTIVE_COMMANDS
-        )
+    @staticmethod
+    def is_destructive_command(command: str) -> bool:
+        return is_destructive(command)
 
     @staticmethod
     def _is_local_operator(approval_context: Optional[dict]) -> bool:
@@ -664,7 +661,11 @@ class CommandExecutionService:
         cmd_type = result.get("type", "unknown")
         task_status = self.bot._infer_task_status(result)
 
-        if self.bot.cache and cache_allowed:
+        if self.bot.cache and mutates_state(command):
+            # Coarse but correct: any write empties the read cache, so no reader
+            # (in any security scope) sees a pre-write result.
+            self.bot.cache.clear()
+        elif self.bot.cache and cache_allowed:
             self.bot.cache.set(raw_command, result, security_scope=cache_scope)
 
         self._record_history_and_metrics(

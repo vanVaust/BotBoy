@@ -12,7 +12,7 @@ _PERMANENT = 0        # Never expires (deterministic: calculate, hash, base64, c
 _LONG = 600           # 10 minutes (skills, help, version, system info)
 _MEDIUM = 120         # 2 minutes (weather, web search)
 _SHORT = 30            # 30 seconds (status, search, performance)
-_BYPASS = -1          # Never cached (remember, forget, time, date)
+_BYPASS = -1          # Never cached (writes, deletes, time, unknown prefixes)
 
 _CMD_TTL: Dict[str, int] = {
     "calculate": _PERMANENT,
@@ -29,7 +29,10 @@ _CMD_TTL: Dict[str, int] = {
     "search": _SHORT,
     "performance": _SHORT,
     "remember": _BYPASS,
+    "store": _BYPASS,
+    "save": _BYPASS,
     "forget": _BYPASS,
+    "delete": _BYPASS,
     "time": _BYPASS,
     "date": _BYPASS,
     "memories": _SHORT,
@@ -57,8 +60,12 @@ class CacheStats:
 
 
 def _ttl_for_command(command: str) -> int:
+    # Unknown prefixes are not cached: a cached side-effecting command (an
+    # alias such as ``save``/``delete``, an LLM-backed route, a custom skill)
+    # silently skips its effect while replaying the old success message.
+    # Caching is opt-in per prefix for commands known to be pure reads.
     prefix = command.strip().lower().split()[0] if command.strip() else ""
-    return _CMD_TTL.get(prefix, _SHORT)
+    return _CMD_TTL.get(prefix, _BYPASS)
 
 
 def _scope_key(command: str, security_scope: str = "") -> str:

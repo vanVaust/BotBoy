@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from botboy.handoff_route_support import handle_handoff_command
 from botboy.intelligence_route_support import handle_intelligence_route
+from botboy.command_effects import MEMORY_DELETE_COMMANDS
 from botboy.runtime_command_support import handle_memory_command as build_memory_command_response
 
 
@@ -49,7 +50,7 @@ async def route_command(
         return bot._handle_reflection_archive(command, principal=principal)
     if first == "a2a":
         return bot._handle_a2a(command, principal=principal)
-    if first in ("remember", "store", "save", "search", "forget", "delete", "memories", "memstats"):
+    if first in {"remember", "store", "save", "search", "memories", "memstats"} | MEMORY_DELETE_COMMANDS:
         return build_memory_command_response(bot, command, first=first)
     if first == "schedule":
         return await bot._handle_schedule(command)
