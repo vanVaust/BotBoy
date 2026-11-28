@@ -296,7 +296,9 @@ def _exact_sum(numbers: List[Union[int, float]]) -> Union[int, float]:
     if all(isinstance(number, int) for number in numbers):
         return sum(numbers)
     total = math.fsum(numbers)
-    return int(total) if total.is_integer() and abs(total) < 2 ** 53 else round(total, 10)
+    # No decimal rounding: round(x, 10) turned 3e-12 into 0.0. Display
+    # formatting rounds; structured results keep the computed float.
+    return int(total) if total.is_integer() and abs(total) < 2 ** 53 else total
 
 
 def _comparable(left: Any, right: Any) -> Tuple[Any, Any]:
@@ -464,7 +466,7 @@ def _aggregate(func: str, column: Optional[str], rows: List[Dict[str, Any]]) -> 
     if func == "sum":
         return _exact_sum(numbers)
     if func == "avg":
-        return round(statistics.fmean(numbers), 10)
+        return statistics.fmean(numbers)
     if func == "median":
         return statistics.median(numbers)
     raise SkillUsageError(f"Unknown aggregate {func}")
@@ -659,8 +661,8 @@ def _stats(dataset: Dataset, column: str) -> dict:
         quartiles = statistics.quantiles(ordered, n=4, method="inclusive") if len(ordered) > 1 else [ordered[0]] * 3
         info.update({
             "min": ordered[0], "max": ordered[-1], "sum": _exact_sum(ordered),
-            "mean": round(statistics.fmean(ordered), 10), "median": statistics.median(ordered),
-            "stdev": round(statistics.stdev(ordered), 10) if len(ordered) > 1 else 0.0,
+            "mean": statistics.fmean(ordered), "median": statistics.median(ordered),
+            "stdev": statistics.stdev(ordered) if len(ordered) > 1 else 0.0,
             "p25": quartiles[0], "p75": quartiles[2],
         })
     counts: Dict[str, int] = {}

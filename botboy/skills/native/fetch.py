@@ -261,14 +261,18 @@ def _read_body(response: http.client.HTTPResponse, policy: FetchPolicy, deadline
     return bytes(output[: policy.max_bytes]), truncated
 
 
-def _abort_connection(connection: http.client.HTTPConnection) -> None:
+def _abort_connection(connection: http.client.HTTPConnection, active: Dict[str, Any]) -> None:
     """Deadline watchdog: unblock a read that keeps receiving a byte at a time.
 
-    Socket timeouts are per receive, so a peer dripping header bytes faster
-    than the timeout keeps ``getresponse()`` alive indefinitely; shutting
-    the socket down from another thread makes the blocked read return.
+    Socket timeouts are per receive, so a peer dripping header bytes,
+    chunk-size lines, extensions or trailers faster than the timeout keeps a
+    read alive indefinitely; shutting the socket down from another thread
+    makes the blocked read return. The socket is captured once connected,
+    because for a ``Connection: close`` response http.client detaches it
+    from the connection (``connection.sock`` becomes None) after
+    ``getresponse()`` while the response keeps reading from it.
     """
-    sock = connection.sock
+    sock = active.get("sock") or connection.sock
     if sock is None:
         return
     try:
@@ -292,7 +296,9 @@ def fetch_url(url: str, policy: FetchPolicy, resolver: Resolver = _default_resol
         timeout = min(CONNECT_TIMEOUT, remaining)
         connection_cls = _PinnedHTTPSConnection if target.scheme == "https" else _PinnedHTTPConnection
         connection = connection_cls(target, timeout)
-        watchdog = threading.Timer(max(0.0, deadline - time.monotonic()), _abort_connection, args=(connection,))
+        active: Dict[str, Any] = {}
+        watchdog = threading.Timer(max(0.0, deadline - time.monotonic()), _abort_connection,
+                                   args=(connection, active))
         watchdog.daemon = True
         watchdog.start()
         try:
@@ -302,6 +308,7 @@ def fetch_url(url: str, policy: FetchPolicy, resolver: Resolver = _default_resol
                 "Accept-Encoding": "gzip, deflate",
                 "Connection": "close",
             })
+            active["sock"] = connection.sock
             response = connection.getresponse()
             if response.status in {301, 302, 303, 307, 308}:
                 location = response.getheader("Location")

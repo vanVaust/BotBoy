@@ -184,7 +184,7 @@ class DataSkillTests(WorkspaceFixture):
         result = self.data("data query data/sales.csv group by region agg count sum:amount avg:amount max:units "
                            "sort sum_amount desc")
         rows = result["data"]["rows"]
-        self.assertEqual(rows[0], {"region": "EU", "count": 3, "sum_amount": 520.49, "avg_amount": 173.4966666667,
+        self.assertEqual(rows[0], {"region": "EU", "count": 3, "sum_amount": 520.49, "avg_amount": 520.49 / 3,
                                    "max_units": 3})
         self.assertEqual(rows[-1]["region"], "APAC")
 

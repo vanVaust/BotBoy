@@ -483,6 +483,9 @@ def _strip_links(text: str) -> str:
     out: List[str] = []
     pos = 0
     length = len(text)
+    # Once no ")" follows some position, none follows any later one: stop
+    # searching instead of rescanning the suffix per "[](" (was quadratic).
+    paren_exhausted = False
     while pos < length:
         start = text.find("[", pos)
         if start == -1:
@@ -490,8 +493,9 @@ def _strip_links(text: str) -> str:
         close = text.find("]", start + 1)
         if close == -1:
             break
-        if close + 1 < length and text[close + 1] == "(":
+        if not paren_exhausted and close + 1 < length and text[close + 1] == "(":
             end = text.find(")", close + 2)
+            paren_exhausted = end == -1
             if end != -1:
                 cut = start - 1 if start > pos and text[start - 1] == "!" else start
                 out.append(text[pos:cut])
