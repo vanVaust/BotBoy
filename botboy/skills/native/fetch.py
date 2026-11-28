@@ -272,6 +272,10 @@ def _abort_connection(connection: http.client.HTTPConnection, active: Dict[str, 
     from the connection (``connection.sock`` becomes None) after
     ``getresponse()`` while the response keeps reading from it.
     """
+    # Recorded before the shutdown: the caller classifies the resulting
+    # error by this flag, not by re-reading a clock whose resolution on
+    # Windows (~15.6 ms) can still read "before the deadline".
+    active["aborted"] = True
     sock = active.get("sock") or connection.sock
     if sock is None:
         return
@@ -310,6 +314,8 @@ def fetch_url(url: str, policy: FetchPolicy, resolver: Resolver = _default_resol
             })
             active["sock"] = connection.sock
             response = connection.getresponse()
+            if active.get("aborted"):
+                raise FetchError(f"Deadline of {policy.deadline_seconds:g}s exceeded")
             if response.status in {301, 302, 303, 307, 308}:
                 location = response.getheader("Location")
                 if not location:
@@ -324,6 +330,10 @@ def fetch_url(url: str, policy: FetchPolicy, resolver: Resolver = _default_resol
             if content_type and not content_type.startswith(_TEXTUAL_TYPES):
                 raise FetchError(f"Refusing non-text content type {content_type!r}")
             body, truncated = _read_body(response, policy, deadline)
+            if active.get("aborted"):
+                # A shut-down socket reads as a clean EOF: headers or body
+                # cut off by the watchdog must not pass as a short response.
+                raise FetchError(f"Deadline of {policy.deadline_seconds:g}s exceeded")
             return FetchResponse(
                 url=target.url, status=response.status, reason=response.reason or "",
                 content_type=content_type or "text/plain",
@@ -332,7 +342,7 @@ def fetch_url(url: str, policy: FetchPolicy, resolver: Resolver = _default_resol
                 elapsed_ms=round((time.monotonic() - started) * 1000, 1),
             )
         except (OSError, http.client.HTTPException, ssl.SSLError, FetchError) as exc:
-            if time.monotonic() >= deadline:
+            if active.get("aborted") or time.monotonic() >= deadline:
                 raise FetchError(f"Deadline of {policy.deadline_seconds:g}s exceeded") from exc
             if isinstance(exc, FetchError):
                 raise
