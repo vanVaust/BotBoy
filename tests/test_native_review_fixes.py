@@ -534,3 +534,20 @@ class NinthReviewRoundTests(unittest.TestCase):
         with self.assertRaises(FetchError):
             fetch_url(f"http://127.0.0.1:{port}/", policy)
         self.assertLess(time.perf_counter() - started, 1.5)
+
+
+class DeadlineClassificationTests(unittest.TestCase):
+    def test_watchdog_abort_is_reported_as_deadline_with_a_coarse_clock(self) -> None:
+        # Windows' monotonic clock ticks every ~15.6 ms, so right after the
+        # watchdog fires it can still read "before the deadline".
+        import itertools
+        from unittest import mock
+
+        from botboy.skills.native import fetch as fetch_mod
+
+        ticks = itertools.chain([100.0], itertools.repeat(100.0))
+        with mock.patch.object(fetch_mod.time, "monotonic", lambda: next(ticks)):
+            test = EighthReviewRoundTests("test_header_drip_cannot_outlive_the_deadline")
+            outcome = unittest.TestResult()
+            test.run(outcome)
+        self.assertEqual(outcome.failures + outcome.errors, [])
