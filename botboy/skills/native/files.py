@@ -115,9 +115,13 @@ async def _read(ctx: NativeSkillContext, args: List[str]) -> dict:
     header = f"{rel} (lines {start}-{start + len(selected) - 1} of {len(all_lines)})"
     if file_truncated:
         header += f" [file truncated at {MAX_READ_BYTES} bytes]"
+    # Unnumbered text of the same lines, within the same character budget,
+    # for callers that process the content (the agent's ws.read tool).
+    plain, plain_truncated = truncate("\n".join(selected), max_chars)
     return result(
         "ws", f"{header}\n{output}", action="read", path=rel, start_line=start,
         line_count=len(selected), total_lines=len(all_lines), truncated=file_truncated or out_truncated,
+        text=plain, text_truncated=file_truncated or plain_truncated,
     )
 
 

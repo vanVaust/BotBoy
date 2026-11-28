@@ -192,7 +192,12 @@ def default_tools() -> dict[str, ToolSpec]:
             quarantined_llm=True,
         ),
     )
-    return {tool.name: tool for tool in tools}
+    # Native-skill tools (botboy/agent/native_tools.py); imported here because
+    # that module imports this one. Builtin names win on a clash.
+    from botboy.agent.native_tools import native_tools
+
+    builtin = {tool.name: tool for tool in tools}
+    return {**builtin, **{name: tool for name, tool in native_tools().items() if name not in builtin}}
 
 
 def lookup(tools: Mapping[str, ToolSpec], name: str) -> Optional[ToolSpec]:

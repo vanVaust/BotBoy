@@ -64,6 +64,56 @@ def raw_argument_text(command: str, words_to_skip: int) -> str:
     return remainder
 
 
+def take_word(text: str) -> Tuple[Optional[str], str]:
+    """Split one POSIX-shell-style word off ``text``; return ``(word, rest)``.
+
+    Quoting follows ``shlex`` in POSIX mode (single quotes literal, double
+    quotes with ``\\"``/``\\\\`` escapes, backslash escapes outside quotes),
+    so anything ``shlex.quote`` produced round-trips. Only one word is
+    consumed: the rest is returned verbatim, which lets a command mix a
+    quoted path with free text such as SQL that must not be shlex-split.
+    Linear in the input. ``word`` is ``None`` when ``text`` is blank.
+    """
+    index, length = 0, len(text)
+    while index < length and text[index].isspace():
+        index += 1
+    if index >= length:
+        return None, ""
+    buffer: List[str] = []
+    while index < length and not text[index].isspace():
+        char = text[index]
+        if char == "'":
+            end = text.find("'", index + 1)
+            if end == -1:
+                raise SkillUsageError("Could not parse arguments: No closing quotation")
+            buffer.append(text[index + 1:end])
+            index = end + 1
+        elif char == '"':
+            index += 1
+            while True:
+                if index >= length:
+                    raise SkillUsageError("Could not parse arguments: No closing quotation")
+                char = text[index]
+                if char == '"':
+                    index += 1
+                    break
+                if char == "\\" and index + 1 < length and text[index + 1] in '"\\':
+                    buffer.append(text[index + 1])
+                    index += 2
+                    continue
+                buffer.append(char)
+                index += 1
+        elif char == "\\":
+            if index + 1 >= length:
+                raise SkillUsageError("Could not parse arguments: No escaped character")
+            buffer.append(text[index + 1])
+            index += 2
+        else:
+            buffer.append(char)
+            index += 1
+    return "".join(buffer), text[index:].strip()
+
+
 @dataclass
 class ParsedOptions:
     positionals: List[str]

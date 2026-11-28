@@ -40,6 +40,10 @@ def leading_options(raw: str, valued: Tuple[str, ...]) -> Tuple[Dict[str, str], 
     rest = raw.lstrip()
     while rest.startswith("--"):
         head, _, tail = rest.partition(" ")
+        if head == "--":
+            # End of options: the text that follows is taken verbatim, even
+            # if it starts with "--" (the agent bridge always emits this).
+            return options, tail.lstrip()
         name, sep, inline = head[2:].partition("=")
         if name not in valued:
             raise SkillUsageError(f"Unknown option --{name}")

@@ -147,7 +147,36 @@ def read_bytes(path: Path, max_bytes: int = DEFAULT_MAX_FILE_BYTES, *,
 
     Returns ``(data, truncated)``.
     """
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    fd = open_regular(path, root=root)
+    try:
+        chunks: List[bytes] = []
+        remaining = max_bytes + 1
+        while remaining > 0:
+            chunk = os.read(fd, min(remaining, 1024 * 1024))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    finally:
+        os.close(fd)
+    data = b"".join(chunks)
+    if len(data) > max_bytes:
+        return data[:max_bytes], True
+    return data, False
+
+
+def open_regular(path: Path, *, root: Optional[Path] = None) -> int:
+    """Open a regular file read-only without following links; return the fd.
+
+    Same pinning as :func:`read_bytes` (which uses it). The caller owns the
+    descriptor; it is positioned at offset 0 and verified to be a regular file
+    through ``fstat`` on the open descriptor, so later reads cannot be
+    redirected by swapping the path. ``O_NONBLOCK`` keeps a path swapped for
+    a FIFO after ``resolve()`` from blocking the open; it does not affect
+    reads of regular files.
+    """
+    flags = (os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+             | getattr(os, "O_NONBLOCK", 0))
     try:
         if root is not None and _DIR_FD_WALK:
             fd = _open_beneath(require_root(root), path, flags)
@@ -168,22 +197,13 @@ def read_bytes(path: Path, max_bytes: int = DEFAULT_MAX_FILE_BYTES, *,
             raise WorkspaceError(f"Path changed while opening: {path.name}")
     try:
         info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
-            raise WorkspaceError(f"Not a regular file: {path.name}")
-        chunks: List[bytes] = []
-        remaining = max_bytes + 1
-        while remaining > 0:
-            chunk = os.read(fd, min(remaining, 1024 * 1024))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-    finally:
+    except OSError as exc:
         os.close(fd)
-    data = b"".join(chunks)
-    if len(data) > max_bytes:
-        return data[:max_bytes], True
-    return data, False
+        raise WorkspaceError(f"Cannot open {path.name}: {exc.strerror or exc}") from exc
+    if not stat.S_ISREG(info.st_mode):
+        os.close(fd)
+        raise WorkspaceError(f"Not a regular file: {path.name}")
+    return fd
 
 
 def looks_binary(data: bytes) -> bool:

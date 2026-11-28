@@ -253,6 +253,31 @@ class DataSkillTests(WorkspaceFixture):
             parse_query(["where", "status", "==", "x", "limit", "5000"])
 
 
+
+class OpenRegularTests(unittest.TestCase):
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name).resolve()
+
+    def test_returns_a_descriptor_at_offset_zero(self) -> None:
+        (self.root / "f.bin").write_bytes(b"abc")
+        fd = workspace.open_regular(self.root / "f.bin", root=self.root)
+        try:
+            self.assertEqual(os.read(fd, 10), b"abc")
+        finally:
+            os.close(fd)
+        with self.assertRaises(workspace.WorkspaceError):
+            workspace.open_regular(self.root / "missing", root=self.root)
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFOs are POSIX-only")
+    def test_fifo_swapped_in_after_resolve_does_not_block(self) -> None:
+        os.mkfifo(self.root / "pipe")
+        with self.assertRaises(workspace.WorkspaceError) as caught:
+            workspace.open_regular(self.root / "pipe", root=self.root)
+        self.assertIn("Not a regular file", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
 

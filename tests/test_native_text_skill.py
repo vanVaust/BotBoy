@@ -146,6 +146,17 @@ class TextSkillTests(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["data"]["stats"]["words"], 6)
 
+    def test_double_dash_ends_options(self) -> None:
+        # The agent bridge always emits "--" before untrusted text, so text
+        # that starts with an option cannot change or break the call.
+        keywords = self.call("text keywords --top 2 -- --top 50 --bogus 1 release notes release notes")
+        self.assertTrue(keywords["success"], keywords["output"])
+        self.assertLessEqual(len(keywords["data"]["keywords"]), 2)
+        summary = self.call("text summarize -- --sentences 9 is part of the text. Second one.")
+        self.assertTrue(summary["success"], summary["output"])
+        regex = self.call("text regex -- --\\w+ ||| a --flag b")
+        self.assertEqual([m["match"] for m in regex["data"]["matches"]], ["--flag"])
+
     def test_usage_errors(self) -> None:
         for command in ("text", "text keywords", "text diff only one side", "text keywords --top 99 x",
                         "text keywords --bogus 1 x", "text regex (a+)+$ ||| " + "a" * 40 + "!", "text frobnicate x"):
