@@ -195,6 +195,8 @@ class ReadOnlyTests(SqliteSkillTestCase):
         self.assert_refused("SELECT load_extension('evil')", "load_extension")
         self.assert_refused("SELECT * FROM pragma_table_info('orders')", "not authorized")
         self.assert_refused("SELECT zeroblob(10)", "zeroblob")
+        # Writes to the schema table stay impossible whatever the authorizer allows.
+        self.assert_refused("WITH x AS (SELECT 1) UPDATE sqlite_master SET sql = 'x'")
         self.assert_refused("SELECT 1; DROP TABLE orders")
         self.assertEqual(run("sqlite tables shop.db", self.ctx)["data"]["tables"][1]["rows"], 3)
 

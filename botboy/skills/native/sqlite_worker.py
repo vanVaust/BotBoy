@@ -97,6 +97,15 @@ class Guard:
         if (action == sqlite3.SQLITE_PRAGMA and str(arg1 or "").lower() == "data_version"
                 and arg2 is None and _db in (None, "main")):
             return sqlite3.SQLITE_OK
+        # Older SQLite builds (3.40, bundled with Windows Python 3.10) consult
+        # the authorizer for the schema-table UPDATE that sqlite3_declare_vtab
+        # parses while a virtual table module (FTS5) connects. Allowing that
+        # one check cannot write anything: the snapshot is opened
+        # mode=ro&immutable=1, the connection is query_only, and the lexical
+        # gate refuses every UPDATE statement before it gets here.
+        if (action == sqlite3.SQLITE_UPDATE and str(arg1 or "").lower() in {"sqlite_master", "sqlite_schema"}
+                and _db in (None, "main") and _source is None):
+            return sqlite3.SQLITE_OK
         if len(self.denied) < 5:
             self.denied.append(_describe(action, arg1, arg2))
         return sqlite3.SQLITE_DENY
@@ -327,6 +336,8 @@ def run_request(request):
             message = f"{guard.stop_reason} ({message})"
         elif guard.denied and "not authorized" in message:
             message = f"not authorized: {', '.join(guard.denied)}"
+        elif guard.denied:
+            message = f"{message} (denied: {', '.join(guard.denied)})"
         return {"ok": False, "error": message[:500]}
     except (sqlite3.Warning, sqlite3.ProgrammingError, ValueError) as exc:
         return {"ok": False, "error": str(exc)[:500]}

@@ -530,6 +530,14 @@ class LinkResolver:
         elif entry.kind == "hardlink" and entry.link:
             if _is_absolute(entry.link) or self.resolve(_parts(entry.link), follow_last=True) is None:
                 flags.append("link-escapes")
+            else:
+                # A hardlink to a symlink member is a second name for that
+                # symlink (extractors link the link itself): record the alias
+                # so later paths through it resolve like the original.
+                target = self.resolve(_parts(entry.link), follow_last=False)
+                aliased = self.links.get("/".join(target)) if target is not None else None
+                if aliased is not None:
+                    self.links["/".join(location)] = aliased
         return flags
 
 
@@ -612,7 +620,31 @@ def detect(head: bytes) -> str:
         return "zip"
     if head[257:262] == b"ustar" or _tar_checksum_ok(head[:512]):
         return "tar"
+    if len(head) >= 1024 and not head.strip(b"\x00"):
+        return "tar"  # an empty tar is nothing but end-of-archive zero blocks
     return "unknown"
+
+
+def _empty_tar_size(archive: "OpenArchive", budget: Budget) -> Optional[int]:
+    """Size of the (decompressed) content if it is an empty tar, else None.
+
+    An empty tar consists only of NUL blocks (at least the two 512-byte
+    end-of-archive blocks); tarfile reports it as "empty file".
+    """
+    total = 0
+    archive.raw.seek(0)
+    if archive.format == "tar":
+        chunks: Iterator[bytes] = iter(lambda: archive.raw.read(CHUNK), b"")
+    else:
+        chunks = _single_stream(archive, budget)
+    for chunk in chunks:
+        budget.tick()
+        if chunk.strip(b"\x00"):
+            return None
+        total += len(chunk)
+    if total < 1024 or total % 512:
+        return None
+    return total
 
 
 class OpenArchive:
@@ -899,6 +931,11 @@ def _drain_stream(stream: "TarStream") -> None:
 
 def iter_tar(archive: OpenArchive, budget: Budget) -> Iterator[Tuple[tarfile.TarFile, tarfile.TarInfo]]:
     tar, stream = _open_tar(archive, budget)
+    if getattr(tar, "firstmember", True) is None:
+        # Empty archive (only end-of-archive blocks). Calling next() again
+        # would make Python 3.10's tarfile seek to offset -1.
+        _drain_stream(stream)
+        return
     count = 0
     while True:
         try:
@@ -975,6 +1012,9 @@ def collect(archive: OpenArchive, budget: Budget) -> Listing:
         for _tar, info in iter_tar(archive, budget):
             entries.append(_tar_entry(info))
     except _NotTar:
+        empty = _empty_tar_size(archive, _fresh(budget))
+        if empty is not None:
+            return Listing(label, [], extra, "", empty if archive.format != "tar" else None)
         if archive.format == "tar":
             raise ArchiveError("not a readable tar archive") from None
         total = 0
@@ -1096,7 +1136,7 @@ def do_check(ctx: NativeSkillContext, user_path: str) -> dict:
                     if flag not in entry.flags:
                         entry.flags.append(flag)
                     problems.append(f"{safe_name(info.orig_filename)}: {message}")
-        elif listing.format == "tar" and not stopped:
+        elif listing.format == "tar" and not stopped and listing.entries:
             # A plain tar listing only read headers; read every member now.
             archive.raw.seek(0)
             work = _fresh(budget)
@@ -1220,6 +1260,8 @@ def _read_member(archive: OpenArchive, member: str, budget: Budget) -> MemberRea
             data, _ = _drain(tar, info, budget, charge=archive.format == "tar", keep=MAX_MEMBER_BYTES)
             found = MemberRead(data, info.size, found.duplicates + 1 if found else 0)
     except _NotTar:
+        if _empty_tar_size(archive, _fresh(budget)) is not None:
+            raise ArchiveError(f"no member named {safe_name(member)!r} (the archive is empty)") from None
         if archive.format == "tar":
             raise ArchiveError("not a readable tar archive") from None
         name = _single_stream_name(archive)

@@ -312,6 +312,42 @@ class TarTests(ArchiveTestCase):
                                         (tinfo("h", type_=tarfile.LNKTYPE, link="d/secret"), None)]))
         self.assertIn("link-escapes", self.flags(self.listing("hard.tar"))["h"])
 
+    def test_hardlink_aliases_of_symlinks_are_followed(self) -> None:
+        # Review finding: hardlink b -> a (a symlink to ".") is a second name
+        # for that symlink, so b/c -> .. escapes and c/payload lands outside.
+        self.put("alias.tar", tar_bytes([(tinfo("a", type_=tarfile.SYMTYPE, link="."), None),
+                                         (tinfo("b", type_=tarfile.LNKTYPE, link="a"), None),
+                                         (tinfo("b/c", type_=tarfile.SYMTYPE, link=".."), None),
+                                         (tinfo("c/payload", 3), b"pwn")]))
+        out = self.listing("alias.tar")
+        flags = self.flags(out)
+        self.assertEqual(out["data"]["verdict"], "unsafe")
+        self.assertIn("link-escapes", flags["b/c"])
+        self.assertIn("link-traversal", flags["c/payload"])
+        # Through a chain of hardlink aliases as well.
+        self.put("alias2.tar", tar_bytes([(tinfo("a", type_=tarfile.SYMTYPE, link="."), None),
+                                          (tinfo("b", type_=tarfile.LNKTYPE, link="a"), None),
+                                          (tinfo("d", type_=tarfile.LNKTYPE, link="b"), None),
+                                          (tinfo("d/e", type_=tarfile.SYMTYPE, link=".."), None),
+                                          (tinfo("e/x", 1), b"x")]))
+        self.assertIn("link-traversal", self.flags(self.listing("alias2.tar"))["e/x"])
+
+    def test_empty_tar_archives_are_recognised(self) -> None:
+        # Review finding: an empty tar is only zero blocks and was "unknown".
+        for suffix, mode in (("tar", "w"), ("tar.gz", "w:gz"), ("tar.bz2", "w:bz2"), ("tar.xz", "w:xz")):
+            with self.subTest(suffix=suffix):
+                name = self.put(f"empty.{suffix}", tar_bytes([], mode))
+                out = self.listing(name)
+                self.assertEqual(out["data"]["entries"], 0)
+                self.assertEqual(out["data"]["verdict"], "ok")
+                self.assertTrue(out["data"]["format"].startswith("tar"), out["data"]["format"])
+                check = run(f"archive check {name}", self.ctx)
+                self.assertTrue(check["success"], check["output"])
+                self.assertEqual(check["data"]["verified"], 0)
+                self.assertIn("no member named", run(f"archive read {name} x", self.ctx)["output"])
+        self.put("short-zeros.bin", bytes(700))
+        self.assertFalse(run("archive list short-zeros.bin", self.ctx)["success"])
+
     def test_benign_link_chains_stay_ok(self) -> None:
         self.put("lib.tar", tar_bytes([(tinfo("usr/lib64", type_=tarfile.DIRTYPE), None),
                                        (tinfo("usr/lib", type_=tarfile.SYMTYPE, link="lib64"), None),
