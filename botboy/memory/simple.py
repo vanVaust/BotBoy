@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from botboy.db_mixin import _SQLiteMixin, retry_when_locked
-from botboy.memory.textnorm import NORMALIZATION_VERSION, build_match_query, normalize_for_index
+from botboy.memory.textnorm import NORMALIZATION_VERSION, QueryTooLong, build_match_query, normalize_for_index
 
 TRUST_LEVELS = ("trusted", "untrusted")
 _MAX_SOURCE_CHARS = 64
@@ -252,7 +252,10 @@ class SimpleMemoryEngine(_SQLiteMixin):
                      FROM memories m JOIN memories_fts2 fts ON m.id = fts.rowid
                      WHERE memories_fts2 MATCH ? {scope} ORDER BY bm25(memories_fts2) LIMIT ?"""
         sql_like = f"SELECT {_M_COLUMNS} FROM memories m WHERE content LIKE ? ESCAPE '\\' {scope} ORDER BY m.id DESC LIMIT ?"
-        match = build_match_query(query)
+        try:
+            match = build_match_query(query)
+        except QueryTooLong:
+            return []  # fail closed: never run a truncated (wider) selector
         rows = None
         if match is not None:
             try:

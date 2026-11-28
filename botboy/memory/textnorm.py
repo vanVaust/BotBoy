@@ -24,7 +24,16 @@ from typing import List, Optional
 NORMALIZATION_VERSION = "2"
 
 _MAX_TOKEN_CHARS = 64
-_MAX_QUERY_TOKENS = 32
+_MAX_QUERY_TERMS = 64
+
+
+class QueryTooLong(ValueError):
+    """More search terms than the index query accepts.
+
+    Raised instead of dropping terms: the same search selects rows for
+    ``forget``/``delete``, and a silently truncated selector matches (and
+    deletes) notes that lack the dropped terms.
+    """
 _TOKEN = re.compile(r"[^\W_]+")
 
 _STRIP_GE = re.compile(r"^ge(.{4,})")
@@ -87,7 +96,8 @@ def build_match_query(query: str) -> Optional[str]:
 
     parts: List[str] = []
     pending_or = False
-    for raw in query.split()[: _MAX_QUERY_TOKENS * 2]:
+    term_count = 0
+    for raw in query.split():
         if raw == "OR":
             pending_or = bool(parts)
             continue
@@ -107,6 +117,9 @@ def build_match_query(query: str) -> Optional[str]:
             terms.append(f'"{_umlaut_fold(found[-1])}"*')
         if not terms:
             continue
+        term_count += len(terms)
+        if term_count > _MAX_QUERY_TERMS:
+            raise QueryTooLong(f"query has more than {_MAX_QUERY_TERMS} search terms")
         # FTS5 allows implicit AND only between bare phrases, not next to a
         # parenthesised group, so every conjunction is spelled out.
         group = terms[0] if len(terms) == 1 else "(" + " AND ".join(terms) + ")"
@@ -115,8 +128,6 @@ def build_match_query(query: str) -> Optional[str]:
         else:
             parts.append(group)
         pending_or = False
-        if len(parts) >= _MAX_QUERY_TOKENS:
-            break
     if not parts:
         return None
     return " AND ".join(parts)

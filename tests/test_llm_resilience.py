@@ -360,6 +360,18 @@ class StreamTest(_ServerCase):
         self.assertEqual(got, ["partial"])
         self.assertEqual(len(self.script.requests), 1)
 
+    async def test_refusal_only_stream_is_a_failure_and_falls_back(self) -> None:
+        refusal = (b'data: {"choices":[{"delta":{"refusal":"I cannot help"}}]}\n\n'
+                   b'data: [DONE]\n\n')
+        self.script.push(stream_reply([refusal]),
+                         stream_reply([b'{"message":{"content":"local"},"done":true}\n']))
+        chain = FallbackBackend([OpenAIBackend(api_url=self.url, **self.kw()), OllamaBackend(api_url=self.url, **self.kw())])
+        self.assertEqual(await self._collect(chain), ["local"])
+        self.script.handlers.clear()
+        self.script.push(stream_reply([refusal]))
+        with self.assertRaisesRegex(LLMTransportError, "model refused: I cannot help"):
+            await self._collect(OpenAIBackend(api_url=self.url, **self.kw()))
+
     async def test_malformed_event_raises(self) -> None:
         self.script.push(stream_reply([b"data: {broken\n\n"]))
         with self.assertRaises(LLMTransportError):

@@ -88,9 +88,18 @@ class MatchQueryTest(unittest.TestCase):
                 engine._shared_conn.execute("SELECT count(*) FROM memories_fts2 WHERE memories_fts2 MATCH ?",
                                             (build_match_query(query),)).fetchone()
 
-    def test_query_term_cap(self) -> None:
-        query = build_match_query(" ".join(f"w{i}" for i in range(500)))
-        self.assertEqual(query.count(" AND ") + 1, 32)
+    def test_query_term_cap_fails_closed(self) -> None:
+        from botboy.memory.textnorm import QueryTooLong
+
+        self.assertEqual(build_match_query(" ".join(f"w{i}" for i in range(64))).count(" AND ") + 1, 64)
+        with self.assertRaises(QueryTooLong):
+            build_match_query(" ".join(f"w{i}" for i in range(65)))
+
+    def test_oversized_selector_matches_nothing(self) -> None:
+        engine = SimpleMemoryEngine()
+        engine.store(" ".join(f"term{i}" for i in range(64)) + " keep")
+        query = " ".join(f"term{i}" for i in range(64)) + " missing"
+        self.assertEqual(engine.search(query), [])  # was: matched on a truncated prefix
 
 
 class SearchTest(unittest.TestCase):

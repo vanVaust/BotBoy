@@ -700,6 +700,10 @@ class OpenAIBackend(_HTTPBackend):
             if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
                 continue  # the final include_usage chunk carries no choices
             delta = choices[0].get("delta")
+            if isinstance(delta, dict) and isinstance(delta.get("refusal"), str) and delta["refusal"]:
+                # Same contract as _parse: a refusal is a failure (so the
+                # fallback chain can answer), never an empty success.
+                raise LLMTransportError(f"model refused: {_clean_text(delta['refusal'])}")
             token = delta.get("content") if isinstance(delta, dict) else None
             if isinstance(token, str) and token:
                 yield token

@@ -170,6 +170,12 @@ class OriginThroughRouterTest(_BotCase):
         self.cmd("remember --trust=untrusted zebra pasted from a web page")
         self.assertEqual(self.rows("pasted")["zebra pasted from a web page"], "untrusted")
 
+    def test_forget_with_oversized_selector_deletes_nothing(self) -> None:
+        note = " ".join(f"term{i}" for i in range(64)) + " keep"
+        self.cmd(f"remember {note}")
+        self.cmd("forget " + " ".join(f"term{i}" for i in range(64)) + " other")
+        self.assertEqual(list(self.rows("term0")), [note])
+
     def test_automated_origins_default_to_untrusted(self) -> None:
         self.cmd("remember zebra via agent", approval_context=dict(AGENT_APPROVAL_CONTEXT))
         self.cmd("remember zebra via planner", approval_context=dict(PLANNER_APPROVAL_CONTEXT))
