@@ -125,6 +125,14 @@ def _build_status_response(bot) -> dict:
         lines.append(f"  Reflection: {'ON' if bot.reflection else 'OFF'}")
         lines.append(f"  Planning:   {'ON' if bot.planner else 'OFF'}")
         lines.append(f"  ParaThink:  {'ON' if bot.parallel_thinker else 'OFF'}")
+        usage = bot.llm.usage() if callable(getattr(bot.llm, "usage", None)) else None
+        if usage:
+            cost = "n/a" if usage["cost_usd"] is None else f"${usage['cost_usd']:.4f}"
+            lines.append(
+                f"  LLM usage:  {usage['requests']} req, {usage['failures']} failed, "
+                f"{usage['retries']} retries, {usage['fallbacks']} fallbacks, "
+                f"{usage['total_tokens']} tokens, cost {cost}"
+            )
     if bot.cache:
         cache_stats = bot.cache.stats()
         lines.append(

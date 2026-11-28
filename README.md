@@ -186,7 +186,9 @@ Beurer-Kellner et al. 2025). Code: `botboy/agent/`, Tests: `tests/test_secure_ag
    erreicht der Planer nie; eingeschleuste Texte können also nicht ändern, *welche*
    Werkzeuge laufen.
 2. **Ausführen** – jeder Wert trägt ein Label `trusted`/`untrusted`. Ergebnisse von
-   Speicher, Web und Dateinamen sind `untrusted`; abgeleitete Werte erben das Label.
+   Web und Dateinamen sind `untrusted`; Speicherergebnisse tragen das Label der
+   gespeicherten Einträge (nur Operator-Eingaben über die CLI sind `trusted`).
+   Abgeleitete Werte erben das Label; gespeichert wird mit dem Label der Eingabe.
 3. **Prüfen vor jedem Aufruf** – `untrusted` darf nie in einen Steuerparameter
    (Suchanfrage nach außen, Löschauswahl, Dateimuster, Anweisung) → `denied`.
    Löschen und das Speichern fremder Inhalte → `approval_required` mit SHA-256 über
@@ -200,6 +202,33 @@ Beurer-Kellner et al. 2025). Code: `botboy/agent/`, Tests: `tests/test_secure_ag
 Agent-Schritte laufen ohne die implizite Operator-Freigabe der CLI; die serverseitige
 Löschsperre greift also zusätzlich. Über authentifizierte Remote-Schnittstellen ist
 `agent` gesperrt. Die Antwort markiert Inhalte fremder Herkunft.
+
+Prüfstand: `python -m botboy.evals --wave agent_injection` (oder `eval agent_injection`)
+führt 8 harmlose Aufgaben und 14 Angriffe über den echten Router aus und meldet
+Nutzen und Angriffserfolgsquote. Netz- und Dateiwerkzeuge laufen dabei nicht.
+
+## LLM-Anbindung
+
+`llm.backend`: `ollama`, `openai` (auch kompatible Server über `api_url`), `anthropic`
+oder `mock`. Vorübergehende Fehler werden bis zu `max_retries`-mal wiederholt
+(Backoff bis `retry_max_delay` s; ein längeres `Retry-After` bricht ab, damit der
+Fallback antwortet). Beispiel:
+
+```yaml
+llm:
+  enabled: true
+  backend: anthropic
+  max_tokens: 2048
+  max_retries: 2
+  price_input_per_mtok: 1.0     # optional, USD je 1 Mio. Tokens, für die Kostenanzeige
+  price_output_per_mtok: 5.0
+  fallbacks:
+    - {backend: ollama, model: llama3.2}
+    - {backend: openai, api_url: "http://127.0.0.1:8000", api_key_env: LOCAL_LLM_KEY}
+```
+
+`status` zeigt Anfragen, Fehler, Wiederholungen, Fallbacks, Tokens und Kosten.
+Preise sind nicht eingebaut, weil eine veraltete Tabelle falsche Zahlen liefern würde.
 
 ## Hinweise
 

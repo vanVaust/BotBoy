@@ -77,14 +77,22 @@ class SkillsConfig:
 class LLMConfig:
     enabled: bool = False
     backend: str = "mock"            # mock | ollama | openai | anthropic
-    model: str = "llama3.2"
-    api_url: str = "http://localhost:11434"
+    model: str = ""                 # empty: the backend's default model
+    api_url: str = ""               # empty: the backend's default endpoint
     api_key: str = ""
     timeout: int = 30
     reflection_enabled: bool = False
     planning_enabled: bool = False
     parallel_think_enabled: bool = False
     max_context_tokens: int = 4096
+    max_tokens: int = 2048           # completion cap sent to every backend
+    max_retries: int = 2             # retries after the first attempt (transient errors only)
+    retry_base_delay: float = 0.5    # seconds; full-jitter exponential backoff
+    retry_max_delay: float = 8.0     # seconds; also the longest Retry-After honoured
+    price_input_per_mtok: float = 0.0   # USD per 1M input tokens; 0 = cost not tracked
+    price_output_per_mtok: float = 0.0  # USD per 1M output tokens
+    # Ordered fallback chain: [{backend, model, api_url, api_key_env, timeout, max_tokens}]
+    fallbacks: list = field(default_factory=list)
 
 
 @dataclass
@@ -231,6 +239,11 @@ class BotBoyConfig:
         self.llm.reflection_enabled = llm.get("reflection_enabled", self.llm.reflection_enabled)
         self.llm.planning_enabled = llm.get("planning_enabled", self.llm.planning_enabled)
         self.llm.parallel_think_enabled = llm.get("parallel_think_enabled", self.llm.parallel_think_enabled)
+        self.llm.max_context_tokens = llm.get("max_context_tokens", self.llm.max_context_tokens)
+        for key in ("max_tokens", "max_retries", "retry_base_delay", "retry_max_delay",
+                    "price_input_per_mtok", "price_output_per_mtok", "fallbacks"):
+            if key in llm:
+                setattr(self.llm, key, llm[key])
 
         perf = data.get("performance", {})
         self.performance.enable_monitoring = perf.get("enable_monitoring", self.performance.enable_monitoring)
@@ -269,7 +282,13 @@ class BotBoyConfig:
             self.llm.backend = v
         if v := os.getenv("BOTBOY_LLM_MODEL"):
             self.llm.model = v
-        if v := os.getenv("OLLAMA_URL"):
+        self.llm.max_tokens = self._env_int("BOTBOY_LLM_MAX_TOKENS", self.llm.max_tokens)
+        self.llm.max_retries = self._env_int("BOTBOY_LLM_MAX_RETRIES", self.llm.max_retries)
+        # OLLAMA_URL names the Ollama server only; it must not redirect an
+        # OpenAI/Anthropic backend (BOTBOY_LLM_API_URL is backend-agnostic).
+        if (v := os.getenv("OLLAMA_URL")) and self.llm.backend == "ollama":
+            self.llm.api_url = v
+        if v := os.getenv("BOTBOY_LLM_API_URL"):
             self.llm.api_url = v
         if v := os.getenv("OPENAI_API_KEY"):
             if self.llm.backend == "openai" or not self.llm.api_key:

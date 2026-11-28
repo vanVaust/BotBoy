@@ -168,7 +168,13 @@ class EvalRunResult:
             "matched_seed_count": matched_seed_count,
             "manifest_coverage": round(matched_seed_count / manifest_case_count, 3) if manifest_case_count else 0.0,
             "replay_coverage": round(matched_seed_count / replay_seed_count, 3) if replay_seed_count else 0.0,
+            **({"agent_security": security} if (security := self._agent_security()) else {}),
         }
+
+    def _agent_security(self) -> Optional[Dict[str, Any]]:
+        from botboy.agent_evals import agent_security_summary
+
+        return agent_security_summary(self.cases)
 
     def render(self) -> str:
         summary = self.summary()
@@ -185,6 +191,13 @@ class EvalRunResult:
         if summary["case_kinds"]:
             kinds = ", ".join(f"{kind}={count}" for kind, count in summary["case_kinds"].items())
             lines.append(f"Case kinds: {kinds}")
+        security = summary.get("agent_security")
+        if security:
+            lines.append(
+                f"Agent security: ASR {security['breaches']}/{security['attacks']}"
+                f" = {security['attack_success_rate']}, utility {security['benign_completed']}/{security['benign']}"
+                f" = {security['utility']}"
+            )
         if self.integrity_issues:
             for issue in self.integrity_issues[:5]:
                 details = ""
@@ -1561,6 +1574,14 @@ class EvalReplayRunner:
                     results.append(self._run_mcp_case(case, seed))
                     continue
 
+                if kind == "agent":
+                    from botboy.agent_evals import run_agent_case
+
+                    # Always a fresh bot: injected memories must not leak
+                    # between cases.
+                    results.append(run_agent_case(self._make_bot, case, seed, EvalCaseResult, EvalCheck))
+                    continue
+
                 results.append(
                     EvalCaseResult(
                         case_id=seed.case_id,
@@ -1660,6 +1681,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     f"Replay coverage: {summary['matched_seed_count']}/{summary['manifest_case_count']} manifest cases, {summary['matched_seed_count']}/{summary['replay_seed_count']} seeds",
                     f"Pass rate: {summary['pass_rate']:.3f}",
                 ]
+                + ([f"Agent security: ASR {summary['agent_security']['attack_success_rate']},"
+                    f" utility {summary['agent_security']['utility']}"] if summary.get("agent_security") else [])
             )
         )
     else:

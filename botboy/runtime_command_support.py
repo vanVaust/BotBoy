@@ -5,20 +5,49 @@ from datetime import datetime, timezone
 from botboy.command_effects import MEMORY_DELETE_COMMANDS, MEMORY_WRITE_COMMANDS, SCHEDULE_REMOVE_SUBCOMMANDS
 
 
-def handle_memory_command(bot, command: str, *, first: str) -> dict:
+# Only these approval-context sources are a human operator at this machine:
+# "local" is the CLI default context, "operator" a direct call without one.
+# Everything else (gateways, scheduler, planner, agent, unknown) is untrusted
+# by default; allowlisting keeps a new entry point from inheriting trust.
+TRUSTED_ORIGINS = frozenset({"local", "operator"})
+_TRUST_FLAGS = {"--trust=trusted": "trusted", "--trust=untrusted": "untrusted"}
+
+
+def parse_write_provenance(text: str, *, origin: str, root_origin: str = "") -> tuple[str, str, str]:
+    """Return ``(trust, source, content)`` for a memory write.
+
+    Only the first token may be a trust flag. ``--trust=untrusted`` is always
+    honoured; ``--trust=trusted`` only from the operator, or from the secure
+    agent (which computes it from labels) when the agent run itself was
+    started by the operator (``root_origin``). Model-written commands — the
+    planner, an agent started over a gateway — can never assert trust.
+    """
+    head, _, rest = text.partition(" ")
+    may_assert = origin in TRUSTED_ORIGINS or (origin == "agent" and root_origin in TRUSTED_ORIGINS)
+    if head in _TRUST_FLAGS:
+        text = rest.strip()
+        trust = "trusted" if _TRUST_FLAGS[head] == "trusted" and may_assert else "untrusted"
+    else:
+        trust = "trusted" if origin in TRUSTED_ORIGINS else "untrusted"
+    return trust, origin, text
+
+
+def handle_memory_command(bot, command: str, *, first: str, origin: str = "operator",
+                          root_origin: str = "") -> dict:
     if first in MEMORY_WRITE_COMMANDS:
-        text = command[len(first):].strip()
+        trust, source, text = parse_write_provenance(command[len(first):].strip(), origin=origin,
+                                                     root_origin=root_origin)
         if not text:
             return {"success": False, "output": f"Usage: {first} <text>", "type": "memory"}
         if bot.memory:
-            memory_id = bot.memory.store(text)
+            memory_id = bot.memory.store(text, trust=trust, source=source)
             if bot.metrics:
                 bot.metrics.record_memory_op()
             return {
                 "success": True,
                 "output": f"Remembered (id={memory_id}): {text[:60]}",
                 "type": "memory",
-                "data": {"id": memory_id},
+                "data": {"id": memory_id, "trust": trust, "source": source},
             }
         return {"success": False, "output": "Memory not available.", "type": "memory"}
 
@@ -38,7 +67,8 @@ def handle_memory_command(bot, command: str, *, first: str) -> dict:
                     "type": "memory",
                     "data": {"results": [result.to_dict() for result in results]},
                 }
-            return {"success": True, "output": f"No results for '{query}'.", "type": "memory"}
+            return {"success": True, "output": f"No results for '{query}'.", "type": "memory",
+                    "data": {"results": []}}
         return {"success": False, "output": "Memory not available.", "type": "memory"}
 
     if first in MEMORY_DELETE_COMMANDS:

@@ -200,18 +200,19 @@ class HybridMemoryEngine(_SQLiteMixin):
 
     # ── SimpleMemoryEngine-compatible API ─────────────────────────────────────
 
-    def store(self, content: str, metadata: Optional[dict] = None) -> int:
+    def store(self, content: str, metadata: Optional[dict] = None, *,
+              trust: str = "untrusted", source: str = "") -> int:
         """Store content in the semantic store (compatible with SimpleMemoryEngine)."""
-        return self._semantic.store(content, metadata)
+        return self._semantic.store(content, metadata, trust=trust, source=source)
 
-    def store_batch(self, items: List[str]) -> List[int]:
-        return self._semantic.store_batch(items)
+    def store_batch(self, items: List[str], *, trust: str = "untrusted", source: str = "") -> List[int]:
+        return self._semantic.store_batch(items, trust=trust, source=source)
 
     def get(self, memory_id: int) -> Optional[Memory]:
         return self._semantic.get(memory_id)
 
-    def update(self, memory_id: int, content: str) -> bool:
-        return self._semantic.update(memory_id, content)
+    def update(self, memory_id: int, content: str, *, trust: str = "untrusted", source: str = "update") -> bool:
+        return self._semantic.update(memory_id, content, trust=trust, source=source)
 
     def delete(self, memory_id: int) -> bool:
         return self._semantic.delete(memory_id)

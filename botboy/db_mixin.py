@@ -1,8 +1,10 @@
 """Thread-safe SQLite mixin for BotBoy stores."""
 from __future__ import annotations
 import atexit
+import random
 import sqlite3
 import threading
+import time
 import weakref
 from pathlib import Path
 from typing import Dict, Optional
@@ -20,6 +22,32 @@ def _close_live_sqlite_mixins() -> None:
 
 
 atexit.register(_close_live_sqlite_mixins)
+
+_LOCK_RETRY_SECONDS = 30.0
+
+
+def retry_when_locked(operation, *, budget: float = _LOCK_RETRY_SECONDS):
+    """Run ``operation`` again while SQLite reports a lock conflict.
+
+    The busy timeout does not cover every conflict: when two connections in
+    rollback-journal mode each hold a lock the other needs (e.g. one switching
+    to WAL, one committing a migration), SQLite returns SQLITE_BUSY at once to
+    break the deadlock. Concurrent openers of the same file (two BotBoy
+    processes starting together) then fail unless the whole step is retried.
+    """
+    deadline = time.monotonic() + budget
+    delay = 0.01
+    while True:
+        try:
+            return operation()
+        except sqlite3.OperationalError as exc:
+            message = str(exc).lower()
+            if "locked" not in message and "busy" not in message:
+                raise
+            if time.monotonic() + delay >= deadline:
+                raise
+            time.sleep(delay * (0.5 + random.random()))
+            delay = min(delay * 2, 0.5)
 
 class _SQLiteMixin:
     """
@@ -48,11 +76,17 @@ class _SQLiteMixin:
             self._shared_conn = None
             self._shared_lock = None
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-            init = sqlite3.connect(db_path)
-            init.execute("PRAGMA journal_mode=WAL")
-            init.executescript(schema)
-            init.commit()
-            init.close()
+
+            def initialise() -> None:
+                init = sqlite3.connect(db_path, timeout=_LOCK_RETRY_SECONDS)
+                try:
+                    init.execute("PRAGMA journal_mode=WAL")
+                    init.executescript(schema)
+                    init.commit()
+                finally:
+                    init.close()
+
+            retry_when_locked(initialise)
 
     def _register_conn(self, conn: sqlite3.Connection) -> None:
         with self._connections_lock:
